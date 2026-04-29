@@ -195,6 +195,20 @@ class Mt5Service
         ];
     }
 
+    public function getAccountInformation(): array
+    {
+        [, , $accountId, $client] = $this->metaApiContext();
+
+        $response = $client->get("/users/current/accounts/{$accountId}/account-information");
+        $decoded = json_decode((string) $response->getBody(), true);
+
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        return $decoded;
+    }
+
     public function getTickerPrice(string $symbol): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
@@ -303,6 +317,162 @@ class Mt5Service
         } catch (\Throwable) {
             return $fallback;
         }
+    }
+
+    public function getForexSymbols(): array
+    {
+        [, , $accountId, $client] = $this->metaApiContext();
+
+        $response = $client->get("/users/current/accounts/{$accountId}/symbols");
+        $decoded = json_decode((string) $response->getBody(), true);
+        $availableSymbols = $this->extractSymbolNames($decoded);
+
+        $forexSymbols = [];
+        foreach ($availableSymbols as $symbol) {
+            if (!is_string($symbol)) {
+                continue;
+            }
+
+            $upper = strtoupper($symbol);
+            $base = substr($upper, 0, 6);
+
+            if (strlen($base) !== 6 || !preg_match('/^[A-Z]{6}$/', $base)) {
+                continue;
+            }
+
+            // Basic heuristic to keep only FX-style pairs and skip metals/indices.
+            $baseCurrency = substr($base, 0, 3);
+            $quoteCurrency = substr($base, 3, 3);
+            $knownFx = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD'];
+
+            if (!in_array($baseCurrency, $knownFx, true) || !in_array($quoteCurrency, $knownFx, true)) {
+                continue;
+            }
+
+            $forexSymbols[] = $symbol;
+        }
+
+        return array_values(array_unique($forexSymbols));
+    }
+
+    public function applyTrailingStops(float $startPips, float $trailPips): array
+    {
+        if ($startPips <= 0 || $trailPips <= 0) {
+            throw new RuntimeException('Trailing stop pip values must be greater than zero.');
+        }
+
+        $snapshot = $this->getOpenTradeSnapshot();
+        $positions = is_array($snapshot['positions'] ?? null) ? $snapshot['positions'] : [];
+        $updated = 0;
+        $skipped = 0;
+        $errors = [];
+
+        foreach ($positions as $position) {
+            if (!is_array($position)) {
+                continue;
+            }
+
+            $positionId = (string) ($position['id'] ?? $position['positionId'] ?? '');
+            $symbol = (string) ($position['symbol'] ?? '');
+            $type = strtoupper((string) ($position['type'] ?? ''));
+            $openPrice = (float) ($position['openPrice'] ?? $position['priceOpen'] ?? 0);
+            $currentPrice = (float) ($position['currentPrice'] ?? $position['priceCurrent'] ?? 0);
+            $currentSl = isset($position['stopLoss']) ? (float) $position['stopLoss'] : null;
+            $currentTp = isset($position['takeProfit']) ? (float) $position['takeProfit'] : null;
+
+            if ($positionId === '' || $symbol === '' || $openPrice <= 0 || $currentPrice <= 0) {
+                $skipped++;
+                continue;
+            }
+
+            $pipSize = $this->pipSize($symbol);
+            $trailDistance = $trailPips * $pipSize;
+            $startDistance = $startPips * $pipSize;
+
+            $isBuy = str_contains($type, 'BUY');
+            $isSell = str_contains($type, 'SELL');
+            if (!$isBuy && !$isSell) {
+                $skipped++;
+                continue;
+            }
+
+            if ($isBuy) {
+                $profitDistance = $currentPrice - $openPrice;
+                if ($profitDistance < $startDistance) {
+                    $skipped++;
+                    continue;
+                }
+
+                $newSl = round($currentPrice - $trailDistance, 5);
+                if ($currentSl !== null && $newSl <= $currentSl) {
+                    $skipped++;
+                    continue;
+                }
+            } else {
+                $profitDistance = $openPrice - $currentPrice;
+                if ($profitDistance < $startDistance) {
+                    $skipped++;
+                    continue;
+                }
+
+                $newSl = round($currentPrice + $trailDistance, 5);
+                if ($currentSl !== null && $newSl >= $currentSl) {
+                    $skipped++;
+                    continue;
+                }
+            }
+
+            try {
+                $this->modifyPositionStops($positionId, $newSl, $currentTp);
+                $updated++;
+            } catch (RuntimeException $e) {
+                $errors[] = [
+                    'position_id' => $positionId,
+                    'symbol' => $symbol,
+                    'error' => $e->getMessage(),
+                ];
+            }
+        }
+
+        return [
+            'updated' => $updated,
+            'skipped' => $skipped,
+            'errors' => $errors,
+        ];
+    }
+
+    public function modifyPositionStops(string $positionId, ?float $stopLoss, ?float $takeProfit = null): array
+    {
+        [, , $accountId, $client] = $this->metaApiContext();
+
+        $positionId = trim($positionId);
+        if ($positionId === '') {
+            throw new RuntimeException('Position ID is required to modify stops.');
+        }
+
+        if ($stopLoss === null && $takeProfit === null) {
+            throw new RuntimeException('Provide stopLoss or takeProfit to modify a position.');
+        }
+
+        $payload = [
+            'actionType' => 'POSITION_MODIFY',
+            'positionId' => $positionId,
+        ];
+
+        if ($stopLoss !== null) {
+            $payload['stopLoss'] = $stopLoss;
+        }
+
+        if ($takeProfit !== null) {
+            $payload['takeProfit'] = $takeProfit;
+        }
+
+        $response = $this->sendTradeRequest($client, $accountId, $payload);
+
+        return [
+            'payload' => $payload,
+            'response' => $response,
+        ];
     }
 
     private function resolveBrokerSymbol(Client $client, string $accountId, string $symbol): string
@@ -555,6 +725,18 @@ class Mt5Service
     private function volumeStep(string $symbol): float
     {
         return $this->isSpreadBetSymbol($symbol) ? 1.0 : 0.01;
+    }
+
+    private function pipSize(string $symbol): float
+    {
+        $upper = strtoupper($symbol);
+        $base = substr($upper, 0, 6);
+
+        if (strlen($base) === 6 && str_ends_with($base, 'JPY')) {
+            return 0.01;
+        }
+
+        return 0.0001;
     }
 
     private function isSpreadBetSymbol(string $symbol): bool

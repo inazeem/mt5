@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\BotTradeLog;
 use App\Models\AppSetting;
 use App\Services\Mt5Service;
 use Illuminate\Http\Request;
@@ -135,5 +136,92 @@ class BotController extends Controller
             return redirect()->route('bot.index')
                 ->withErrors(['trade' => $e->getMessage()]);
         }
+    }
+
+    public function analytics(Mt5Service $mt5Service)
+    {
+        $settings = AppSetting::singleton();
+
+        $openSnapshot = [
+            'positions' => [],
+            'orders' => [],
+            'error' => null,
+        ];
+
+        try {
+            $openSnapshot = $mt5Service->getOpenTradeSnapshot();
+        } catch (Throwable $e) {
+            $openSnapshot['error'] = $e->getMessage();
+        }
+
+        $positions = is_array($openSnapshot['positions'] ?? null) ? $openSnapshot['positions'] : [];
+        $todayStart = now()->startOfDay();
+
+        $todayLogs = BotTradeLog::query()
+            ->where('created_at', '>=', $todayStart)
+            ->get();
+
+        $recentLogs = BotTradeLog::query()
+            ->latest()
+            ->limit(200)
+            ->get();
+
+        $stats = [
+            'active_positions' => count($positions),
+            'today_signals' => $todayLogs->where('event_type', 'signal')->count(),
+            'today_opened' => $todayLogs->where('event_type', 'trade_open')->where('status', 'success')->count(),
+            'today_rejected_ai' => $todayLogs->where('event_type', 'signal')->where('status', 'ai_rejected')->count(),
+            'today_failed' => $todayLogs->where('event_type', 'trade_open')->where('status', 'failed')->count(),
+            'today_trailing_updates' => $todayLogs->where('event_type', 'trailing_update')->where('status', 'success')->count(),
+        ];
+
+        return view('bot.analytics', compact('settings', 'openSnapshot', 'positions', 'recentLogs', 'stats'));
+    }
+
+    public function exportCsv()
+    {
+        $logs = BotTradeLog::query()->latest()->get();
+
+        $headers = [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="bot_trade_logs_'.now()->format('Ymd_His').'.csv"',
+        ];
+
+        $callback = function () use ($logs) {
+            $handle = fopen('php://output', 'w');
+
+            fputcsv($handle, [
+                'id', 'created_at', 'event_type', 'status', 'symbol', 'side',
+                'lot_size', 'entry_price', 'take_profit', 'stop_loss',
+                'spread_pips', 'signal_delta_pips', 'ai_provider', 'ai_decision',
+                'ai_summary', 'message', 'error_message',
+            ]);
+
+            foreach ($logs as $log) {
+                fputcsv($handle, [
+                    $log->id,
+                    $log->created_at?->toDateTimeString(),
+                    $log->event_type,
+                    $log->status,
+                    $log->symbol,
+                    $log->side,
+                    $log->lot_size,
+                    $log->entry_price,
+                    $log->take_profit,
+                    $log->stop_loss,
+                    $log->spread_pips,
+                    $log->signal_delta_pips,
+                    $log->ai_provider,
+                    $log->ai_decision,
+                    $log->ai_summary,
+                    $log->message,
+                    $log->error_message,
+                ]);
+            }
+
+            fclose($handle);
+        };
+
+        return response()->stream($callback, 200, $headers);
     }
 }
