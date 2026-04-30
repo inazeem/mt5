@@ -291,6 +291,54 @@ class Mt5Service
         ];
     }
 
+    public function getHistoryDeals(\DateTimeInterface $from, \DateTimeInterface $to): array
+    {
+        [, , $accountId, $client] = $this->metaApiContext();
+
+        $startTime = rawurlencode($from->format(\DateTimeInterface::ATOM));
+        $endTime   = rawurlencode($to->format(\DateTimeInterface::ATOM));
+
+        $response = $client->get(
+            "/users/current/accounts/{$accountId}/history-deals/time/{$startTime}/{$endTime}"
+        );
+
+        $decoded = json_decode((string) $response->getBody(), true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    public function getCandles(string $symbol, string $timeframe = '1h', int $limit = 20): array
+    {
+        [, , $accountId, $client] = $this->metaApiContext();
+
+        $symbol = trim($symbol);
+        if ($symbol === '') {
+            throw new RuntimeException('Symbol is required to fetch candles.');
+        }
+
+        $allowedTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1mn'];
+        if (!in_array($timeframe, $allowedTimeframes, true)) {
+            throw new RuntimeException("Invalid timeframe '{$timeframe}'. Allowed: ".implode(', ', $allowedTimeframes));
+        }
+
+        $limit = max(1, min(1000, $limit));
+        $encodedSymbol = rawurlencode($symbol);
+        $encodedTimeframe = rawurlencode($timeframe);
+
+        $response = $client->get(
+            "/users/current/accounts/{$accountId}/symbols/{$encodedSymbol}/candles/{$encodedTimeframe}",
+            ['query' => ['limit' => $limit]]
+        );
+
+        $decoded = json_decode((string) $response->getBody(), true);
+
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        return $decoded;
+    }
+
     public function getTopForexSymbols(): array
     {
         [, , $accountId, $client] = $this->metaApiContext();

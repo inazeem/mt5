@@ -273,10 +273,44 @@ Artisan::command('mt5:auto-forex
 
             if (!$testMode && $useAiConfirm) {
                 try {
+                    // Fetch candle context from MetaAPI for richer AI analysis.
+                    $candleContext = '';
+                    try {
+                        $candles1h = $mt5Service->getCandles($symbol, '1h', 20);
+                        $candles15m = $mt5Service->getCandles($symbol, '15m', 10);
+
+                        $formatCandles = static function (array $candles): string {
+                            $lines = [];
+                            foreach ($candles as $c) {
+                                if (!is_array($c)) {
+                                    continue;
+                                }
+                                $time = $c['time'] ?? $c['brokerTime'] ?? '?';
+                                $o = isset($c['open']) ? number_format((float) $c['open'], 5) : '?';
+                                $h = isset($c['high']) ? number_format((float) $c['high'], 5) : '?';
+                                $l = isset($c['low']) ? number_format((float) $c['low'], 5) : '?';
+                                $cl = isset($c['close']) ? number_format((float) $c['close'], 5) : '?';
+                                $vol = isset($c['tickVolume']) ? (int) $c['tickVolume'] : '?';
+                                $lines[] = "  {$time}: O={$o} H={$h} L={$l} C={$cl} Vol={$vol}";
+                            }
+                            return implode("\n", $lines);
+                        };
+
+                        if (!empty($candles1h)) {
+                            $candleContext .= "\n\nLast ".count($candles1h)." x 1H candles (oldest first):\n".$formatCandles($candles1h);
+                        }
+                        if (!empty($candles15m)) {
+                            $candleContext .= "\n\nLast ".count($candles15m)." x 15M candles (oldest first):\n".$formatCandles($candles15m);
+                        }
+                    } catch (\Throwable $candleError) {
+                        Log::warning('Auto bot candle fetch failed', ['symbol' => $symbol, 'error' => $candleError->getMessage()]);
+                    }
+
                     $prompt = "You are validating an automated forex trade. Reply strictly with one line starting with APPROVE or REJECT, then a short reason. "
                         ."Include a confidence percentage like 'Confidence: 85%' in your reply. "
                         ."Symbol: {$symbol}. Side: {$side}. Entry: {$entry}. TP: {$takeProfit}. SL: {$stopLoss}. "
-                        ."Spread pips: ".number_format($spreadPips, 2).". Signal move pips: ".number_format($signalDeltaPips, 2).".";
+                        ."Spread pips: ".number_format($spreadPips, 2).". Signal move pips: ".number_format($signalDeltaPips, 2)."."
+                        .$candleContext;
                     $aiResult = $aiService->ask($prompt);
                     $aiProvider = $aiResult['provider'] ?? null;
                     $aiSummary = trim((string) ($aiResult['answer'] ?? ''));

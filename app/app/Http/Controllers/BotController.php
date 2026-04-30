@@ -173,7 +173,54 @@ class BotController extends Controller
             'today_rejected_ai' => $todayLogs->where('event_type', 'signal')->where('status', 'ai_rejected')->count(),
             'today_failed' => $todayLogs->where('event_type', 'trade_open')->where('status', 'failed')->count(),
             'today_trailing_updates' => $todayLogs->where('event_type', 'trailing_update')->where('status', 'success')->count(),
+            // P/L and win-rate from MetaAPI history deals (last 30 days)
+            'total_pnl' => null,
+            'total_trades' => null,
+            'winning_trades' => null,
+            'losing_trades' => null,
+            'win_rate' => null,
+            'avg_win' => null,
+            'avg_loss' => null,
+            'history_error' => null,
         ];
+
+        try {
+            $deals = $mt5Service->getHistoryDeals(now()->subDays(30), now());
+
+            // Keep only position-exit deals (realized P/L). MetaAPI marks these with
+            // entryType = DEAL_ENTRY_OUT or type containing DEAL_TYPE_SELL / DEAL_TYPE_BUY
+            // when they correspond to closing a position.
+            $closingDeals = array_filter($deals, static function (mixed $deal): bool {
+                if (!is_array($deal)) {
+                    return false;
+                }
+                $entry = strtoupper((string) ($deal['entryType'] ?? $deal['entry'] ?? ''));
+                // MetaAPI: DEAL_ENTRY_OUT = closing deal, DEAL_ENTRY_INOUT = partial close
+                return str_contains($entry, 'OUT');
+            });
+
+            $wins  = array_filter($closingDeals, fn ($d) => (float) ($d['profit'] ?? 0) > 0);
+            $losses = array_filter($closingDeals, fn ($d) => (float) ($d['profit'] ?? 0) < 0);
+
+            $totalPnl    = array_sum(array_column(array_values($closingDeals), 'profit'));
+            $totalTrades = count($closingDeals);
+            $winCount    = count($wins);
+            $lossCount   = count($losses);
+
+            $stats['total_pnl']      = $totalPnl;
+            $stats['total_trades']   = $totalTrades;
+            $stats['winning_trades'] = $winCount;
+            $stats['losing_trades']  = $lossCount;
+            $stats['win_rate']       = $totalTrades > 0 ? round(($winCount / $totalTrades) * 100, 1) : null;
+            $stats['avg_win']        = $winCount > 0
+                ? array_sum(array_column(array_values($wins), 'profit')) / $winCount
+                : null;
+            $stats['avg_loss']       = $lossCount > 0
+                ? array_sum(array_column(array_values($losses), 'profit')) / $lossCount
+                : null;
+        } catch (Throwable $e) {
+            $stats['history_error'] = $e->getMessage();
+        }
 
         return view('bot.analytics', compact('settings', 'openSnapshot', 'positions', 'recentLogs', 'stats'));
     }

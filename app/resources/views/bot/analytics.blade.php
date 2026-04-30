@@ -32,6 +32,56 @@
                 </div>
             </div>
 
+            {{-- P/L & Win Rate (last 30 days from MetaAPI history) --}}
+            @if (!empty($stats['history_error']))
+                <div class="rounded border border-amber-200 bg-amber-50 text-amber-700 p-3 text-sm">
+                    Could not load history deals: {{ $stats['history_error'] }}
+                </div>
+            @else
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+                    <div class="bg-white p-4 rounded-lg shadow col-span-1">
+                        <div class="text-xs uppercase text-gray-500">30d Total P/L</div>
+                        @php $pnl = $stats['total_pnl']; @endphp
+                        <div class="mt-1 text-2xl font-bold {{ $pnl === null ? 'text-gray-400' : ($pnl >= 0 ? 'text-emerald-700' : 'text-rose-700') }}">
+                            {{ $pnl !== null ? ($pnl >= 0 ? '+' : '') . number_format($pnl, 2) : '—' }}
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Closed Trades</div>
+                        <div class="mt-1 text-2xl font-bold text-gray-800">{{ $stats['total_trades'] ?? '—' }}</div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Wins</div>
+                        <div class="mt-1 text-2xl font-bold text-emerald-700">{{ $stats['winning_trades'] ?? '—' }}</div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Losses</div>
+                        <div class="mt-1 text-2xl font-bold text-rose-700">{{ $stats['losing_trades'] ?? '—' }}</div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Win Rate</div>
+                        @php $wr = $stats['win_rate']; @endphp
+                        <div class="mt-1 text-2xl font-bold {{ $wr === null ? 'text-gray-400' : ($wr >= 50 ? 'text-emerald-700' : 'text-rose-700') }}">
+                            {{ $wr !== null ? $wr . '%' : '—' }}
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Avg Win</div>
+                        @php $aw = $stats['avg_win']; @endphp
+                        <div class="mt-1 text-2xl font-bold text-emerald-700">
+                            {{ $aw !== null ? '+' . number_format($aw, 2) : '—' }}
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Avg Loss</div>
+                        @php $al = $stats['avg_loss']; @endphp
+                        <div class="mt-1 text-2xl font-bold text-rose-700">
+                            {{ $al !== null ? number_format($al, 2) : '—' }}
+                        </div>
+                    </div>
+                </div>
+            @endif
+
             <div class="bg-white p-6 rounded-lg shadow space-y-4">
                 <h3 class="text-lg font-semibold">Active Trades</h3>
 
