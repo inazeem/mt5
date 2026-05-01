@@ -76,12 +76,21 @@ class ForexTickerSeeder extends Seeder
             ['symbol' => 'EURTRY', 'description' => 'Euro / Turkish Lira',              'category' => 'Emerging Market'],
             ['symbol' => 'EURZAR', 'description' => 'Euro / South African Rand',        'category' => 'Emerging Market'],
             ['symbol' => 'GBPZAR', 'description' => 'British Pound / South African Rand','category' => 'Emerging Market'],
+
+            // ── US Stocks ─────────────────────────────────────────────────────────
+            ['symbol' => 'AAPL',  'description' => 'Apple Inc.',             'category' => 'Stock', 'pip_size' => 0.1],
+            ['symbol' => 'TSLA',  'description' => 'Tesla Inc.',              'category' => 'Stock', 'pip_size' => 0.1],
+            ['symbol' => 'MSFT',  'description' => 'Microsoft Corporation',   'category' => 'Stock', 'pip_size' => 0.1],
+            ['symbol' => 'GOOGL', 'description' => 'Alphabet Inc. (Google)',  'category' => 'Stock', 'pip_size' => 0.1],
+            ['symbol' => 'NFLX',  'description' => 'Netflix Inc.',            'category' => 'Stock', 'pip_size' => 0.1],
+            ['symbol' => 'COIN',  'description' => 'Coinbase Global Inc.',    'category' => 'Stock', 'pip_size' => 0.1],
+            ['symbol' => 'META',  'description' => 'Meta Platforms Inc.',     'category' => 'Stock', 'pip_size' => 0.1],
         ];
 
         foreach ($tickers as $data) {
             Ticker::updateOrCreate(
                 ['symbol' => $data['symbol']],
-                array_merge($data, ['is_active' => true])
+                array_merge(['is_active' => true, 'pip_size' => null], $data)
             );
         }
 

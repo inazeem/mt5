@@ -64,11 +64,13 @@ class TickerController extends Controller
             'description' => ['nullable', 'string', 'max:255'],
             'category'    => ['nullable', 'string', 'max:50'],
             'is_active'   => ['nullable', 'boolean'],
+            'pip_size'    => ['nullable', 'numeric', 'min:0.00000001', 'max:1000'],
             'notes'       => ['nullable', 'string', 'max:2000'],
         ]);
 
         $validated['symbol'] = strtoupper($validated['symbol']);
         $validated['is_active'] = $request->boolean('is_active');
+        $validated['pip_size'] = isset($validated['pip_size']) && $validated['pip_size'] !== '' ? (float) $validated['pip_size'] : null;
 
         Ticker::create($validated);
 
@@ -94,11 +96,13 @@ class TickerController extends Controller
             'description' => ['nullable', 'string', 'max:255'],
             'category'    => ['nullable', 'string', 'max:50'],
             'is_active'   => ['nullable', 'boolean'],
+            'pip_size'    => ['nullable', 'numeric', 'min:0.00000001', 'max:1000'],
             'notes'       => ['nullable', 'string', 'max:2000'],
         ]);
 
         $validated['symbol'] = strtoupper($validated['symbol']);
         $validated['is_active'] = $request->boolean('is_active');
+        $validated['pip_size'] = isset($validated['pip_size']) && $validated['pip_size'] !== '' ? (float) $validated['pip_size'] : null;
 
         $ticker->update($validated);
 

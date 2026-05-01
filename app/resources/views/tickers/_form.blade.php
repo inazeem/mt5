@@ -40,6 +40,15 @@
     </div>
 
     <div>
+        <x-input-label for="pip_size" value="Pip / Tick Size" />
+        <x-text-input id="pip_size" name="pip_size" type="number" step="0.00000001" min="0" class="mt-1 block w-48"
+                      value="{{ old('pip_size', $ticker->pip_size ?? '') }}"
+                      placeholder="Leave blank for auto" />
+        <p class="mt-1 text-xs text-gray-400">Forex auto-detected (0.0001 / 0.01 JPY). Stocks: 0.1 · Indices: 1.0 · Crypto: 0.01</p>
+        <x-input-error :messages="$errors->get('pip_size')" class="mt-1" />
+    </div>
+
+    <div>
         <x-input-label for="notes" value="Notes" />
         <textarea id="notes" name="notes" rows="3" maxlength="2000"
                   class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring focus:ring-indigo-200 focus:border-indigo-400 text-sm"

@@ -210,12 +210,13 @@ Artisan::command('mt5:auto-forex
         }
 
         // Prefer active tickers from the database; fall back to MetaAPI symbol discovery.
-        $dbSymbols = Ticker::query()->active()->orderBy('symbol')->pluck('symbol')->all();
-        if (!empty($dbSymbols)) {
-            $symbols = array_slice($dbSymbols, 0, $maxSymbols);
+        $dbTickers = Ticker::query()->active()->orderBy('symbol')->get()->keyBy(fn ($t) => strtoupper($t->symbol));
+        if ($dbTickers->isNotEmpty()) {
+            $symbols = array_slice($dbTickers->keys()->all(), 0, $maxSymbols);
             $this->line('Using '.count($symbols).' symbol(s) from tickers table.');
         } else {
             $symbols = array_slice($mt5Service->getForexSymbols(), 0, $maxSymbols);
+            $dbTickers = collect();
             $this->line('No tickers in DB — discovered '.count($symbols).' symbol(s) from MetaAPI.');
         }
         $this->line('Scanning '.count($symbols).' symbols. Open positions: '.count($positions).'.');
@@ -250,7 +251,8 @@ Artisan::command('mt5:auto-forex
             }
 
             $base = substr($symbol, 0, 6);
-            $pipSize = str_ends_with($base, 'JPY') ? 0.01 : 0.0001;
+            $pipSize = $dbTickers->get($symbol)?->pip_size
+                ?? (str_ends_with($base, 'JPY') ? 0.01 : 0.0001);
             $minMove = $minMovePips * $pipSize;
 
             $cacheKey = 'auto_bot_last_bid_'.preg_replace('/[^A-Z0-9_]/', '_', $symbol);

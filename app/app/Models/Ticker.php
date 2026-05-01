@@ -11,6 +11,7 @@ class Ticker extends Model
         'description',
         'category',
         'is_active',
+        'pip_size',
         'notes',
     ];
 
@@ -18,6 +19,7 @@ class Ticker extends Model
     {
         return [
             'is_active' => 'boolean',
+            'pip_size'  => 'float',
         ];
     }
 
