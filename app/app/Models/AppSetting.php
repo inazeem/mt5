@@ -24,6 +24,21 @@ class AppSetting extends Model
         'metaapi_token',
         'metaapi_account_id',
         'metaapi_region',
+        'bot_lot',
+        'bot_tp_pips',
+        'bot_sl_pips',
+        'bot_trail_start_pips',
+        'bot_trail_pips',
+        'bot_min_move_pips',
+        'bot_max_spread_pips',
+        'bot_cooldown_minutes',
+        'bot_session_start_utc',
+        'bot_session_end_utc',
+        'bot_max_trades_per_day',
+        'bot_max_daily_loss_percent',
+        'bot_ai_confirm',
+        'bot_max_symbols',
+        'bot_ai_min_confidence',
     ];
 
     protected function casts(): array
@@ -37,6 +52,21 @@ class AppSetting extends Model
             'claude_api_key' => 'encrypted',
             'perplexity_api_key' => 'encrypted',
             'metaapi_token' => 'encrypted',
+            'bot_lot' => 'float',
+            'bot_tp_pips' => 'float',
+            'bot_sl_pips' => 'float',
+            'bot_trail_start_pips' => 'float',
+            'bot_trail_pips' => 'float',
+            'bot_min_move_pips' => 'float',
+            'bot_max_spread_pips' => 'float',
+            'bot_cooldown_minutes' => 'integer',
+            'bot_session_start_utc' => 'integer',
+            'bot_session_end_utc' => 'integer',
+            'bot_max_trades_per_day' => 'integer',
+            'bot_max_daily_loss_percent' => 'float',
+            'bot_ai_confirm' => 'boolean',
+            'bot_max_symbols' => 'integer',
+            'bot_ai_min_confidence' => 'integer',
         ];
     }
 

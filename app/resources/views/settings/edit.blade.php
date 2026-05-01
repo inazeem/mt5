@@ -140,6 +140,81 @@
                     </div>
                 </section>
 
+                {{-- Auto-Bot Section --}}
+                <section class="space-y-4">
+                    <h3 class="text-lg font-semibold text-gray-900">Auto-Bot Parameters</h3>
+                    <p class="text-sm text-gray-500">These values are used as defaults when the <code>mt5:auto-forex</code> command runs without explicit flags.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Lot Size</label>
+                            <input name="bot_lot" type="number" step="0.001" min="0.001" value="{{ old('bot_lot', $settings->bot_lot ?? 0.01) }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="text-xs text-gray-500 mt-1">e.g. 0.01 for micro lots.</p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">TP Pips</label>
+                            <input name="bot_tp_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_tp_pips', $settings->bot_tp_pips ?? 25) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">SL Pips</label>
+                            <input name="bot_sl_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_sl_pips', $settings->bot_sl_pips ?? 15) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Trail Start Pips</label>
+                            <input name="bot_trail_start_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_trail_start_pips', $settings->bot_trail_start_pips ?? 10) }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="text-xs text-gray-500 mt-1">Profit required before trailing activates.</p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Trail Pips</label>
+                            <input name="bot_trail_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_trail_pips', $settings->bot_trail_pips ?? 8) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Min Move Pips</label>
+                            <input name="bot_min_move_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_min_move_pips', $settings->bot_min_move_pips ?? 3) }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="text-xs text-gray-500 mt-1">Minimum tick move to trigger signal.</p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Max Spread Pips</label>
+                            <input name="bot_max_spread_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_max_spread_pips', $settings->bot_max_spread_pips ?? 2.5) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Cooldown (minutes)</label>
+                            <input name="bot_cooldown_minutes" type="number" min="0" value="{{ old('bot_cooldown_minutes', $settings->bot_cooldown_minutes ?? 30) }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="text-xs text-gray-500 mt-1">Wait after a successful entry on the same symbol.</p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Max Trades / Day</label>
+                            <input name="bot_max_trades_per_day" type="number" min="1" value="{{ old('bot_max_trades_per_day', $settings->bot_max_trades_per_day ?? 20) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Max Daily Loss %</label>
+                            <input name="bot_max_daily_loss_percent" type="number" step="0.1" min="0.1" value="{{ old('bot_max_daily_loss_percent', $settings->bot_max_daily_loss_percent ?? 2) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Session Start (UTC hour)</label>
+                            <input name="bot_session_start_utc" type="number" min="0" max="23" value="{{ old('bot_session_start_utc', $settings->bot_session_start_utc ?? 6) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Session End (UTC hour)</label>
+                            <input name="bot_session_end_utc" type="number" min="0" max="23" value="{{ old('bot_session_end_utc', $settings->bot_session_end_utc ?? 20) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Max Symbols / Cycle</label>
+                            <input name="bot_max_symbols" type="number" min="1" value="{{ old('bot_max_symbols', $settings->bot_max_symbols ?? 200) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">AI Min Confidence %</label>
+                            <input name="bot_ai_min_confidence" type="number" min="0" max="100" value="{{ old('bot_ai_min_confidence', $settings->bot_ai_min_confidence ?? 70) }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="text-xs text-gray-500 mt-1">AI must express ≥ this confidence to approve. 0 = any APPROVE accepted.</p>
+                        </div>
+                        <div class="flex items-center">
+                            <label class="inline-flex items-center gap-2 mt-5">
+                                <input type="checkbox" name="bot_ai_confirm" value="1" {{ old('bot_ai_confirm', $settings->bot_ai_confirm ?? true) ? 'checked' : '' }} class="rounded border-gray-300" />
+                                <span class="text-sm text-gray-700">Require AI confirmation before each trade</span>
+                            </label>
+                        </div>
+                    </div>
+                </section>
+
                 <div>
                     <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-indigo-700">
                         Save Settings

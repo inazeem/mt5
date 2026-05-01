@@ -1,0 +1,231 @@
+<x-app-layout>
+    <x-slot name="header">
+        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Bot Analytics</h2>
+    </x-slot>
+
+    <div class="py-8">
+        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="text-xs uppercase text-gray-500">Active Positions</div>
+                    <div class="mt-1 text-2xl font-bold text-indigo-700">{{ $stats['active_positions'] }}</div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="text-xs uppercase text-gray-500">Today Signals</div>
+                    <div class="mt-1 text-2xl font-bold text-gray-800">{{ $stats['today_signals'] }}</div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="text-xs uppercase text-gray-500">Today Opened</div>
+                    <div class="mt-1 text-2xl font-bold text-emerald-700">{{ $stats['today_opened'] }}</div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="text-xs uppercase text-gray-500">AI Rejected</div>
+                    <div class="mt-1 text-2xl font-bold text-amber-700">{{ $stats['today_rejected_ai'] }}</div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="text-xs uppercase text-gray-500">Today Failed</div>
+                    <div class="mt-1 text-2xl font-bold text-rose-700">{{ $stats['today_failed'] }}</div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="text-xs uppercase text-gray-500">Trailing Updates</div>
+                    <div class="mt-1 text-2xl font-bold text-cyan-700">{{ $stats['today_trailing_updates'] }}</div>
+                </div>
+            </div>
+
+            {{-- P/L & Win Rate (last 30 days from MetaAPI history) --}}
+            @if (!empty($stats['history_error']))
+                <div class="rounded border border-amber-200 bg-amber-50 text-amber-700 p-3 text-sm">
+                    Could not load history deals: {{ $stats['history_error'] }}
+                </div>
+            @else
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+                    <div class="bg-white p-4 rounded-lg shadow col-span-1">
+                        <div class="text-xs uppercase text-gray-500">30d Total P/L</div>
+                        @php $pnl = $stats['total_pnl']; @endphp
+                        <div class="mt-1 text-2xl font-bold {{ $pnl === null ? 'text-gray-400' : ($pnl >= 0 ? 'text-emerald-700' : 'text-rose-700') }}">
+                            {{ $pnl !== null ? ($pnl >= 0 ? '+' : '') . number_format($pnl, 2) : '—' }}
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Closed Trades</div>
+                        <div class="mt-1 text-2xl font-bold text-gray-800">{{ $stats['total_trades'] ?? '—' }}</div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Wins</div>
+                        <div class="mt-1 text-2xl font-bold text-emerald-700">{{ $stats['winning_trades'] ?? '—' }}</div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Losses</div>
+                        <div class="mt-1 text-2xl font-bold text-rose-700">{{ $stats['losing_trades'] ?? '—' }}</div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Win Rate</div>
+                        @php $wr = $stats['win_rate']; @endphp
+                        <div class="mt-1 text-2xl font-bold {{ $wr === null ? 'text-gray-400' : ($wr >= 50 ? 'text-emerald-700' : 'text-rose-700') }}">
+                            {{ $wr !== null ? $wr . '%' : '—' }}
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Avg Win</div>
+                        @php $aw = $stats['avg_win']; @endphp
+                        <div class="mt-1 text-2xl font-bold text-emerald-700">
+                            {{ $aw !== null ? '+' . number_format($aw, 2) : '—' }}
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <div class="text-xs uppercase text-gray-500">Avg Loss</div>
+                        @php $al = $stats['avg_loss']; @endphp
+                        <div class="mt-1 text-2xl font-bold text-rose-700">
+                            {{ $al !== null ? number_format($al, 2) : '—' }}
+                        </div>
+                    </div>
+                </div>
+            @endif
+
+            <div class="bg-white p-6 rounded-lg shadow space-y-4">
+                <h3 class="text-lg font-semibold">Active Trades</h3>
+
+                @if (!empty($openSnapshot['error']))
+                    <div class="rounded border border-rose-200 bg-rose-50 text-rose-700 p-3 text-sm">
+                        {{ $openSnapshot['error'] }}
+                    </div>
+                @endif
+
+                @if (count($positions) === 0)
+                    <div class="text-sm text-gray-500">No open positions.</div>
+                @else
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full text-sm">
+                            <thead>
+                                <tr class="text-left text-gray-600 border-b">
+                                    <th class="py-2 pr-4">Symbol</th>
+                                    <th class="py-2 pr-4">Type</th>
+                                    <th class="py-2 pr-4 text-right">Volume</th>
+                                    <th class="py-2 pr-4 text-right">Open</th>
+                                    <th class="py-2 pr-4 text-right">Current</th>
+                                    <th class="py-2 pr-4 text-right">SL</th>
+                                    <th class="py-2 pr-4 text-right">TP</th>
+                                    <th class="py-2 pr-4 text-right">P/L</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach ($positions as $position)
+                                    @php
+                                        $symbol = is_array($position) ? (string) ($position['symbol'] ?? '-') : '-';
+                                        $type = is_array($position) ? (string) ($position['type'] ?? '-') : '-';
+                                        $volume = is_array($position) ? (float) ($position['volume'] ?? 0) : 0;
+                                        $openPrice = is_array($position) ? ($position['openPrice'] ?? $position['priceOpen'] ?? null) : null;
+                                        $currentPrice = is_array($position) ? ($position['currentPrice'] ?? $position['priceCurrent'] ?? null) : null;
+                                        $sl = is_array($position) ? ($position['stopLoss'] ?? null) : null;
+                                        $tp = is_array($position) ? ($position['takeProfit'] ?? null) : null;
+                                        $pnl = is_array($position) ? (float) ($position['profit'] ?? $position['unrealizedProfit'] ?? 0) : 0;
+                                    @endphp
+                                    <tr class="border-b border-gray-100">
+                                        <td class="py-2 pr-4 font-medium">{{ $symbol }}</td>
+                                        <td class="py-2 pr-4">{{ $type }}</td>
+                                        <td class="py-2 pr-4 text-right">{{ number_format($volume, 2) }}</td>
+                                        <td class="py-2 pr-4 text-right">{{ is_numeric($openPrice) ? number_format((float) $openPrice, 5) : '-' }}</td>
+                                        <td class="py-2 pr-4 text-right">{{ is_numeric($currentPrice) ? number_format((float) $currentPrice, 5) : '-' }}</td>
+                                        <td class="py-2 pr-4 text-right">{{ is_numeric($sl) ? number_format((float) $sl, 5) : '-' }}</td>
+                                        <td class="py-2 pr-4 text-right">{{ is_numeric($tp) ? number_format((float) $tp, 5) : '-' }}</td>
+                                        <td class="py-2 pr-4 text-right {{ $pnl >= 0 ? 'text-emerald-600' : 'text-rose-600' }}">{{ number_format($pnl, 2) }}</td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                @endif
+            </div>
+
+            <div class="bg-white p-6 rounded-lg shadow space-y-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-semibold">Recent Bot Logs</h3>
+                    <a href="{{ route('bot.analytics.export') }}"
+                       class="inline-flex items-center px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded hover:bg-emerald-700">
+                        Export CSV
+                    </a>
+                </div>
+
+                {{-- Filters --}}
+                <form method="GET" action="{{ route('bot.analytics') }}" class="flex flex-wrap gap-3 items-end">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Date from</label>
+                        <input type="date" name="date_from" value="{{ $dateFrom ?? '' }}"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-indigo-200">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Date to</label>
+                        <input type="date" name="date_to" value="{{ $dateTo ?? '' }}"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-indigo-200">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Event type</label>
+                        <select name="event_type" class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-indigo-200">
+                            <option value="">All</option>
+                            @foreach (['signal', 'trade_open', 'trailing_update', 'guardrail'] as $et)
+                                <option value="{{ $et }}" {{ ($eventType ?? '') === $et ? 'selected' : '' }}>{{ $et }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Symbol</label>
+                        <input type="text" name="symbol" value="{{ $symbol ?? '' }}" placeholder="e.g. GBPUSD"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm w-32 focus:outline-none focus:ring focus:ring-indigo-200">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Per page</label>
+                        <select name="per_page" class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-indigo-200">
+                            @foreach ([25, 50, 100, 200] as $pp)
+                                <option value="{{ $pp }}" {{ $perPage === $pp ? 'selected' : '' }}>{{ $pp }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="flex gap-2">
+                        <button type="submit" class="px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700">Filter</button>
+                        <a href="{{ route('bot.analytics') }}" class="px-3 py-1.5 bg-gray-200 text-gray-700 text-xs font-semibold rounded hover:bg-gray-300">Clear</a>
+                    </div>
+                </form>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-sm">
+                        <thead>
+                            <tr class="text-left text-gray-600 border-b">
+                                <th class="py-2 pr-3">Time</th>
+                                <th class="py-2 pr-3">Event</th>
+                                <th class="py-2 pr-3">Status</th>
+                                <th class="py-2 pr-3">Symbol</th>
+                                <th class="py-2 pr-3">Side</th>
+                                <th class="py-2 pr-3">Signal (pips)</th>
+                                <th class="py-2 pr-3">Spread (pips)</th>
+                                <th class="py-2 pr-3">AI</th>
+                                <th class="py-2 pr-3">Message</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @forelse ($recentLogs as $log)
+                                <tr class="border-b border-gray-100 align-top">
+                                    <td class="py-2 pr-3 whitespace-nowrap">{{ $log->created_at?->format('Y-m-d H:i:s') }}</td>
+                                    <td class="py-2 pr-3">{{ $log->event_type }}</td>
+                                    <td class="py-2 pr-3">{{ $log->status }}</td>
+                                    <td class="py-2 pr-3">{{ $log->symbol ?? '-' }}</td>
+                                    <td class="py-2 pr-3">{{ $log->side ?? '-' }}</td>
+                                    <td class="py-2 pr-3">{{ is_numeric($log->signal_delta_pips) ? number_format((float) $log->signal_delta_pips, 2) : '-' }}</td>
+                                    <td class="py-2 pr-3">{{ is_numeric($log->spread_pips) ? number_format((float) $log->spread_pips, 2) : '-' }}</td>
+                                    <td class="py-2 pr-3">{{ $log->ai_decision ? strtoupper($log->ai_decision) : '-' }}</td>
+                                    <td class="py-2 pr-3 max-w-md whitespace-pre-wrap break-words">{{ $log->message ?? $log->error_message ?? '-' }}</td>
+                                </tr>
+                            @empty
+                                <tr>
+                                    <td colspan="9" class="py-4 text-gray-500">No logs yet.</td>
+                                </tr>
+                            @endforelse
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="mt-4">
+                    {{ $recentLogs->links() }}
+                </div>
+            </div>
+        </div>
+    </div>
+</x-app-layout>

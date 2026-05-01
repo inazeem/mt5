@@ -195,6 +195,20 @@ class Mt5Service
         ];
     }
 
+    public function getAccountInformation(): array
+    {
+        [, , $accountId, $client] = $this->metaApiContext();
+
+        $response = $client->get("/users/current/accounts/{$accountId}/account-information");
+        $decoded = json_decode((string) $response->getBody(), true);
+
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        return $decoded;
+    }
+
     public function getTickerPrice(string $symbol): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
@@ -277,6 +291,54 @@ class Mt5Service
         ];
     }
 
+    public function getHistoryDeals(\DateTimeInterface $from, \DateTimeInterface $to): array
+    {
+        [, , $accountId, $client] = $this->metaApiContext();
+
+        $startTime = rawurlencode($from->format(\DateTimeInterface::ATOM));
+        $endTime   = rawurlencode($to->format(\DateTimeInterface::ATOM));
+
+        $response = $client->get(
+            "/users/current/accounts/{$accountId}/history-deals/time/{$startTime}/{$endTime}"
+        );
+
+        $decoded = json_decode((string) $response->getBody(), true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    public function getCandles(string $symbol, string $timeframe = '1h', int $limit = 20): array
+    {
+        [, , $accountId, $client] = $this->metaApiContext();
+
+        $symbol = trim($symbol);
+        if ($symbol === '') {
+            throw new RuntimeException('Symbol is required to fetch candles.');
+        }
+
+        $allowedTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1mn'];
+        if (!in_array($timeframe, $allowedTimeframes, true)) {
+            throw new RuntimeException("Invalid timeframe '{$timeframe}'. Allowed: ".implode(', ', $allowedTimeframes));
+        }
+
+        $limit = max(1, min(1000, $limit));
+        $encodedSymbol = rawurlencode($symbol);
+        $encodedTimeframe = rawurlencode($timeframe);
+
+        $response = $client->get(
+            "/users/current/accounts/{$accountId}/symbols/{$encodedSymbol}/candles/{$encodedTimeframe}",
+            ['query' => ['limit' => $limit]]
+        );
+
+        $decoded = json_decode((string) $response->getBody(), true);
+
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        return $decoded;
+    }
+
     public function getTopForexSymbols(): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
@@ -305,6 +367,162 @@ class Mt5Service
         }
     }
 
+    public function getForexSymbols(): array
+    {
+        [, , $accountId, $client] = $this->metaApiContext();
+
+        $response = $client->get("/users/current/accounts/{$accountId}/symbols");
+        $decoded = json_decode((string) $response->getBody(), true);
+        $availableSymbols = $this->extractSymbolNames($decoded);
+
+        $forexSymbols = [];
+        foreach ($availableSymbols as $symbol) {
+            if (!is_string($symbol)) {
+                continue;
+            }
+
+            $upper = strtoupper($symbol);
+            $base = substr($upper, 0, 6);
+
+            if (strlen($base) !== 6 || !preg_match('/^[A-Z]{6}$/', $base)) {
+                continue;
+            }
+
+            // Basic heuristic to keep only FX-style pairs and skip metals/indices.
+            $baseCurrency = substr($base, 0, 3);
+            $quoteCurrency = substr($base, 3, 3);
+            $knownFx = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD'];
+
+            if (!in_array($baseCurrency, $knownFx, true) || !in_array($quoteCurrency, $knownFx, true)) {
+                continue;
+            }
+
+            $forexSymbols[] = $symbol;
+        }
+
+        return array_values(array_unique($forexSymbols));
+    }
+
+    public function applyTrailingStops(float $startPips, float $trailPips): array
+    {
+        if ($startPips <= 0 || $trailPips <= 0) {
+            throw new RuntimeException('Trailing stop pip values must be greater than zero.');
+        }
+
+        $snapshot = $this->getOpenTradeSnapshot();
+        $positions = is_array($snapshot['positions'] ?? null) ? $snapshot['positions'] : [];
+        $updated = 0;
+        $skipped = 0;
+        $errors = [];
+
+        foreach ($positions as $position) {
+            if (!is_array($position)) {
+                continue;
+            }
+
+            $positionId = (string) ($position['id'] ?? $position['positionId'] ?? '');
+            $symbol = (string) ($position['symbol'] ?? '');
+            $type = strtoupper((string) ($position['type'] ?? ''));
+            $openPrice = (float) ($position['openPrice'] ?? $position['priceOpen'] ?? 0);
+            $currentPrice = (float) ($position['currentPrice'] ?? $position['priceCurrent'] ?? 0);
+            $currentSl = isset($position['stopLoss']) ? (float) $position['stopLoss'] : null;
+            $currentTp = isset($position['takeProfit']) ? (float) $position['takeProfit'] : null;
+
+            if ($positionId === '' || $symbol === '' || $openPrice <= 0 || $currentPrice <= 0) {
+                $skipped++;
+                continue;
+            }
+
+            $pipSize = $this->pipSize($symbol);
+            $trailDistance = $trailPips * $pipSize;
+            $startDistance = $startPips * $pipSize;
+
+            $isBuy = str_contains($type, 'BUY');
+            $isSell = str_contains($type, 'SELL');
+            if (!$isBuy && !$isSell) {
+                $skipped++;
+                continue;
+            }
+
+            if ($isBuy) {
+                $profitDistance = $currentPrice - $openPrice;
+                if ($profitDistance < $startDistance) {
+                    $skipped++;
+                    continue;
+                }
+
+                $newSl = round($currentPrice - $trailDistance, 5);
+                if ($currentSl !== null && $newSl <= $currentSl) {
+                    $skipped++;
+                    continue;
+                }
+            } else {
+                $profitDistance = $openPrice - $currentPrice;
+                if ($profitDistance < $startDistance) {
+                    $skipped++;
+                    continue;
+                }
+
+                $newSl = round($currentPrice + $trailDistance, 5);
+                if ($currentSl !== null && $newSl >= $currentSl) {
+                    $skipped++;
+                    continue;
+                }
+            }
+
+            try {
+                $this->modifyPositionStops($positionId, $newSl, $currentTp);
+                $updated++;
+            } catch (RuntimeException $e) {
+                $errors[] = [
+                    'position_id' => $positionId,
+                    'symbol' => $symbol,
+                    'error' => $e->getMessage(),
+                ];
+            }
+        }
+
+        return [
+            'updated' => $updated,
+            'skipped' => $skipped,
+            'errors' => $errors,
+        ];
+    }
+
+    public function modifyPositionStops(string $positionId, ?float $stopLoss, ?float $takeProfit = null): array
+    {
+        [, , $accountId, $client] = $this->metaApiContext();
+
+        $positionId = trim($positionId);
+        if ($positionId === '') {
+            throw new RuntimeException('Position ID is required to modify stops.');
+        }
+
+        if ($stopLoss === null && $takeProfit === null) {
+            throw new RuntimeException('Provide stopLoss or takeProfit to modify a position.');
+        }
+
+        $payload = [
+            'actionType' => 'POSITION_MODIFY',
+            'positionId' => $positionId,
+        ];
+
+        if ($stopLoss !== null) {
+            $payload['stopLoss'] = $stopLoss;
+        }
+
+        if ($takeProfit !== null) {
+            $payload['takeProfit'] = $takeProfit;
+        }
+
+        $response = $this->sendTradeRequest($client, $accountId, $payload);
+
+        return [
+            'payload' => $payload,
+            'response' => $response,
+        ];
+    }
+
     private function resolveBrokerSymbol(Client $client, string $accountId, string $symbol): string
     {
         $requested = strtoupper(str_replace('/', '', trim($symbol)));
@@ -313,9 +531,11 @@ class Mt5Service
             throw new RuntimeException('Symbol cannot be empty.');
         }
 
-        $candidates = [];
+        $baseRequested = str_ends_with($requested, '_SB') ? substr($requested, 0, -3) : $requested;
+
+        $candidates = [$baseRequested.'_SB'];
         foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
-            $candidates[] = $requested.$suffix;
+            $candidates[] = $baseRequested.$suffix;
         }
 
         try {
@@ -330,6 +550,10 @@ class Mt5Service
             $availableMap = [];
             foreach ($availableSymbols as $availableSymbol) {
                 $availableMap[strtoupper($availableSymbol)] = $availableSymbol;
+            }
+
+            if (isset($availableMap[$baseRequested.'_SB'])) {
+                return $availableMap[$baseRequested.'_SB'];
             }
 
             if (isset($availableMap[$requested])) {
@@ -354,12 +578,18 @@ class Mt5Service
                 }
             }
 
+            if (!empty($prefixSpreadBetMatches)) {
+                usort($prefixSpreadBetMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
+
+                return $prefixSpreadBetMatches[0];
+            }
+
             if (!empty($prefixMatches)) {
                 usort($prefixMatches, function (string $a, string $b): int {
                     $aUpper = strtoupper($a);
                     $bUpper = strtoupper($b);
 
-                    // Prefer common FX symbol variants first (dot suffix before underscore variants).
+                    // For non-_SB fallback, prefer common FX symbol variants first.
                     $aScore = (int) str_contains($aUpper, '.') * 2 + (int) !str_contains($aUpper, '_');
                     $bScore = (int) str_contains($bUpper, '.') * 2 + (int) !str_contains($bUpper, '_');
 
@@ -371,12 +601,6 @@ class Mt5Service
                 });
 
                 return $prefixMatches[0];
-            }
-
-            if (!empty($prefixSpreadBetMatches)) {
-                usort($prefixSpreadBetMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
-
-                return $prefixSpreadBetMatches[0];
             }
 
             $containsMatches = [];
@@ -391,16 +615,16 @@ class Mt5Service
                 }
             }
 
-            if (!empty($containsMatches)) {
-                usort($containsMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
-
-                return $containsMatches[0];
-            }
-
             if (!empty($containsSpreadBetMatches)) {
                 usort($containsSpreadBetMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
 
                 return $containsSpreadBetMatches[0];
+            }
+
+            if (!empty($containsMatches)) {
+                usort($containsMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
+
+                return $containsMatches[0];
             }
         } catch (\Throwable) {
             // If symbol discovery fails, continue with requested symbol and let trade API decide.
@@ -465,11 +689,9 @@ class Mt5Service
             }
         }
 
-        foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
-            $candidate = $pair.$suffix;
-            if (isset($availableMap[$candidate]) && !$this->isSpreadBetSymbol($candidate)) {
-                return $availableMap[$candidate];
-            }
+        $spreadBetCandidate = $pair.'_SB';
+        if (isset($availableMap[$spreadBetCandidate])) {
+            return $availableMap[$spreadBetCandidate];
         }
 
         foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
@@ -491,14 +713,14 @@ class Mt5Service
             }
         }
 
-        if (!empty($prefixMatches)) {
-            usort($prefixMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
-            return $prefixMatches[0];
-        }
-
         if (!empty($prefixSpreadBetMatches)) {
             usort($prefixSpreadBetMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
             return $prefixSpreadBetMatches[0];
+        }
+
+        if (!empty($prefixMatches)) {
+            usort($prefixMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
+            return $prefixMatches[0];
         }
 
         return null;
@@ -513,7 +735,12 @@ class Mt5Service
 
         $candidates = [];
 
-        // Always try exactly what user typed first.
+        $baseRequested = str_ends_with($requested, '_SB') ? substr($requested, 0, -3) : $requested;
+
+        // Pepperstone spread-bet symbols should be preferred first.
+        $candidates[] = $baseRequested.'_SB';
+
+        // Also try exactly what user typed.
         $candidates[] = $requested;
 
         $resolved = $this->resolveBrokerSymbol($client, $accountId, $requested);
@@ -521,13 +748,9 @@ class Mt5Service
             $candidates[] = $resolved;
         }
 
-        $baseRequested = str_ends_with($requested, '_SB') ? substr($requested, 0, -3) : $requested;
-
         foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
             $candidates[] = $baseRequested.$suffix;
         }
-
-        $candidates[] = $baseRequested.'_SB';
 
         $candidates[] = $requested;
 
@@ -555,6 +778,18 @@ class Mt5Service
     private function volumeStep(string $symbol): float
     {
         return $this->isSpreadBetSymbol($symbol) ? 1.0 : 0.01;
+    }
+
+    private function pipSize(string $symbol): float
+    {
+        $upper = strtoupper($symbol);
+        $base = substr($upper, 0, 6);
+
+        if (strlen($base) === 6 && str_ends_with($base, 'JPY')) {
+            return 0.01;
+        }
+
+        return 0.0001;
     }
 
     private function isSpreadBetSymbol(string $symbol): bool

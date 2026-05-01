@@ -21,8 +21,14 @@
                     <x-nav-link :href="route('bot.index')" :active="request()->routeIs('bot.*')">
                         {{ __('Bot') }}
                     </x-nav-link>
+                    <x-nav-link :href="route('bot.analytics')" :active="request()->routeIs('bot.analytics')">
+                        {{ __('Bot Analytics') }}
+                    </x-nav-link>
                     <x-nav-link :href="route('ai.index')" :active="request()->routeIs('ai.*')">
                         {{ __('AI') }}
+                    </x-nav-link>
+                    <x-nav-link :href="route('tickers.index')" :active="request()->routeIs('tickers.*')">
+                        {{ __('Tickers') }}
                     </x-nav-link>
                 </div>
             </div>
@@ -85,8 +91,14 @@
             <x-responsive-nav-link :href="route('bot.index')" :active="request()->routeIs('bot.*')">
                 {{ __('Bot') }}
             </x-responsive-nav-link>
+            <x-responsive-nav-link :href="route('bot.analytics')" :active="request()->routeIs('bot.analytics')">
+                {{ __('Bot Analytics') }}
+            </x-responsive-nav-link>
             <x-responsive-nav-link :href="route('ai.index')" :active="request()->routeIs('ai.*')">
                 {{ __('AI') }}
+            </x-responsive-nav-link>
+            <x-responsive-nav-link :href="route('tickers.index')" :active="request()->routeIs('tickers.*')">
+                {{ __('Tickers') }}
             </x-responsive-nav-link>
         </div>
 
