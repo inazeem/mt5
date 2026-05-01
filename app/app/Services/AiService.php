@@ -14,7 +14,15 @@ class AiService
         $provider = $settings->ai_provider === 'perplexity' ? 'perplexity' : 'claude';
 
         if ($provider === 'claude') {
-            return $this->askClaude($settings, $prompt);
+            try {
+                return $this->askClaude($settings, $prompt);
+            } catch (RuntimeException $e) {
+                // If Perplexity is also configured, fall back to it automatically.
+                if (!empty($settings->perplexity_api_key)) {
+                    return $this->askPerplexity($settings, $prompt);
+                }
+                throw $e;
+            }
         }
 
         return $this->askPerplexity($settings, $prompt);
@@ -40,7 +48,23 @@ class AiService
             ]);
 
         if (!$response->successful()) {
-            throw new RuntimeException('Claude request failed: '.$response->body());
+            $body = $response->json();
+            $errorMessage = data_get($body, 'error.message', $response->body());
+            $errorType = data_get($body, 'error.type', '');
+
+            $friendlyMessage = match (true) {
+                str_contains($errorMessage, 'credit balance') || str_contains($errorMessage, 'too low')
+                    => 'Claude billing error: credit balance too low. Top up at console.anthropic.com.',
+                $errorType === 'authentication_error'
+                    => 'Claude authentication failed: check your API key in Settings.',
+                $errorType === 'overloaded_error'
+                    => 'Claude is currently overloaded. Try again shortly.',
+                $errorType === 'rate_limit_error'
+                    => 'Claude rate limit reached.',
+                default => "Claude request failed [{$response->status()}]: {$errorMessage}",
+            };
+
+            throw new RuntimeException($friendlyMessage);
         }
 
         $data = $response->json();

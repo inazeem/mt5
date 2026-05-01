@@ -2,6 +2,7 @@
 
 use App\Models\AppSetting;
 use App\Models\BotTradeLog;
+use App\Models\Ticker;
 use App\Services\AiService;
 use App\Services\Mt5Service;
 use Illuminate\Foundation\Inspiring;
@@ -30,6 +31,9 @@ Artisan::command('mt5:auto-forex
     {--ai-confirm=1 : 1 requires AI approval before entry, 0 bypasses AI confirmation}
     {--ai-min-confidence=70 : Minimum AI confidence percentage (0-100) required to approve a trade}
     {--max-symbols=200 : Max symbols to scan per cycle}
+    {--max-open-positions=10 : Maximum concurrent open positions (demo-safe ceiling)}
+    {--max-per-cycle=5 : Maximum new trades to open in a single cycle}
+    {--scalper=1 : 1 enables scalper mode (quick in/out), 0 keeps normal mode}
     {--test-mode : Bypass ALL filters and AI — trade the first --max-symbols symbols at market for testing only}
     {--once : Run one cycle only}
 ', function (Mt5Service $mt5Service, AiService $aiService) {
@@ -51,7 +55,21 @@ Artisan::command('mt5:auto-forex
         $useAiConfirm      = (string) $this->option('ai-confirm') !== '0' && ($db->bot_ai_confirm ?? true);
         $aiMinConfidence   = (int) ($this->option('ai-min-confidence') ?? ($db->bot_ai_min_confidence ?? 70));
         $maxSymbols        = max(1, (int) ($this->option('max-symbols') ?: ($db->bot_max_symbols ?? 200)));
-        $testMode          = (bool) $this->option('test-mode');
+        $scalperMode          = (string) $this->option('scalper') !== '0';
+        $maxOpenPositions     = max(1, (int) ($this->option('max-open-positions') ?: ($db->bot_max_open_positions ?? 10)));
+        $maxPerCycle          = max(1, (int) ($this->option('max-per-cycle') ?: ($db->bot_max_per_cycle ?? 5)));
+        $testMode             = (bool) $this->option('test-mode');
+
+        if ($scalperMode) {
+            // Scalper defaults: 1:3 R:R (SL=10pip, TP=30pip).
+            $tpPips = min($tpPips, 30.0);
+            $slPips = min($slPips, 10.0);
+            $trailStartPips = min($trailStartPips, 15.0);
+            $trailPips = min($trailPips, 8.0);
+            $minMovePips = min($minMovePips, 1.5);
+            $maxSpreadPips = min($maxSpreadPips, 5.0);
+            $cooldownMinutes = min($cooldownMinutes, 5);
+        }
 
         if (
             $lotSize <= 0 ||
@@ -74,6 +92,10 @@ Artisan::command('mt5:auto-forex
 
         if ($testMode) {
             $this->warn('TEST MODE: all filters, guardrails, and AI confirmation are disabled.');
+        }
+
+        if ($scalperMode) {
+            $this->line('Scalper mode ON  TP='.$tpPips.'pip  SL='.$slPips.'pip  maxSpread='.$maxSpreadPips.'pip  cooldown='.$cooldownMinutes.'min');
         }
 
         $currentHourUtc = (int) now('UTC')->format('G');
@@ -168,6 +190,18 @@ Artisan::command('mt5:auto-forex
 
         $openSnapshot = $mt5Service->getOpenTradeSnapshot();
         $positions = is_array($openSnapshot['positions'] ?? null) ? $openSnapshot['positions'] : [];
+        if (!$testMode && count($positions) >= $maxOpenPositions) {
+            $msg = 'Skipped entries: max open positions reached ('.count($positions).'/'.$maxOpenPositions.').';
+            $this->line($msg);
+            BotTradeLog::query()->create([
+                'event_type' => 'guardrail',
+                'status' => 'max_open_positions',
+                'message' => $msg,
+            ]);
+
+            return 0;
+        }
+
         $openBySymbol = [];
         foreach ($positions as $position) {
             if (is_array($position) && !empty($position['symbol'])) {
@@ -175,15 +209,29 @@ Artisan::command('mt5:auto-forex
             }
         }
 
-        $symbols = array_slice($mt5Service->getForexSymbols(), 0, $maxSymbols);
+        // Prefer active tickers from the database; fall back to MetaAPI symbol discovery.
+        $dbSymbols = Ticker::query()->active()->orderBy('symbol')->pluck('symbol')->all();
+        if (!empty($dbSymbols)) {
+            $symbols = array_slice($dbSymbols, 0, $maxSymbols);
+            $this->line('Using '.count($symbols).' symbol(s) from tickers table.');
+        } else {
+            $symbols = array_slice($mt5Service->getForexSymbols(), 0, $maxSymbols);
+            $this->line('No tickers in DB — discovered '.count($symbols).' symbol(s) from MetaAPI.');
+        }
+        $this->line('Scanning '.count($symbols).' symbols. Open positions: '.count($positions).'.');
         $opened = 0;
         $scanned = 0;
+        $skippedNoMove = 0;
+        $skippedSpread = 0;
+        $skippedCooldown = 0;
+        $skippedOpen = 0;
 
         foreach ($symbols as $symbol) {
             $symbol = strtoupper((string) $symbol);
             $scanned++;
 
             if (isset($openBySymbol[$symbol])) {
+                $skippedOpen++;
                 continue;
             }
 
@@ -191,6 +239,7 @@ Artisan::command('mt5:auto-forex
                 $quote = $mt5Service->getTickerPrice($symbol);
             } catch (\Throwable $e) {
                 Log::warning('Auto bot quote failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
+                $this->line("  {$symbol}: quote error — {$e->getMessage()}");
                 continue;
             }
 
@@ -210,11 +259,13 @@ Artisan::command('mt5:auto-forex
 
             if (!$testMode) {
                 if (!is_numeric($lastBid)) {
+                    $skippedNoMove++;
                     continue;
                 }
 
                 $delta = $bid - (float) $lastBid;
                 if (abs($delta) < $minMove) {
+                    $skippedNoMove++;
                     continue;
                 }
             }
@@ -225,6 +276,8 @@ Artisan::command('mt5:auto-forex
             $spreadPips = ($ask - $bid) / $pipSize;
 
             if (!$testMode && $spreadPips > $maxSpreadPips) {
+                $this->line("  {$symbol}: SPREAD {$spreadPips}pip > max {$maxSpreadPips}pip — skipped");
+                $skippedSpread++;
                 BotTradeLog::query()->create([
                     'event_type' => 'signal',
                     'status' => 'spread_rejected',
@@ -245,6 +298,9 @@ Artisan::command('mt5:auto-forex
                 ->first();
 
             if (!$testMode && $lastSuccessfulTrade && $cooldownMinutes > 0 && $lastSuccessfulTrade->created_at?->gt(now()->subMinutes($cooldownMinutes))) {
+                $remaining = now()->diffInSeconds($lastSuccessfulTrade->created_at->addMinutes($cooldownMinutes));
+                $this->line("  {$symbol}: COOLDOWN — {$remaining}s remaining");
+                $skippedCooldown++;
                 BotTradeLog::query()->create([
                     'event_type' => 'signal',
                     'status' => 'cooldown_rejected',
@@ -256,6 +312,8 @@ Artisan::command('mt5:auto-forex
                 ]);
                 continue;
             }
+
+            $this->line("  {$symbol}: signal {$side} — move=".number_format($signalDeltaPips,2)."pip spread=".number_format($spreadPips,2)."pip bid={$bid} ask={$ask}");
 
             if ($side === 'buy') {
                 $entry = $ask;
@@ -306,8 +364,15 @@ Artisan::command('mt5:auto-forex
                         Log::warning('Auto bot candle fetch failed', ['symbol' => $symbol, 'error' => $candleError->getMessage()]);
                     }
 
+                    $this->line("  {$symbol}: asking AI ({$symbol} {$side} entry={$entry} TP={$takeProfit} SL={$stopLoss})...");
+
+                    $strategyLine = $scalperMode
+                        ? 'This is a scalping trade. Prefer quick in-and-out setups and reject slow/unclear setups.'
+                        : 'This is a standard intraday trade.';
+
                     $prompt = "You are validating an automated forex trade. Reply strictly with one line starting with APPROVE or REJECT, then a short reason. "
                         ."Include a confidence percentage like 'Confidence: 85%' in your reply. "
+                        .$strategyLine.' '
                         ."Symbol: {$symbol}. Side: {$side}. Entry: {$entry}. TP: {$takeProfit}. SL: {$stopLoss}. "
                         ."Spread pips: ".number_format($spreadPips, 2).". Signal move pips: ".number_format($signalDeltaPips, 2)."."
                         .$candleContext;
@@ -334,9 +399,11 @@ Artisan::command('mt5:auto-forex
                             $aiSummary .= " [Confidence {$parsedConfidence}% below threshold {$aiMinConfidence}%]";
                         }
                     }
+                    $this->line("  {$symbol}: AI => {$aiDecision} — {$aiSummary}");
                 } catch (\Throwable $e) {
                     $aiDecision = 'reject';
                     $aiSummary = 'AI confirmation unavailable: '.$e->getMessage();
+                    $this->warn("  {$symbol}: AI error — {$e->getMessage()}");
                 }
             }
 
@@ -404,6 +471,11 @@ Artisan::command('mt5:auto-forex
                     'message' => 'Trade opened successfully.',
                     'meta_response' => $result,
                 ]);
+
+                if ($opened >= $maxPerCycle) {
+                    $this->line('Per-cycle trade limit reached ('.$maxPerCycle.'). Waiting for next cycle.');
+                    break;
+                }
             } catch (\Throwable $e) {
                 Log::warning('Auto bot trade failed', ['symbol' => $symbol, 'side' => $side, 'error' => $e->getMessage()]);
                 BotTradeLog::query()->create([
@@ -426,7 +498,14 @@ Artisan::command('mt5:auto-forex
             }
         }
 
-        $this->info('Cycle complete. Scanned '.$scanned.' symbols, opened '.$opened.' new positions.');
+        $this->info(
+            'Cycle complete. Scanned='.$scanned
+            .' opened='.$opened
+            .' noMove='.$skippedNoMove
+            .' spread='.$skippedSpread
+            .' cooldown='.$skippedCooldown
+            .' hasOpen='.$skippedOpen
+        );
 
         return 0;
     };

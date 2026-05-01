@@ -138,8 +138,16 @@ class BotController extends Controller
         }
     }
 
-    public function analytics(Mt5Service $mt5Service)
+    public function analytics(Request $request, Mt5Service $mt5Service)
     {
+        $validated = $request->validate([
+            'date_from'  => ['nullable', 'date'],
+            'date_to'    => ['nullable', 'date'],
+            'event_type' => ['nullable', 'string', 'in:signal,trade_open,trailing_update,guardrail'],
+            'symbol'     => ['nullable', 'string', 'max:20', 'regex:/^[A-Za-z0-9._-]*$/'],
+            'per_page'   => ['nullable', 'integer', 'in:25,50,100,200'],
+        ]);
+
         $settings = AppSetting::singleton();
 
         $openSnapshot = [
@@ -161,10 +169,28 @@ class BotController extends Controller
             ->where('created_at', '>=', $todayStart)
             ->get();
 
-        $recentLogs = BotTradeLog::query()
-            ->latest()
-            ->limit(200)
-            ->get();
+        $dateFrom  = !empty($validated['date_from']) ? $validated['date_from'] : null;
+        $dateTo    = !empty($validated['date_to'])   ? $validated['date_to']   : null;
+        $eventType = $validated['event_type'] ?? null;
+        $symbol    = !empty($validated['symbol']) ? strtoupper($validated['symbol']) : null;
+        $perPage   = (int) ($validated['per_page'] ?? 50);
+
+        $logsQuery = BotTradeLog::query()->latest();
+
+        if ($dateFrom) {
+            $logsQuery->whereDate('created_at', '>=', $dateFrom);
+        }
+        if ($dateTo) {
+            $logsQuery->whereDate('created_at', '<=', $dateTo);
+        }
+        if ($eventType) {
+            $logsQuery->where('event_type', $eventType);
+        }
+        if ($symbol) {
+            $logsQuery->where('symbol', 'like', $symbol.'%');
+        }
+
+        $recentLogs = $logsQuery->paginate($perPage)->withQueryString();
 
         $stats = [
             'active_positions' => count($positions),
@@ -222,7 +248,7 @@ class BotController extends Controller
             $stats['history_error'] = $e->getMessage();
         }
 
-        return view('bot.analytics', compact('settings', 'openSnapshot', 'positions', 'recentLogs', 'stats'));
+        return view('bot.analytics', compact('settings', 'openSnapshot', 'positions', 'recentLogs', 'stats', 'dateFrom', 'dateTo', 'eventType', 'symbol', 'perPage'));
     }
 
     public function exportCsv()

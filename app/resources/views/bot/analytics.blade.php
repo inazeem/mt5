@@ -145,6 +145,46 @@
                         Export CSV
                     </a>
                 </div>
+
+                {{-- Filters --}}
+                <form method="GET" action="{{ route('bot.analytics') }}" class="flex flex-wrap gap-3 items-end">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Date from</label>
+                        <input type="date" name="date_from" value="{{ $dateFrom ?? '' }}"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-indigo-200">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Date to</label>
+                        <input type="date" name="date_to" value="{{ $dateTo ?? '' }}"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-indigo-200">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Event type</label>
+                        <select name="event_type" class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-indigo-200">
+                            <option value="">All</option>
+                            @foreach (['signal', 'trade_open', 'trailing_update', 'guardrail'] as $et)
+                                <option value="{{ $et }}" {{ ($eventType ?? '') === $et ? 'selected' : '' }}>{{ $et }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Symbol</label>
+                        <input type="text" name="symbol" value="{{ $symbol ?? '' }}" placeholder="e.g. GBPUSD"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm w-32 focus:outline-none focus:ring focus:ring-indigo-200">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Per page</label>
+                        <select name="per_page" class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-indigo-200">
+                            @foreach ([25, 50, 100, 200] as $pp)
+                                <option value="{{ $pp }}" {{ $perPage === $pp ? 'selected' : '' }}>{{ $pp }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="flex gap-2">
+                        <button type="submit" class="px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700">Filter</button>
+                        <a href="{{ route('bot.analytics') }}" class="px-3 py-1.5 bg-gray-200 text-gray-700 text-xs font-semibold rounded hover:bg-gray-300">Clear</a>
+                    </div>
+                </form>
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-sm">
                         <thead>
@@ -180,6 +220,10 @@
                             @endforelse
                         </tbody>
                     </table>
+                </div>
+
+                <div class="mt-4">
+                    {{ $recentLogs->links() }}
                 </div>
             </div>
         </div>

@@ -531,9 +531,11 @@ class Mt5Service
             throw new RuntimeException('Symbol cannot be empty.');
         }
 
-        $candidates = [];
+        $baseRequested = str_ends_with($requested, '_SB') ? substr($requested, 0, -3) : $requested;
+
+        $candidates = [$baseRequested.'_SB'];
         foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
-            $candidates[] = $requested.$suffix;
+            $candidates[] = $baseRequested.$suffix;
         }
 
         try {
@@ -548,6 +550,10 @@ class Mt5Service
             $availableMap = [];
             foreach ($availableSymbols as $availableSymbol) {
                 $availableMap[strtoupper($availableSymbol)] = $availableSymbol;
+            }
+
+            if (isset($availableMap[$baseRequested.'_SB'])) {
+                return $availableMap[$baseRequested.'_SB'];
             }
 
             if (isset($availableMap[$requested])) {
@@ -572,12 +578,18 @@ class Mt5Service
                 }
             }
 
+            if (!empty($prefixSpreadBetMatches)) {
+                usort($prefixSpreadBetMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
+
+                return $prefixSpreadBetMatches[0];
+            }
+
             if (!empty($prefixMatches)) {
                 usort($prefixMatches, function (string $a, string $b): int {
                     $aUpper = strtoupper($a);
                     $bUpper = strtoupper($b);
 
-                    // Prefer common FX symbol variants first (dot suffix before underscore variants).
+                    // For non-_SB fallback, prefer common FX symbol variants first.
                     $aScore = (int) str_contains($aUpper, '.') * 2 + (int) !str_contains($aUpper, '_');
                     $bScore = (int) str_contains($bUpper, '.') * 2 + (int) !str_contains($bUpper, '_');
 
@@ -589,12 +601,6 @@ class Mt5Service
                 });
 
                 return $prefixMatches[0];
-            }
-
-            if (!empty($prefixSpreadBetMatches)) {
-                usort($prefixSpreadBetMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
-
-                return $prefixSpreadBetMatches[0];
             }
 
             $containsMatches = [];
@@ -609,16 +615,16 @@ class Mt5Service
                 }
             }
 
-            if (!empty($containsMatches)) {
-                usort($containsMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
-
-                return $containsMatches[0];
-            }
-
             if (!empty($containsSpreadBetMatches)) {
                 usort($containsSpreadBetMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
 
                 return $containsSpreadBetMatches[0];
+            }
+
+            if (!empty($containsMatches)) {
+                usort($containsMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
+
+                return $containsMatches[0];
             }
         } catch (\Throwable) {
             // If symbol discovery fails, continue with requested symbol and let trade API decide.
@@ -683,11 +689,9 @@ class Mt5Service
             }
         }
 
-        foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
-            $candidate = $pair.$suffix;
-            if (isset($availableMap[$candidate]) && !$this->isSpreadBetSymbol($candidate)) {
-                return $availableMap[$candidate];
-            }
+        $spreadBetCandidate = $pair.'_SB';
+        if (isset($availableMap[$spreadBetCandidate])) {
+            return $availableMap[$spreadBetCandidate];
         }
 
         foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
@@ -709,14 +713,14 @@ class Mt5Service
             }
         }
 
-        if (!empty($prefixMatches)) {
-            usort($prefixMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
-            return $prefixMatches[0];
-        }
-
         if (!empty($prefixSpreadBetMatches)) {
             usort($prefixSpreadBetMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
             return $prefixSpreadBetMatches[0];
+        }
+
+        if (!empty($prefixMatches)) {
+            usort($prefixMatches, fn (string $a, string $b) => strlen($a) <=> strlen($b));
+            return $prefixMatches[0];
         }
 
         return null;
@@ -731,7 +735,12 @@ class Mt5Service
 
         $candidates = [];
 
-        // Always try exactly what user typed first.
+        $baseRequested = str_ends_with($requested, '_SB') ? substr($requested, 0, -3) : $requested;
+
+        // Pepperstone spread-bet symbols should be preferred first.
+        $candidates[] = $baseRequested.'_SB';
+
+        // Also try exactly what user typed.
         $candidates[] = $requested;
 
         $resolved = $this->resolveBrokerSymbol($client, $accountId, $requested);
@@ -739,13 +748,9 @@ class Mt5Service
             $candidates[] = $resolved;
         }
 
-        $baseRequested = str_ends_with($requested, '_SB') ? substr($requested, 0, -3) : $requested;
-
         foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
             $candidates[] = $baseRequested.$suffix;
         }
-
-        $candidates[] = $baseRequested.'_SB';
 
         $candidates[] = $requested;
 
