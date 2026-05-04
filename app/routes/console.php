@@ -205,7 +205,11 @@ Artisan::command('mt5:auto-forex
         $openBySymbol = [];
         foreach ($positions as $position) {
             if (is_array($position) && !empty($position['symbol'])) {
-                $openBySymbol[strtoupper((string) $position['symbol'])] = true;
+                $sym = strtoupper((string) $position['symbol']);
+                $openBySymbol[$sym] = true;
+                // Also index by base symbol so a plain symbol like "EURUSD" matches
+                // a broker-suffixed open position like "EURUSD.a".
+                $openBySymbol[$mt5Service->baseSymbol($sym)] = true;
             }
         }
 

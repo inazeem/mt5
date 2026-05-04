@@ -767,6 +767,29 @@ class Mt5Service
         return array_values($normalized);
     }
 
+    /**
+     * Strip broker-specific suffixes (e.g. ".a", ".m", "_SB") from a symbol
+     * and return the normalised base symbol in upper-case.
+     */
+    public function baseSymbol(string $symbol): string
+    {
+        $upper = strtoupper(str_replace('/', '', trim($symbol)));
+
+        // Strip spread-bet suffix first.
+        if (str_ends_with($upper, '_SB')) {
+            $upper = substr($upper, 0, -3);
+        }
+
+        // Strip known dot-prefixed broker suffixes (longest first to avoid partial matches).
+        foreach (['.pro', '.a', '.m', '.r', '.c'] as $suffix) {
+            if (str_ends_with($upper, strtoupper($suffix))) {
+                return substr($upper, 0, -strlen($suffix));
+            }
+        }
+
+        return $upper;
+    }
+
     private function isUnknownSymbolError(RuntimeException $e): bool
     {
         $message = strtoupper($e->getMessage());
