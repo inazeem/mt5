@@ -24,8 +24,8 @@ Artisan::command('mt5:auto-forex
     {--min-move-pips=3 : Minimum move from previous tick to trigger entry}
     {--max-spread-pips=2.5 : Maximum spread allowed for entries}
     {--cooldown-minutes=30 : Cooldown per symbol after successful entry}
-    {--session-start-utc=6 : Start trading hour (UTC)}
-    {--session-end-utc=20 : End trading hour (UTC)}
+    {--session-start-utc : Start trading hour (UTC) - uses database setting if not specified}
+    {--session-end-utc : End trading hour (UTC) - uses database setting if not specified}
     {--max-trades-per-day=20 : Stop opening new trades after this daily count}
     {--max-daily-loss-percent=2 : Stop opening new trades when daily drawdown exceeds this percent}
     {--ai-confirm=1 : 1 requires AI approval before entry, 0 bypasses AI confirmation}
@@ -48,8 +48,8 @@ Artisan::command('mt5:auto-forex
         $minMovePips       = (float) $this->option('min-move-pips') ?: (float) ($db->bot_min_move_pips ?? 3);
         $maxSpreadPips     = (float) $this->option('max-spread-pips') ?: (float) ($db->bot_max_spread_pips ?? 2.5);
         $cooldownMinutes   = max(0, (int) ($this->option('cooldown-minutes') ?: ($db->bot_cooldown_minutes ?? 30)));
-        $sessionStartUtc   = (int) ($this->option('session-start-utc') !== null ? $this->option('session-start-utc') : ($db->bot_session_start_utc ?? 6));
-        $sessionEndUtc     = (int) ($this->option('session-end-utc') !== null ? $this->option('session-end-utc') : ($db->bot_session_end_utc ?? 20));
+        $sessionStartUtc   = (int) ($this->option('session-start-utc') ?: ($db->bot_session_start_utc ?? 6));
+        $sessionEndUtc     = (int) ($this->option('session-end-utc') ?: ($db->bot_session_end_utc ?? 20));
         $maxTradesPerDay   = max(1, (int) ($this->option('max-trades-per-day') ?: ($db->bot_max_trades_per_day ?? 20)));
         $maxDailyLossPercent = (float) ($this->option('max-daily-loss-percent') ?: ($db->bot_max_daily_loss_percent ?? 2));
         $useAiConfirm      = (string) $this->option('ai-confirm') !== '0' && ($db->bot_ai_confirm ?? true);
@@ -98,13 +98,15 @@ Artisan::command('mt5:auto-forex
             $this->line('Scalper mode ON  TP='.$tpPips.'pip  SL='.$slPips.'pip  maxSpread='.$maxSpreadPips.'pip  cooldown='.$cooldownMinutes.'min');
         }
 
-        $currentHourUtc = (int) now('UTC')->format('G');
+        // Force UTC timezone to ensure correct time comparison
+        date_default_timezone_set('UTC');
+        $currentHourUtc = (int) \Carbon\Carbon::now('UTC')->format('G');
         $inSession = $sessionStartUtc <= $sessionEndUtc
             ? ($currentHourUtc >= $sessionStartUtc && $currentHourUtc <= $sessionEndUtc)
             : ($currentHourUtc >= $sessionStartUtc || $currentHourUtc <= $sessionEndUtc);
 
         if (!$testMode && !$inSession) {
-            $msg = "Skipped cycle: outside trading session ({$sessionStartUtc}:00-{$sessionEndUtc}:59 UTC).";
+            $msg = "Skipped cycle: outside trading session ({$sessionStartUtc}:00-{$sessionEndUtc}:59 UTC). Current UTC hour: {$currentHourUtc}.";
             $this->warn($msg);
             BotTradeLog::query()->create([
                 'event_type' => 'guardrail',
