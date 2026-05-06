@@ -56,7 +56,21 @@
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Manager Password</label>
-                            <input name="mt5_manager_password" type="password" value="{{ old('mt5_manager_password') }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <div class="mt-1 flex items-center gap-2">
+                                <input id="mt5_manager_password" name="mt5_manager_password" type="password" value="{{ old('mt5_manager_password', $settings->mt5_manager_password) }}" placeholder="Leave blank to keep existing password" class="block w-full rounded border-gray-300" />
+                                <button type="button" data-toggle-password="mt5_manager_password" class="inline-flex items-center justify-center rounded border border-gray-300 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50" aria-label="Toggle manager password visibility" title="Show/Hide">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path d="M10 4C5 4 1.73 7.11.46 9.02a1.75 1.75 0 0 0 0 1.96C1.73 12.89 5 16 10 16s8.27-3.11 9.54-5.02a1.75 1.75 0 0 0 0-1.96C18.27 7.11 15 4 10 4Zm0 9a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1">
+                                @if(!empty($settings->mt5_manager_password))
+                                    Password is saved (hidden). Leave blank to keep it unchanged.
+                                @else
+                                    No password saved yet.
+                                @endif
+                            </p>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Trading Account Login</label>
@@ -91,7 +105,21 @@
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Claude API Key</label>
-                            <input name="claude_api_key" type="password" value="{{ old('claude_api_key') }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <div class="mt-1 flex items-center gap-2">
+                                <input id="claude_api_key" name="claude_api_key" type="password" value="{{ old('claude_api_key', $settings->claude_api_key) }}" placeholder="Leave blank to keep existing key" class="block w-full rounded border-gray-300" />
+                                <button type="button" data-toggle-password="claude_api_key" class="inline-flex items-center justify-center rounded border border-gray-300 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50" aria-label="Toggle Claude API key visibility" title="Show/Hide">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path d="M10 4C5 4 1.73 7.11.46 9.02a1.75 1.75 0 0 0 0 1.96C1.73 12.89 5 16 10 16s8.27-3.11 9.54-5.02a1.75 1.75 0 0 0 0-1.96C18.27 7.11 15 4 10 4Zm0 9a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1">
+                                @if(!empty($settings->claude_api_key))
+                                    Key is saved (hidden). Leave blank to keep it unchanged.
+                                @else
+                                    No Claude API key saved yet.
+                                @endif
+                            </p>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Perplexity Model</label>
@@ -99,7 +127,21 @@
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Perplexity API Key</label>
-                            <input name="perplexity_api_key" type="password" value="{{ old('perplexity_api_key') }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <div class="mt-1 flex items-center gap-2">
+                                <input id="perplexity_api_key" name="perplexity_api_key" type="password" value="{{ old('perplexity_api_key', $settings->perplexity_api_key) }}" placeholder="Leave blank to keep existing key" class="block w-full rounded border-gray-300" />
+                                <button type="button" data-toggle-password="perplexity_api_key" class="inline-flex items-center justify-center rounded border border-gray-300 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50" aria-label="Toggle Perplexity API key visibility" title="Show/Hide">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path d="M10 4C5 4 1.73 7.11.46 9.02a1.75 1.75 0 0 0 0 1.96C1.73 12.89 5 16 10 16s8.27-3.11 9.54-5.02a1.75 1.75 0 0 0 0-1.96C18.27 7.11 15 4 10 4Zm0 9a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1">
+                                @if(!empty($settings->perplexity_api_key))
+                                    Key is saved (hidden). Leave blank to keep it unchanged.
+                                @else
+                                    No Perplexity API key saved yet.
+                                @endif
+                            </p>
                         </div>
                     </div>
                 </section>
@@ -114,10 +156,17 @@
                     <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <div class="sm:col-span-2">
                             <label class="block text-sm font-medium text-gray-700">MetaApi Auth Token</label>
-                            <input name="metaapi_token" type="password" value="{{ old('metaapi_token') }}"
-                                maxlength="4096"
-                                   placeholder="Leave blank to keep existing token"
-                                   class="mt-1 block w-full rounded border-gray-300" />
+                            <div class="mt-1 flex items-center gap-2">
+                                <input id="metaapi_token" name="metaapi_token" type="password" value="{{ old('metaapi_token', $settings->metaapi_token) }}"
+                                    maxlength="4096"
+                                       placeholder="Leave blank to keep existing token"
+                                       class="block w-full rounded border-gray-300" />
+                                <button type="button" data-toggle-password="metaapi_token" class="inline-flex items-center justify-center rounded border border-gray-300 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50" aria-label="Toggle MetaApi token visibility" title="Show/Hide">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path d="M10 4C5 4 1.73 7.11.46 9.02a1.75 1.75 0 0 0 0 1.96C1.73 12.89 5 16 10 16s8.27-3.11 9.54-5.02a1.75 1.75 0 0 0 0-1.96C18.27 7.11 15 4 10 4Zm0 9a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" />
+                                    </svg>
+                                </button>
+                            </div>
                             <p class="mt-1 text-xs text-gray-500">Found in MetaApi dashboard → API Tokens. Leave blank to preserve the saved token.</p>
                         </div>
                         <div>
@@ -223,4 +272,15 @@
             </form>
         </div>
     </div>
+
+    <script>
+        document.querySelectorAll('[data-toggle-password]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const inputId = button.getAttribute('data-toggle-password');
+                const input = document.getElementById(inputId);
+                if (!input) return;
+                input.type = input.type === 'password' ? 'text' : 'password';
+            });
+        });
+    </script>
 </x-app-layout>
