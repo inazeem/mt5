@@ -56,22 +56,29 @@ RUN mkdir -p /var/www/html/database \
     && chown -R www-data:www-data /var/www/html/database
 
 # Nginx config
-RUN echo 'server { \n\
-    listen 80; \n\
-    root /var/www/html/public; \n\
-    index index.php; \n\
-    location / { try_files $uri $uri/ /index.php?$query_string; } \n\
-    location ~ \.php$ { \n\
-        fastcgi_pass 127.0.0.1:9000; \n\
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name; \n\
-        include fastcgi_params; \n\
-    } \n\
-}' > /etc/nginx/http.d/default.conf
+RUN cat > /etc/nginx/http.d/default.conf <<'EOF'
+server {
+    listen 80;
+    root /var/www/html/public;
+    index index.php;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        fastcgi_pass 127.0.0.1:9000;
+        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+}
+EOF
 
 # Supervisor config to run nginx + php-fpm
 RUN cat > /etc/supervisord.conf <<'EOF'
 [supervisord]
 nodaemon=true
+user=root
 
 [program:php-fpm]
 command=php-fpm
