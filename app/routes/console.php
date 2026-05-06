@@ -26,7 +26,7 @@ Artisan::command('mt5:auto-forex
     {--cooldown-minutes=30 : Cooldown per symbol after successful entry}
     {--session-start-utc : Start trading hour (UTC) - uses database setting if not specified}
     {--session-end-utc : End trading hour (UTC) - uses database setting if not specified}
-    {--max-trades-per-day=20 : Stop opening new trades after this daily count}
+    {--max-trades-per-day : Stop opening new trades after this daily count}
     {--max-daily-loss-percent=2 : Stop opening new trades when daily drawdown exceeds this percent}
     {--ai-confirm=1 : 1 requires AI approval before entry, 0 bypasses AI confirmation}
     {--ai-min-confidence=70 : Minimum AI confidence percentage (0-100) required to approve a trade}
@@ -40,24 +40,43 @@ Artisan::command('mt5:auto-forex
     $runCycle = function () use ($mt5Service, $aiService) {
         $db = AppSetting::singleton();
 
-        $lotSize           = (float) $this->option('lot') ?: (float) ($db->bot_lot ?? 0.01);
-        $tpPips            = (float) $this->option('tp-pips') ?: (float) ($db->bot_tp_pips ?? 25);
-        $slPips            = (float) $this->option('sl-pips') ?: (float) ($db->bot_sl_pips ?? 15);
-        $trailStartPips    = (float) $this->option('trail-start-pips') ?: (float) ($db->bot_trail_start_pips ?? 10);
-        $trailPips         = (float) $this->option('trail-pips') ?: (float) ($db->bot_trail_pips ?? 8);
-        $minMovePips       = (float) $this->option('min-move-pips') ?: (float) ($db->bot_min_move_pips ?? 3);
-        $maxSpreadPips     = (float) $this->option('max-spread-pips') ?: (float) ($db->bot_max_spread_pips ?? 2.5);
-        $cooldownMinutes   = max(0, (int) ($this->option('cooldown-minutes') ?: ($db->bot_cooldown_minutes ?? 30)));
-        $sessionStartUtc   = (int) ($this->option('session-start-utc') ?: ($db->bot_session_start_utc ?? 6));
-        $sessionEndUtc     = (int) ($this->option('session-end-utc') ?: ($db->bot_session_end_utc ?? 20));
-        $maxTradesPerDay   = max(1, (int) ($this->option('max-trades-per-day') ?: ($db->bot_max_trades_per_day ?? 20)));
-        $maxDailyLossPercent = (float) ($this->option('max-daily-loss-percent') ?: ($db->bot_max_daily_loss_percent ?? 2));
+        // Use CLI option only when the flag is explicitly passed; otherwise prefer DB settings.
+        $optionProvided = static function (string $name): bool {
+            foreach ($_SERVER['argv'] ?? [] as $arg) {
+                if ($arg === '--'.$name || str_starts_with($arg, '--'.$name.'=')) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        $optionOrSetting = function (string $name, mixed $settingValue, mixed $fallbackDefault) use ($optionProvided) {
+            if ($optionProvided($name)) {
+                return $this->option($name);
+            }
+
+            return $settingValue ?? $fallbackDefault;
+        };
+
+        $lotSize           = (float) $optionOrSetting('lot', $db->bot_lot ?? null, 0.01);
+        $tpPips            = (float) $optionOrSetting('tp-pips', $db->bot_tp_pips ?? null, 25);
+        $slPips            = (float) $optionOrSetting('sl-pips', $db->bot_sl_pips ?? null, 15);
+        $trailStartPips    = (float) $optionOrSetting('trail-start-pips', $db->bot_trail_start_pips ?? null, 10);
+        $trailPips         = (float) $optionOrSetting('trail-pips', $db->bot_trail_pips ?? null, 8);
+        $minMovePips       = (float) $optionOrSetting('min-move-pips', $db->bot_min_move_pips ?? null, 3);
+        $maxSpreadPips     = (float) $optionOrSetting('max-spread-pips', $db->bot_max_spread_pips ?? null, 2.5);
+        $cooldownMinutes   = max(0, (int) $optionOrSetting('cooldown-minutes', $db->bot_cooldown_minutes ?? null, 30));
+        $sessionStartUtc   = (int) $optionOrSetting('session-start-utc', $db->bot_session_start_utc ?? null, 6);
+        $sessionEndUtc     = (int) $optionOrSetting('session-end-utc', $db->bot_session_end_utc ?? null, 20);
+        $maxTradesPerDay   = max(1, (int) $optionOrSetting('max-trades-per-day', $db->bot_max_trades_per_day ?? null, 20));
+        $maxDailyLossPercent = (float) $optionOrSetting('max-daily-loss-percent', $db->bot_max_daily_loss_percent ?? null, 2);
         $useAiConfirm      = (string) $this->option('ai-confirm') !== '0' && ($db->bot_ai_confirm ?? true);
-        $aiMinConfidence   = (int) ($this->option('ai-min-confidence') ?? ($db->bot_ai_min_confidence ?? 70));
-        $maxSymbols        = max(1, (int) ($this->option('max-symbols') ?: ($db->bot_max_symbols ?? 200)));
+        $aiMinConfidence   = (int) $optionOrSetting('ai-min-confidence', $db->bot_ai_min_confidence ?? null, 70);
+        $maxSymbols        = max(1, (int) $optionOrSetting('max-symbols', $db->bot_max_symbols ?? null, 200));
         $scalperMode          = (string) $this->option('scalper') !== '0';
-        $maxOpenPositions     = max(1, (int) ($this->option('max-open-positions') ?: ($db->bot_max_open_positions ?? 10)));
-        $maxPerCycle          = max(1, (int) ($this->option('max-per-cycle') ?: ($db->bot_max_per_cycle ?? 5)));
+        $maxOpenPositions     = max(1, (int) $optionOrSetting('max-open-positions', $db->bot_max_open_positions ?? null, 10));
+        $maxPerCycle          = max(1, (int) $optionOrSetting('max-per-cycle', $db->bot_max_per_cycle ?? null, 5));
         $testMode             = (bool) $this->option('test-mode');
 
         if ($scalperMode) {
