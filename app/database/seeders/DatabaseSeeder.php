@@ -16,12 +16,15 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
+        $ownerEmail = (string) env('APP_OWNER_EMAIL', 'test@example.com');
+        $ownerPassword = (string) env('APP_OWNER_PASSWORD', 'password');
+
         User::query()->firstOrCreate([
-            'email' => 'test@example.com',
+            'email' => $ownerEmail,
         ], [
-            'name' => 'Test User',
+            'name' => 'Owner',
             'email_verified_at' => now(),
-            'password' => Hash::make('password'),
+            'password' => Hash::make($ownerPassword),
         ]);
     }
 }
