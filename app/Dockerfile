@@ -69,16 +69,20 @@ RUN echo 'server { \n\
 }' > /etc/nginx/http.d/default.conf
 
 # Supervisor config to run nginx + php-fpm
-RUN echo '[supervisord] \n\
-nodaemon=true \n\
-[program:php-fpm] \n\
-command=php-fpm \n\
-autostart=true \n\
-autorestart=true \n\
-[program:nginx] \n\
-command=nginx -g "daemon off;" \n\
-autostart=true \n\
-autorestart=true' > /etc/supervisord.conf
+RUN cat > /etc/supervisord.conf <<'EOF'
+[supervisord]
+nodaemon=true
+
+[program:php-fpm]
+command=php-fpm
+autostart=true
+autorestart=true
+
+[program:nginx]
+command=nginx -g "daemon off;"
+autostart=true
+autorestart=true
+EOF
 
 EXPOSE 80
 
