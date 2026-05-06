@@ -18,7 +18,7 @@ RUN apk add --no-cache \
 
 # Install PHP extensions
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo pdo_sqlite gd opcache pcntl
+    && docker-php-ext-install pdo pdo_mysql pdo_sqlite gd opcache pcntl
 
 # Install pnpm
 RUN npm install -g pnpm
