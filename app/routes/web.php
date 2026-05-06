@@ -25,7 +25,11 @@ Route::middleware(['auth', 'owner'])->group(function () {
 
     Route::get('/bot', [BotController::class, 'index'])->name('bot.index');
     Route::get('/bot/analytics', [BotController::class, 'analytics'])->name('bot.analytics');
+    Route::get('/bot/analytics/live', [BotController::class, 'analyticsLive'])->name('bot.analytics.live');
+    Route::get('/bot/alerts', [BotController::class, 'alerts'])->name('bot.alerts');
+    Route::post('/bot/alerts/clear', [BotController::class, 'clearAlerts'])->name('bot.alerts.clear');
     Route::get('/bot/analytics/export', [BotController::class, 'exportCsv'])->name('bot.analytics.export');
+    Route::get('/bot/alerts/export', [BotController::class, 'exportCsv'])->name('bot.alerts.export');
     Route::post('/bot/trade', [BotController::class, 'store'])->name('bot.trade');
     Route::post('/bot/close-position', [BotController::class, 'closePosition'])->name('bot.close-position');
     Route::get('/bot/price', [BotController::class, 'price'])->name('bot.price');

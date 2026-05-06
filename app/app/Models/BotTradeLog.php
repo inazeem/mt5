@@ -19,6 +19,7 @@ class BotTradeLog extends Model
         'signal_delta_pips',
         'ai_provider',
         'ai_decision',
+        'ai_confidence',
         'ai_summary',
         'message',
         'error_message',
@@ -35,6 +36,7 @@ class BotTradeLog extends Model
             'stop_loss' => 'float',
             'spread_pips' => 'float',
             'signal_delta_pips' => 'float',
+            'ai_confidence' => 'integer',
             'meta_payload' => 'array',
             'meta_response' => 'array',
         ];
