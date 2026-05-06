@@ -82,4 +82,4 @@ autorestart=true' > /etc/supervisord.conf
 
 EXPOSE 80
 
-CMD ["sh", "-c", "rm -f bootstrap/cache/config.php bootstrap/cache/routes-v7.php bootstrap/cache/events.php && php artisan config:clear && php artisan route:clear && php artisan migrate --force && php artisan config:cache && php artisan route:cache && supervisord -c /etc/supervisord.conf"]
+CMD ["sh", "-c", "echo \"Runtime DB_HOST=${DB_HOST}\" && rm -f bootstrap/cache/config.php bootstrap/cache/routes-v7.php bootstrap/cache/events.php && php artisan optimize:clear && php artisan migrate --force && php artisan config:cache && php artisan route:cache && supervisord -c /etc/supervisord.conf"]
