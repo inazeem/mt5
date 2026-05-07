@@ -9,11 +9,34 @@ use GuzzleHttp\Exception\RequestException;
 use Illuminate\Support\Facades\Cache;
 use RuntimeException;
 
+/**
+ * Service wrapper for MetaApi/MT5 operations used by the bot UI and automation flows.
+ *
+ * Responsibilities:
+ * - Send trading actions (open, close, modify).
+ * - Resolve broker symbol variants and normalize volumes.
+ * - Fetch account, market, and history data.
+ * - Apply protective trailing-stop updates.
+ */
 class Mt5Service
 {
     private const BASE_URL = 'https://mt-client-api-v1.{region}.agiliumtrade.ai';
     private const COMMON_PEPPERSTONE_SUFFIXES = ['', '.a', '.m', '.r', '.pro', '.c', 'a', 'm', 'r', 'pro', 'c'];
+    private const HISTORY_DEALS_CACHE_SECONDS = 60;
+    private const HISTORY_DEALS_STALE_CACHE_MINUTES = 15;
+    private const HISTORY_DEALS_MAX_RETRIES = 3;
+    private const HISTORY_DEALS_BACKOFF_BASE_MS = 400;
 
+    /**
+     * Place a new market order, optionally split into multiple exit legs.
+     *
+     * @param string $symbol Base symbol (for example GBPUSD).
+     * @param float $lotSize Requested lot size before multiplier adjustments.
+     * @param string $side Trade direction: buy or sell.
+     * @param array<int, array<string, mixed>> $exitLegs Optional staged exit legs.
+     * @return array<string, mixed>
+     * @throws RuntimeException
+     */
     public function placeOrder(string $symbol, float $lotSize, string $side, array $exitLegs = []): array
     {
         [$settings, $metaApiToken, $metaApiAccountId, $client] = $this->metaApiContext();
@@ -151,6 +174,13 @@ class Mt5Service
         ];
     }
 
+    /**
+     * Close an existing open position by id.
+     *
+     * @param string $positionId Broker position identifier.
+     * @return array<string, mixed>
+     * @throws RuntimeException
+     */
     public function closePosition(string $positionId): array
     {
         [, , $metaApiAccountId, $client] = $this->metaApiContext();
@@ -186,6 +216,11 @@ class Mt5Service
         }
     }
 
+    /**
+     * Retrieve currently open positions and pending orders.
+     *
+     * @return array<string, mixed>
+     */
     public function getOpenTradeSnapshot(): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
@@ -197,6 +232,11 @@ class Mt5Service
         ];
     }
 
+    /**
+     * Fetch account-level information from MetaApi.
+     *
+     * @return array<string, mixed>
+     */
     public function getAccountInformation(): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
@@ -211,6 +251,13 @@ class Mt5Service
         return $decoded;
     }
 
+    /**
+     * Resolve and fetch current bid/ask/last quote for a symbol.
+     *
+     * @param string $symbol Requested symbol.
+     * @return array<string, mixed>
+     * @throws RuntimeException
+     */
     public function getTickerPrice(string $symbol): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
@@ -293,22 +340,57 @@ class Mt5Service
         ];
     }
 
+    /**
+     * Fetch historical deals within a time range.
+     *
+     * Uses short-lived cache to reduce API pressure and a stale fallback during
+     * temporary rate limiting.
+     *
+     * @param \DateTimeInterface $from Inclusive start time.
+     * @param \DateTimeInterface $to Inclusive end time.
+     * @return array<int, array<string, mixed>>
+     * @throws RuntimeException
+     */
     public function getHistoryDeals(\DateTimeInterface $from, \DateTimeInterface $to): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
 
-        $startTime = rawurlencode($from->format(\DateTimeInterface::ATOM));
-        $endTime   = rawurlencode($to->format(\DateTimeInterface::ATOM));
-
-        $response = $client->get(
-            "/users/current/accounts/{$accountId}/history-deals/time/{$startTime}/{$endTime}"
+        $windowKey = sprintf(
+            'mt5_history_deals:%s:%s:%s',
+            $accountId,
+            $from->format('YmdHi'),
+            $to->format('YmdHi')
         );
+        $staleKey = $windowKey.':stale';
 
-        $decoded = json_decode((string) $response->getBody(), true);
+        if (Cache::has($windowKey)) {
+            return Cache::get($windowKey, []);
+        }
 
-        return is_array($decoded) ? $decoded : [];
+        try {
+            $deals = $this->fetchHistoryDealsWithRetry($client, $accountId, $from, $to);
+            Cache::put($windowKey, $deals, now()->addSeconds(self::HISTORY_DEALS_CACHE_SECONDS));
+            Cache::put($staleKey, $deals, now()->addMinutes(self::HISTORY_DEALS_STALE_CACHE_MINUTES));
+
+            return $deals;
+        } catch (RuntimeException $e) {
+            if (str_contains(strtoupper($e->getMessage()), 'TOO MANY REQUESTS') && Cache::has($staleKey)) {
+                return Cache::get($staleKey, []);
+            }
+
+            throw $e;
+        }
     }
 
+    /**
+     * Fetch OHLC candles for a symbol/timeframe.
+     *
+     * @param string $symbol Broker symbol.
+     * @param string $timeframe MetaApi timeframe string.
+     * @param int $limit Number of candles to return (1-1000).
+     * @return array<int, array<string, mixed>>
+     * @throws RuntimeException
+     */
     public function getCandles(string $symbol, string $timeframe = '1h', int $limit = 20): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
@@ -341,6 +423,11 @@ class Mt5Service
         return $decoded;
     }
 
+    /**
+     * Get a best-effort list of major forex symbols available on the account.
+     *
+     * @return array<int, string>
+     */
     public function getTopForexSymbols(): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
@@ -369,6 +456,11 @@ class Mt5Service
         }
     }
 
+    /**
+     * Get all discovered forex-like symbols from the broker symbol catalog.
+     *
+     * @return array<int, string>
+     */
     public function getForexSymbols(): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
@@ -405,6 +497,15 @@ class Mt5Service
         return array_values(array_unique($forexSymbols));
     }
 
+    /**
+     * Apply trailing stop and optional one-time TP expansion to open positions.
+     *
+     * @param float $startPips Minimum profit in pips before trailing begins.
+     * @param float $trailPips Trailing distance in pips.
+     * @param float $tpMultiplier Take-profit expansion multiplier (>= 1).
+     * @return array<string, mixed>
+     * @throws RuntimeException
+     */
     public function applyTrailingStops(float $startPips, float $trailPips, float $tpMultiplier = 2.0): array
     {
         if ($startPips <= 0 || $trailPips <= 0 || $tpMultiplier < 1) {
@@ -514,6 +615,15 @@ class Mt5Service
         ];
     }
 
+    /**
+     * Modify stop-loss and/or take-profit values for an open position.
+     *
+     * @param string $positionId Broker position identifier.
+     * @param float|null $stopLoss New stop-loss price.
+     * @param float|null $takeProfit New take-profit price.
+     * @return array<string, mixed>
+     * @throws RuntimeException
+     */
     public function modifyPositionStops(string $positionId, ?float $stopLoss, ?float $takeProfit = null): array
     {
         [, , $accountId, $client] = $this->metaApiContext();
@@ -548,6 +658,15 @@ class Mt5Service
         ];
     }
 
+    /**
+     * Resolve the most likely tradable broker symbol variant.
+     *
+     * @param Client $client Configured MetaApi HTTP client.
+     * @param string $accountId MetaApi account id.
+     * @param string $symbol User-requested symbol.
+     * @return string
+     * @throws RuntimeException
+     */
     private function resolveBrokerSymbol(Client $client, string $accountId, string $symbol): string
     {
         $requested = strtoupper(str_replace('/', '', trim($symbol)));
@@ -658,6 +777,12 @@ class Mt5Service
         return $requested;
     }
 
+    /**
+     * Extract symbol names from mixed MetaApi symbol payload shapes.
+     *
+     * @param mixed $decoded Decoded JSON response.
+     * @return array<int, string>
+     */
     private function extractSymbolNames(mixed $decoded): array
     {
         if (!is_array($decoded)) {
@@ -687,6 +812,14 @@ class Mt5Service
         return array_values(array_unique($symbols));
     }
 
+    /**
+     * Normalize requested lot/stake size to broker constraints.
+     *
+     * @param string $symbol Broker symbol.
+     * @param float $requestedVolume User requested volume.
+     * @return float
+     * @throws RuntimeException
+     */
     private function normalizeVolume(string $symbol, float $requestedVolume): float
     {
         if ($requestedVolume <= 0) {
@@ -704,6 +837,13 @@ class Mt5Service
         return max(0.01, round($requestedVolume, 2));
     }
 
+    /**
+     * Apply global volume multiplier from settings.
+     *
+     * @param AppSetting $settings Bot configuration singleton.
+     * @param float $lotSize Base lot size.
+     * @return float
+     */
     private function applyConfiguredVolumeMultiplier(AppSetting $settings, float $lotSize): float
     {
         $multiplier = max(1, (int) ($settings->mt5_volume_multiplier ?? 1));
@@ -711,6 +851,13 @@ class Mt5Service
         return $lotSize * $multiplier;
     }
 
+    /**
+     * Pick the best available broker symbol for a major pair.
+     *
+     * @param string $pair Base pair (for example EURUSD).
+     * @param array<int, string> $availableSymbols Broker symbols list.
+     * @return string|null
+     */
     private function pickBestSymbolForPair(string $pair, array $availableSymbols): ?string
     {
         $pair = strtoupper($pair);
@@ -758,6 +905,15 @@ class Mt5Service
         return null;
     }
 
+    /**
+     * Build ordered candidate symbols for trade placement attempts.
+     *
+     * @param Client $client Configured MetaApi HTTP client.
+     * @param string $accountId MetaApi account id.
+     * @param string $symbol Requested user symbol.
+     * @return array<int, string>
+     * @throws RuntimeException
+     */
     private function buildTradeSymbolCandidates(Client $client, string $accountId, string $symbol): array
     {
         $requested = strtoupper(str_replace('/', '', trim($symbol)));
@@ -822,6 +978,12 @@ class Mt5Service
         return $upper;
     }
 
+    /**
+     * Determine if the exception represents an unknown symbol error.
+     *
+     * @param RuntimeException $e Caught trade exception.
+     * @return bool
+     */
     private function isUnknownSymbolError(RuntimeException $e): bool
     {
         $message = strtoupper($e->getMessage());
@@ -830,11 +992,23 @@ class Mt5Service
             || str_contains($message, 'UNKNOWN SYMBOL');
     }
 
+    /**
+     * Get lot/stake increment step for a symbol.
+     *
+     * @param string $symbol Broker symbol.
+     * @return float
+     */
     private function volumeStep(string $symbol): float
     {
         return $this->isSpreadBetSymbol($symbol) ? 1.0 : 0.01;
     }
 
+    /**
+     * Get pip size for the provided symbol.
+     *
+     * @param string $symbol Broker symbol.
+     * @return float
+     */
     private function pipSize(string $symbol): float
     {
         $upper = strtoupper($symbol);
@@ -847,11 +1021,23 @@ class Mt5Service
         return 0.0001;
     }
 
+    /**
+     * Check if a symbol is a spread-bet contract.
+     *
+     * @param string $symbol Broker symbol.
+     * @return bool
+     */
     private function isSpreadBetSymbol(string $symbol): bool
     {
         return str_ends_with(strtoupper($symbol), '_SB');
     }
 
+    /**
+     * Normalize and validate exit-leg input entries.
+     *
+     * @param array<int, array<string, mixed>> $exitLegs Raw exit-leg payload.
+     * @return array<int, array<string, float|null>>
+     */
     private function normalizeExitLegs(array $exitLegs): array
     {
         $normalized = [];
@@ -879,6 +1065,15 @@ class Mt5Service
         return $normalized;
     }
 
+    /**
+     * Send a trade request and translate transport/logical errors into runtime exceptions.
+     *
+     * @param Client $client Configured MetaApi HTTP client.
+     * @param string $accountId MetaApi account id.
+     * @param array<string, mixed> $payload Trade payload.
+     * @return array<string, mixed>
+     * @throws RuntimeException
+     */
     private function sendTradeRequest(Client $client, string $accountId, array $payload): array
     {
         try {
@@ -923,6 +1118,12 @@ class Mt5Service
         }
     }
 
+    /**
+     * Build a MetaApi execution context from current app settings.
+     *
+     * @return array{0: AppSetting, 1: string, 2: string, 3: Client}
+     * @throws RuntimeException
+     */
     private function metaApiContext(): array
     {
         $settings = AppSetting::singleton();
@@ -951,6 +1152,13 @@ class Mt5Service
         return [$settings, $metaApiToken, $metaApiAccountId, $client];
     }
 
+    /**
+     * Safe GET helper that returns decoded payload or an error envelope.
+     *
+     * @param Client $client Configured MetaApi HTTP client.
+     * @param string $path Relative endpoint path.
+     * @return array<string, mixed>
+     */
     private function safeMetaApiGet(Client $client, string $path): array
     {
         try {
@@ -969,6 +1177,88 @@ class Mt5Service
         }
     }
 
+    /**
+     * Fetch history deals with bounded retries for rate-limit/transient failures.
+     *
+     * @param Client $client Configured MetaApi HTTP client.
+     * @param string $accountId MetaApi account id.
+     * @param \DateTimeInterface $from Inclusive start time.
+     * @param \DateTimeInterface $to Inclusive end time.
+     * @return array<int, array<string, mixed>>
+     * @throws RuntimeException
+     */
+    private function fetchHistoryDealsWithRetry(
+        Client $client,
+        string $accountId,
+        \DateTimeInterface $from,
+        \DateTimeInterface $to
+    ): array {
+        $startTime = rawurlencode($from->format(\DateTimeInterface::ATOM));
+        $endTime = rawurlencode($to->format(\DateTimeInterface::ATOM));
+        $path = "/users/current/accounts/{$accountId}/history-deals/time/{$startTime}/{$endTime}";
+
+        for ($attempt = 0; $attempt <= self::HISTORY_DEALS_MAX_RETRIES; $attempt++) {
+            try {
+                $response = $client->get($path);
+                $decoded = json_decode((string) $response->getBody(), true);
+
+                return is_array($decoded) ? $decoded : [];
+            } catch (ClientException $e) {
+                $status = $e->getResponse()->getStatusCode();
+                $body = (string) $e->getResponse()->getBody();
+                $decoded = json_decode($body, true);
+                $detail = is_array($decoded) ? ($decoded['message'] ?? $body) : $body;
+
+                if ($status === 429 && $attempt < self::HISTORY_DEALS_MAX_RETRIES) {
+                    $delayMs = $this->historyDealsBackoffDelayMs($e, $attempt);
+                    usleep($delayMs * 1000);
+                    continue;
+                }
+
+                throw new RuntimeException("MetaApi history deals failed [{$status}]: {$detail}");
+            } catch (RequestException $e) {
+                if ($attempt < self::HISTORY_DEALS_MAX_RETRIES) {
+                    $delayMs = self::HISTORY_DEALS_BACKOFF_BASE_MS * (2 ** $attempt);
+                    usleep($delayMs * 1000);
+                    continue;
+                }
+
+                throw new RuntimeException('MetaApi history deals request failed: '.$e->getMessage());
+            }
+        }
+
+        throw new RuntimeException('MetaApi history deals failed after retries due to too many requests.');
+    }
+
+    /**
+     * Determine retry delay for 429 responses.
+     *
+     * Uses Retry-After header when available, otherwise falls back to
+     * exponential backoff based on the attempt index.
+     *
+     * @param ClientException $e Rate-limited client exception.
+     * @param int $attempt Current zero-based attempt index.
+     * @return int Delay in milliseconds.
+     */
+    private function historyDealsBackoffDelayMs(ClientException $e, int $attempt): int
+    {
+        $retryAfter = trim($e->getResponse()->getHeaderLine('Retry-After'));
+
+        if (is_numeric($retryAfter)) {
+            return (int) $retryAfter * 1000;
+        }
+
+        return self::HISTORY_DEALS_BACKOFF_BASE_MS * (2 ** $attempt);
+    }
+
+    /**
+     * Ensure required MetaApi credentials are configured.
+     *
+     * @param string $metaApiToken MetaApi auth token.
+     * @param string $metaApiAccountId MetaApi account id.
+     * @return void
+     * @throws RuntimeException
+     */
     private function assertMetaApiSettings(string $metaApiToken, string $metaApiAccountId): void
     {
         $required = [
