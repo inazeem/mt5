@@ -84,7 +84,7 @@
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Volume Multiplier</label>
                             <input name="mt5_volume_multiplier" type="number" value="{{ old('mt5_volume_multiplier', $settings->mt5_volume_multiplier) }}" class="mt-1 block w-full rounded border-gray-300" />
-                            <p class="text-xs text-gray-500 mt-1">Used to convert lot size into MT5 volume units.</p>
+                            <p class="text-xs text-gray-500 mt-1">Used to convert lot size into MT5 volume units. Safer default is 1; higher values increase risk quickly.</p>
                         </div>
                     </div>
                 </section>
@@ -215,6 +215,11 @@
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Trail Pips</label>
                             <input name="bot_trail_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_trail_pips', $settings->bot_trail_pips ?? 8) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Trail TP Multiplier</label>
+                            <input name="bot_trail_tp_multiplier" type="number" step="0.1" min="1" max="10" value="{{ old('bot_trail_tp_multiplier', $settings->bot_trail_tp_multiplier ?? 2) }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="text-xs text-gray-500 mt-1">When trailing first applies, TP is multiplied by this value (for example 2 = double TP).</p>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Min Move Pips</label>

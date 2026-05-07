@@ -42,6 +42,7 @@ class SettingsController extends Controller
             'bot_sl_pips'              => ['nullable', 'numeric', 'min:0.1'],
             'bot_trail_start_pips'     => ['nullable', 'numeric', 'min:0.1'],
             'bot_trail_pips'           => ['nullable', 'numeric', 'min:0.1'],
+            'bot_trail_tp_multiplier'  => ['nullable', 'numeric', 'min:1', 'max:10'],
             'bot_min_move_pips'        => ['nullable', 'numeric', 'min:0.1'],
             'bot_max_spread_pips'      => ['nullable', 'numeric', 'min:0.1'],
             'bot_cooldown_minutes'     => ['nullable', 'integer', 'min:0'],
