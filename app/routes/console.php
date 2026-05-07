@@ -30,6 +30,7 @@ Artisan::command('mt5:auto-forex
     {--max-daily-loss-percent=2 : Stop opening new trades when daily drawdown exceeds this percent}
     {--ai-confirm=1 : 1 requires AI approval before entry, 0 bypasses AI confirmation}
     {--ai-min-confidence=70 : Minimum AI confidence percentage (0-100) required to approve a trade}
+    {--min-bot-score=70 : Minimum bot score (0-100) required to log/execute a signal}
     {--max-symbols=200 : Max symbols to scan per cycle}
     {--max-open-positions=10 : Maximum concurrent open positions (demo-safe ceiling)}
     {--max-per-cycle=5 : Maximum new trades to open in a single cycle}
@@ -73,6 +74,7 @@ Artisan::command('mt5:auto-forex
         $maxDailyLossPercent = (float) $optionOrSetting('max-daily-loss-percent', $db->bot_max_daily_loss_percent ?? null, 2);
         $useAiConfirm      = (string) $this->option('ai-confirm') !== '0' && ($db->bot_ai_confirm ?? true);
         $aiMinConfidence   = (int) $optionOrSetting('ai-min-confidence', $db->bot_ai_min_confidence ?? null, 70);
+        $minBotScore       = max(0, min(100, (int) $this->option('min-bot-score')));
         $maxSymbols        = max(1, (int) $optionOrSetting('max-symbols', $db->bot_max_symbols ?? null, 200));
         $scalperMode          = (string) $this->option('scalper') !== '0';
         $maxOpenPositions     = max(1, (int) $optionOrSetting('max-open-positions', $db->bot_max_open_positions ?? null, 10));
@@ -251,27 +253,85 @@ Artisan::command('mt5:auto-forex
         $skippedSpread = 0;
         $skippedCooldown = 0;
         $skippedOpen = 0;
+        $skippedLowScore = 0;
+
+        $calculateBotScore = static function (float $signalDeltaPips, float $spreadPips): int {
+            $signalStrengthScore = min(100.0, (abs($signalDeltaPips) / 10.0) * 100.0);
+            $spreadScore = max(0.0, min(100.0, (1 - ($spreadPips / 3.0)) * 100.0));
+
+            return (int) round(($signalStrengthScore * 0.7) + ($spreadScore * 0.3));
+        };
+
+        $extractConfidence = static function (?string $summary): ?int {
+            if (!is_string($summary) || trim($summary) === '') {
+                return null;
+            }
+
+            if (preg_match('/confidence[:\s]+(\d{1,3})\s*%/i', $summary, $m)) {
+                return max(0, min(100, (int) $m[1]));
+            }
+            if (preg_match('/(\d{1,3})\s*%\s+confidence/i', $summary, $m)) {
+                return max(0, min(100, (int) $m[1]));
+            }
+            if (preg_match('/(\d{1,3})\s*%/i', $summary, $m)) {
+                return max(0, min(100, (int) $m[1]));
+            }
+
+            return null;
+        };
+
+        $logSignal = static function (array $data) use ($calculateBotScore, $minBotScore, $testMode): void {
+            $payload = is_array($data['meta_payload'] ?? null) ? $data['meta_payload'] : [];
+
+            $resolvedBotScore = null;
+            if (is_numeric($payload['bot_score'] ?? null)) {
+                $resolvedBotScore = (int) $payload['bot_score'];
+            } elseif (is_numeric($data['signal_delta_pips'] ?? null) && is_numeric($data['spread_pips'] ?? null)) {
+                $resolvedBotScore = $calculateBotScore((float) $data['signal_delta_pips'], (float) $data['spread_pips']);
+            } else {
+                $resolvedBotScore = 0;
+            }
+
+            if (!$testMode && $resolvedBotScore < $minBotScore) {
+                return;
+            }
+
+            $payload['bot_score'] = $resolvedBotScore;
+            $payload['min_bot_score'] = $minBotScore;
+
+            BotTradeLog::query()->create(array_merge([
+                'event_type' => 'signal',
+                'ai_decision' => 'not_evaluated',
+                'meta_payload' => $payload,
+            ], $data));
+        };
 
         foreach ($symbols as $symbol) {
             $symbol = strtoupper((string) $symbol);
             $scanned++;
-
-            if (isset($openBySymbol[$symbol])) {
-                $skippedOpen++;
-                continue;
-            }
 
             try {
                 $quote = $mt5Service->getTickerPrice($symbol);
             } catch (\Throwable $e) {
                 Log::warning('Auto bot quote failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
                 $this->line("  {$symbol}: quote error — {$e->getMessage()}");
+                $logSignal([
+                    'status' => 'quote_error',
+                    'symbol' => $symbol,
+                    'message' => 'Signal skipped due to quote retrieval failure.',
+                    'error_message' => $e->getMessage(),
+                ]);
                 continue;
             }
 
             $bid = isset($quote['bid']) ? (float) $quote['bid'] : 0.0;
             $ask = isset($quote['ask']) ? (float) $quote['ask'] : 0.0;
             if ($bid <= 0 || $ask <= 0) {
+                $logSignal([
+                    'status' => 'invalid_quote',
+                    'symbol' => $symbol,
+                    'message' => 'Signal skipped due to invalid bid/ask quote values.',
+                ]);
                 continue;
             }
 
@@ -287,12 +347,27 @@ Artisan::command('mt5:auto-forex
             if (!$testMode) {
                 if (!is_numeric($lastBid)) {
                     $skippedNoMove++;
+                    $logSignal([
+                        'status' => 'no_move_rejected',
+                        'symbol' => $symbol,
+                        'message' => 'Signal skipped because no prior tick was available yet.',
+                    ]);
                     continue;
                 }
 
                 $delta = $bid - (float) $lastBid;
                 if (abs($delta) < $minMove) {
                     $skippedNoMove++;
+                    $signalDeltaPips = $pipSize > 0 ? ($delta / $pipSize) : null;
+                    $spreadPips = $pipSize > 0 ? (($ask - $bid) / $pipSize) : null;
+                    $logSignal([
+                        'status' => 'no_move_rejected',
+                        'symbol' => $symbol,
+                        'side' => $delta >= 0 ? 'buy' : 'sell',
+                        'signal_delta_pips' => $signalDeltaPips,
+                        'spread_pips' => $spreadPips,
+                        'message' => 'Signal rejected because price move is below minimum threshold.',
+                    ]);
                     continue;
                 }
             }
@@ -301,12 +376,34 @@ Artisan::command('mt5:auto-forex
             $side = $delta >= 0 ? 'buy' : 'sell';
             $signalDeltaPips = $pipSize > 0 ? ($delta / $pipSize) : 0;
             $spreadPips = ($ask - $bid) / $pipSize;
+            $botScore = $calculateBotScore($signalDeltaPips, $spreadPips);
+
+            if (isset($openBySymbol[$symbol])) {
+                $skippedOpen++;
+                if ($testMode || $botScore >= $minBotScore) {
+                    $logSignal([
+                        'status' => 'open_position_rejected',
+                        'symbol' => $symbol,
+                        'side' => $side,
+                        'spread_pips' => $spreadPips,
+                        'signal_delta_pips' => $signalDeltaPips,
+                        'meta_payload' => ['bot_score' => $botScore, 'min_bot_score' => $minBotScore],
+                        'message' => 'Signal skipped because symbol already has an open position.',
+                    ]);
+                }
+                continue;
+            }
+
+            if (!$testMode && $botScore < $minBotScore) {
+                $this->line("  {$symbol}: SCORE {$botScore}% < min {$minBotScore}% — skipped");
+                $skippedLowScore++;
+                continue;
+            }
 
             if (!$testMode && $spreadPips > $maxSpreadPips) {
                 $this->line("  {$symbol}: SPREAD {$spreadPips}pip > max {$maxSpreadPips}pip — skipped");
                 $skippedSpread++;
-                BotTradeLog::query()->create([
-                    'event_type' => 'signal',
+                $logSignal([
                     'status' => 'spread_rejected',
                     'symbol' => $symbol,
                     'side' => $side,
@@ -328,8 +425,7 @@ Artisan::command('mt5:auto-forex
                 $remaining = now()->diffInSeconds($lastSuccessfulTrade->created_at->addMinutes($cooldownMinutes));
                 $this->line("  {$symbol}: COOLDOWN — {$remaining}s remaining");
                 $skippedCooldown++;
-                BotTradeLog::query()->create([
-                    'event_type' => 'signal',
+                $logSignal([
                     'status' => 'cooldown_rejected',
                     'symbol' => $symbol,
                     'side' => $side,
@@ -354,6 +450,7 @@ Artisan::command('mt5:auto-forex
 
             $aiProvider = null;
             $aiDecision = 'approve';
+            $aiConfidence = null;
             $aiSummary = null;
 
             if (!$testMode && $useAiConfirm) {
@@ -406,37 +503,28 @@ Artisan::command('mt5:auto-forex
                     $aiResult = $aiService->ask($prompt);
                     $aiProvider = $aiResult['provider'] ?? null;
                     $aiSummary = trim((string) ($aiResult['answer'] ?? ''));
+                    $aiConfidence = $extractConfidence($aiSummary);
 
                     $firstToken = strtoupper((string) strtok($aiSummary, " \n\t"));
                     if (!str_contains($firstToken, 'APPROVE')) {
                         $aiDecision = 'reject';
                     } elseif ($aiMinConfidence > 0) {
-                        // Parse confidence percentage from response, e.g. "Confidence: 85%" or "85% confidence"
-                        $parsedConfidence = null;
-                        if (preg_match('/confidence[:\s]+(\d{1,3})\s*%/i', $aiSummary, $m)) {
-                            $parsedConfidence = (int) $m[1];
-                        } elseif (preg_match('/(\d{1,3})\s*%\s+confidence/i', $aiSummary, $m)) {
-                            $parsedConfidence = (int) $m[1];
-                        } elseif (preg_match('/(\d{1,3})\s*%/i', $aiSummary, $m)) {
-                            $parsedConfidence = (int) $m[1];
-                        }
-
-                        if ($parsedConfidence !== null && $parsedConfidence < $aiMinConfidence) {
+                        if ($aiConfidence !== null && $aiConfidence < $aiMinConfidence) {
                             $aiDecision = 'low_confidence';
-                            $aiSummary .= " [Confidence {$parsedConfidence}% below threshold {$aiMinConfidence}%]";
+                            $aiSummary .= " [Confidence {$aiConfidence}% below threshold {$aiMinConfidence}%]";
                         }
                     }
                     $this->line("  {$symbol}: AI => {$aiDecision} — {$aiSummary}");
                 } catch (\Throwable $e) {
                     $aiDecision = 'reject';
+                    $aiConfidence = null;
                     $aiSummary = 'AI confirmation unavailable: '.$e->getMessage();
                     $this->warn("  {$symbol}: AI error — {$e->getMessage()}");
                 }
             }
 
             if ($aiDecision !== 'approve') {
-                BotTradeLog::query()->create([
-                    'event_type' => 'signal',
+                $logSignal([
                     'status' => 'ai_rejected',
                     'symbol' => $symbol,
                     'side' => $side,
@@ -448,14 +536,15 @@ Artisan::command('mt5:auto-forex
                     'signal_delta_pips' => $signalDeltaPips,
                     'ai_provider' => $aiProvider,
                     'ai_decision' => $aiDecision,
+                    'ai_confidence' => $aiConfidence,
                     'ai_summary' => $aiSummary,
+                    'meta_payload' => ['bot_score' => $botScore, 'min_bot_score' => $minBotScore],
                     'message' => 'Signal rejected by AI confirmation.',
                 ]);
                 continue;
             }
 
-            BotTradeLog::query()->create([
-                'event_type' => 'signal',
+            $logSignal([
                 'status' => 'confirmed',
                 'symbol' => $symbol,
                 'side' => $side,
@@ -467,7 +556,9 @@ Artisan::command('mt5:auto-forex
                 'signal_delta_pips' => $signalDeltaPips,
                 'ai_provider' => $aiProvider,
                 'ai_decision' => $aiDecision,
+                'ai_confidence' => $aiConfidence,
                 'ai_summary' => $aiSummary,
+                'meta_payload' => ['bot_score' => $botScore, 'min_bot_score' => $minBotScore],
                 'message' => 'Signal passed all filters and AI confirmation.',
             ]);
 
@@ -494,7 +585,9 @@ Artisan::command('mt5:auto-forex
                     'signal_delta_pips' => $signalDeltaPips,
                     'ai_provider' => $aiProvider,
                     'ai_decision' => $aiDecision,
+                    'ai_confidence' => $aiConfidence,
                     'ai_summary' => $aiSummary,
+                    'meta_payload' => ['bot_score' => $botScore, 'min_bot_score' => $minBotScore],
                     'message' => 'Trade opened successfully.',
                     'meta_response' => $result,
                 ]);
@@ -518,7 +611,9 @@ Artisan::command('mt5:auto-forex
                     'signal_delta_pips' => $signalDeltaPips,
                     'ai_provider' => $aiProvider,
                     'ai_decision' => $aiDecision,
+                    'ai_confidence' => $aiConfidence,
                     'ai_summary' => $aiSummary,
+                    'meta_payload' => ['bot_score' => $botScore, 'min_bot_score' => $minBotScore],
                     'message' => 'Trade open failed.',
                     'error_message' => $e->getMessage(),
                 ]);
@@ -530,6 +625,7 @@ Artisan::command('mt5:auto-forex
             .' opened='.$opened
             .' noMove='.$skippedNoMove
             .' spread='.$skippedSpread
+            .' lowScore='.$skippedLowScore
             .' cooldown='.$skippedCooldown
             .' hasOpen='.$skippedOpen
         );

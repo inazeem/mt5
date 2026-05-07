@@ -24,6 +24,9 @@
                     <x-nav-link :href="route('bot.analytics')" :active="request()->routeIs('bot.analytics')">
                         {{ __('Bot Analytics') }}
                     </x-nav-link>
+                    <x-nav-link :href="route('bot.alerts')" :active="request()->routeIs('bot.alerts')">
+                        {{ __('Bot Alerts') }}
+                    </x-nav-link>
                     <x-nav-link :href="route('ai.index')" :active="request()->routeIs('ai.*')">
                         {{ __('AI') }}
                     </x-nav-link>
@@ -81,7 +84,7 @@
 
     <!-- Responsive Navigation Menu -->
     <div :class="{'block': open, 'hidden': ! open}" class="hidden sm:hidden">
-        <div class="pt-2 pb-3 space-y-1">
+        <div class="pt-1.5 pb-2 space-y-0.5">
             <x-responsive-nav-link :href="route('dashboard')" :active="request()->routeIs('dashboard')">
                 {{ __('Dashboard') }}
             </x-responsive-nav-link>
@@ -93,6 +96,9 @@
             </x-responsive-nav-link>
             <x-responsive-nav-link :href="route('bot.analytics')" :active="request()->routeIs('bot.analytics')">
                 {{ __('Bot Analytics') }}
+            </x-responsive-nav-link>
+            <x-responsive-nav-link :href="route('bot.alerts')" :active="request()->routeIs('bot.alerts')">
+                {{ __('Bot Alerts') }}
             </x-responsive-nav-link>
             <x-responsive-nav-link :href="route('ai.index')" :active="request()->routeIs('ai.*')">
                 {{ __('AI') }}
