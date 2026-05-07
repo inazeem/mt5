@@ -22,7 +22,7 @@ return new class extends Migration
             $table->text('mt5_manager_password')->nullable();
             $table->string('mt5_account_login')->nullable();
             $table->unsignedTinyInteger('mt5_action_deal')->default(1);
-            $table->unsignedInteger('mt5_volume_multiplier')->default(10000);
+            $table->unsignedInteger('mt5_volume_multiplier')->default(1);
 
             $table->string('ai_provider')->default('claude');
             $table->text('claude_api_key')->nullable();

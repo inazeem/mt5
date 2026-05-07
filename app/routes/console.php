@@ -21,6 +21,7 @@ Artisan::command('mt5:auto-forex
     {--sl-pips=15 : Stop loss distance in pips}
     {--trail-start-pips=10 : Profit pips required before trailing activates}
     {--trail-pips=8 : Trailing stop distance in pips}
+    {--trail-tp-multiplier= : Multiplier applied to TP when trailing first activates (default from settings, fallback 2)}
     {--min-move-pips=3 : Minimum move from previous tick to trigger entry}
     {--max-spread-pips=2.5 : Maximum spread allowed for entries}
     {--cooldown-minutes=30 : Cooldown per symbol after successful entry}
@@ -31,6 +32,7 @@ Artisan::command('mt5:auto-forex
     {--ai-confirm=1 : 1 requires AI approval before entry, 0 bypasses AI confirmation}
     {--ai-min-confidence=70 : Minimum AI confidence percentage (0-100) required to approve a trade}
     {--min-bot-score=70 : Minimum bot score (0-100) required to log/execute a signal}
+    {--min-effective-volume= : Minimum effective volume required to place a trade (default: 0.01 x volume multiplier)}
     {--max-symbols=200 : Max symbols to scan per cycle}
     {--max-open-positions=10 : Maximum concurrent open positions (demo-safe ceiling)}
     {--max-per-cycle=5 : Maximum new trades to open in a single cycle}
@@ -65,6 +67,7 @@ Artisan::command('mt5:auto-forex
         $slPips            = (float) $optionOrSetting('sl-pips', $db->bot_sl_pips ?? null, 15);
         $trailStartPips    = (float) $optionOrSetting('trail-start-pips', $db->bot_trail_start_pips ?? null, 10);
         $trailPips         = (float) $optionOrSetting('trail-pips', $db->bot_trail_pips ?? null, 8);
+        $trailTpMultiplier = (float) $optionOrSetting('trail-tp-multiplier', $db->bot_trail_tp_multiplier ?? null, 2);
         $minMovePips       = (float) $optionOrSetting('min-move-pips', $db->bot_min_move_pips ?? null, 3);
         $maxSpreadPips     = (float) $optionOrSetting('max-spread-pips', $db->bot_max_spread_pips ?? null, 2.5);
         $cooldownMinutes   = max(0, (int) $optionOrSetting('cooldown-minutes', $db->bot_cooldown_minutes ?? null, 30));
@@ -75,6 +78,9 @@ Artisan::command('mt5:auto-forex
         $useAiConfirm      = (string) $this->option('ai-confirm') !== '0' && ($db->bot_ai_confirm ?? true);
         $aiMinConfidence   = (int) $optionOrSetting('ai-min-confidence', $db->bot_ai_min_confidence ?? null, 70);
         $minBotScore       = max(0, min(100, (int) $this->option('min-bot-score')));
+        $volumeMultiplier  = max(1, (int) ($db->mt5_volume_multiplier ?? 1));
+        $defaultMinEffectiveVolume = 0.01 * $volumeMultiplier;
+        $minEffectiveVolume = (float) $optionOrSetting('min-effective-volume', null, $defaultMinEffectiveVolume);
         $maxSymbols        = max(1, (int) $optionOrSetting('max-symbols', $db->bot_max_symbols ?? null, 200));
         $scalperMode          = (string) $this->option('scalper') !== '0';
         $maxOpenPositions     = max(1, (int) $optionOrSetting('max-open-positions', $db->bot_max_open_positions ?? null, 10));
@@ -98,9 +104,11 @@ Artisan::command('mt5:auto-forex
             $slPips <= 0 ||
             $trailStartPips <= 0 ||
             $trailPips <= 0 ||
+            $trailTpMultiplier < 1 ||
             $minMovePips <= 0 ||
             $maxSpreadPips <= 0 ||
-            $maxDailyLossPercent <= 0
+            $maxDailyLossPercent <= 0 ||
+            $minEffectiveVolume <= 0
         ) {
             $this->error('All numeric options must be greater than zero.');
             return 1;
@@ -118,6 +126,8 @@ Artisan::command('mt5:auto-forex
         if ($scalperMode) {
             $this->line('Scalper mode ON  TP='.$tpPips.'pip  SL='.$slPips.'pip  maxSpread='.$maxSpreadPips.'pip  cooldown='.$cooldownMinutes.'min');
         }
+
+        $this->line('Volume settings  multiplier='.$volumeMultiplier.'  minEffectiveVolume='.$minEffectiveVolume);
 
         // Force UTC timezone to ensure correct time comparison
         date_default_timezone_set('UTC');
@@ -188,7 +198,7 @@ Artisan::command('mt5:auto-forex
         }
 
         $this->info('Running trailing stop updates...');
-        $trailResult = $mt5Service->applyTrailingStops($trailStartPips, $trailPips);
+        $trailResult = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier);
         $this->line('Trailing updated: '.$trailResult['updated'].', skipped: '.$trailResult['skipped']);
         if ($trailResult['updated'] > 0) {
             BotTradeLog::query()->create([
@@ -254,12 +264,14 @@ Artisan::command('mt5:auto-forex
         $skippedCooldown = 0;
         $skippedOpen = 0;
         $skippedLowScore = 0;
+        $skippedLowVolume = 0;
 
-        $calculateBotScore = static function (float $signalDeltaPips, float $spreadPips): int {
+        $calculateBotScore = static function (float $signalDeltaPips, float $spreadPips, float $effectiveVolume, float $minEffectiveVolume): int {
             $signalStrengthScore = min(100.0, (abs($signalDeltaPips) / 10.0) * 100.0);
             $spreadScore = max(0.0, min(100.0, (1 - ($spreadPips / 3.0)) * 100.0));
+            $volumeScore = max(0.0, min(100.0, ($effectiveVolume / $minEffectiveVolume) * 100.0));
 
-            return (int) round(($signalStrengthScore * 0.7) + ($spreadScore * 0.3));
+            return (int) round(($signalStrengthScore * 0.6) + ($spreadScore * 0.25) + ($volumeScore * 0.15));
         };
 
         $extractConfidence = static function (?string $summary): ?int {
@@ -280,14 +292,16 @@ Artisan::command('mt5:auto-forex
             return null;
         };
 
-        $logSignal = static function (array $data) use ($calculateBotScore, $minBotScore, $testMode): void {
+        $logSignal = static function (array $data) use ($calculateBotScore, $minBotScore, $testMode, $volumeMultiplier, $minEffectiveVolume, $lotSize): void {
             $payload = is_array($data['meta_payload'] ?? null) ? $data['meta_payload'] : [];
 
             $resolvedBotScore = null;
             if (is_numeric($payload['bot_score'] ?? null)) {
                 $resolvedBotScore = (int) $payload['bot_score'];
             } elseif (is_numeric($data['signal_delta_pips'] ?? null) && is_numeric($data['spread_pips'] ?? null)) {
-                $resolvedBotScore = $calculateBotScore((float) $data['signal_delta_pips'], (float) $data['spread_pips']);
+                $baseLotForScore = is_numeric($data['lot_size'] ?? null) ? (float) $data['lot_size'] : $lotSize;
+                $effectiveVolumeForScore = $baseLotForScore * $volumeMultiplier;
+                $resolvedBotScore = $calculateBotScore((float) $data['signal_delta_pips'], (float) $data['spread_pips'], $effectiveVolumeForScore, $minEffectiveVolume);
             } else {
                 $resolvedBotScore = 0;
             }
@@ -298,6 +312,16 @@ Artisan::command('mt5:auto-forex
 
             $payload['bot_score'] = $resolvedBotScore;
             $payload['min_bot_score'] = $minBotScore;
+            if (!isset($payload['volume_multiplier'])) {
+                $payload['volume_multiplier'] = $volumeMultiplier;
+            }
+            if (!isset($payload['min_effective_volume'])) {
+                $payload['min_effective_volume'] = $minEffectiveVolume;
+            }
+            if (!isset($payload['effective_volume'])) {
+                $baseLotForPayload = is_numeric($data['lot_size'] ?? null) ? (float) $data['lot_size'] : $lotSize;
+                $payload['effective_volume'] = $baseLotForPayload * $volumeMultiplier;
+            }
 
             BotTradeLog::query()->create(array_merge([
                 'event_type' => 'signal',
@@ -376,7 +400,30 @@ Artisan::command('mt5:auto-forex
             $side = $delta >= 0 ? 'buy' : 'sell';
             $signalDeltaPips = $pipSize > 0 ? ($delta / $pipSize) : 0;
             $spreadPips = ($ask - $bid) / $pipSize;
-            $botScore = $calculateBotScore($signalDeltaPips, $spreadPips);
+            $effectiveVolume = $lotSize * $volumeMultiplier;
+            $botScore = $calculateBotScore($signalDeltaPips, $spreadPips, $effectiveVolume, $minEffectiveVolume);
+
+            if (!$testMode && $effectiveVolume < $minEffectiveVolume) {
+                $this->line("  {$symbol}: VOLUME {$effectiveVolume} < min {$minEffectiveVolume} — skipped");
+                $skippedLowVolume++;
+                $logSignal([
+                    'status' => 'low_volume_rejected',
+                    'symbol' => $symbol,
+                    'side' => $side,
+                    'lot_size' => $lotSize,
+                    'spread_pips' => $spreadPips,
+                    'signal_delta_pips' => $signalDeltaPips,
+                    'meta_payload' => [
+                        'bot_score' => $botScore,
+                        'min_bot_score' => $minBotScore,
+                        'volume_multiplier' => $volumeMultiplier,
+                        'effective_volume' => $effectiveVolume,
+                        'min_effective_volume' => $minEffectiveVolume,
+                    ],
+                    'message' => 'Signal rejected because effective volume is below minimum threshold.',
+                ]);
+                continue;
+            }
 
             if (isset($openBySymbol[$symbol])) {
                 $skippedOpen++;
@@ -387,7 +434,13 @@ Artisan::command('mt5:auto-forex
                         'side' => $side,
                         'spread_pips' => $spreadPips,
                         'signal_delta_pips' => $signalDeltaPips,
-                        'meta_payload' => ['bot_score' => $botScore, 'min_bot_score' => $minBotScore],
+                        'meta_payload' => [
+                            'bot_score' => $botScore,
+                            'min_bot_score' => $minBotScore,
+                            'volume_multiplier' => $volumeMultiplier,
+                            'effective_volume' => $effectiveVolume,
+                            'min_effective_volume' => $minEffectiveVolume,
+                        ],
                         'message' => 'Signal skipped because symbol already has an open position.',
                     ]);
                 }
@@ -538,7 +591,13 @@ Artisan::command('mt5:auto-forex
                     'ai_decision' => $aiDecision,
                     'ai_confidence' => $aiConfidence,
                     'ai_summary' => $aiSummary,
-                    'meta_payload' => ['bot_score' => $botScore, 'min_bot_score' => $minBotScore],
+                    'meta_payload' => [
+                        'bot_score' => $botScore,
+                        'min_bot_score' => $minBotScore,
+                        'volume_multiplier' => $volumeMultiplier,
+                        'effective_volume' => $effectiveVolume,
+                        'min_effective_volume' => $minEffectiveVolume,
+                    ],
                     'message' => 'Signal rejected by AI confirmation.',
                 ]);
                 continue;
@@ -558,7 +617,13 @@ Artisan::command('mt5:auto-forex
                 'ai_decision' => $aiDecision,
                 'ai_confidence' => $aiConfidence,
                 'ai_summary' => $aiSummary,
-                'meta_payload' => ['bot_score' => $botScore, 'min_bot_score' => $minBotScore],
+                'meta_payload' => [
+                    'bot_score' => $botScore,
+                    'min_bot_score' => $minBotScore,
+                    'volume_multiplier' => $volumeMultiplier,
+                    'effective_volume' => $effectiveVolume,
+                    'min_effective_volume' => $minEffectiveVolume,
+                ],
                 'message' => 'Signal passed all filters and AI confirmation.',
             ]);
 
@@ -587,10 +652,26 @@ Artisan::command('mt5:auto-forex
                     'ai_decision' => $aiDecision,
                     'ai_confidence' => $aiConfidence,
                     'ai_summary' => $aiSummary,
-                    'meta_payload' => ['bot_score' => $botScore, 'min_bot_score' => $minBotScore],
+                    'meta_payload' => [
+                        'bot_score' => $botScore,
+                        'min_bot_score' => $minBotScore,
+                        'volume_multiplier' => $volumeMultiplier,
+                        'effective_volume' => $effectiveVolume,
+                        'min_effective_volume' => $minEffectiveVolume,
+                    ],
                     'message' => 'Trade opened successfully.',
                     'meta_response' => $result,
                 ]);
+
+                // Run one immediate trailing pass so new trades do not wait for the next cycle.
+                try {
+                    $postOpenTrail = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier);
+                    if (($postOpenTrail['updated'] ?? 0) > 0) {
+                        $this->line('Post-open trailing updated: '.$postOpenTrail['updated']);
+                    }
+                } catch (\Throwable $trailError) {
+                    $this->warn('Post-open trailing pass failed: '.$trailError->getMessage());
+                }
 
                 if ($opened >= $maxPerCycle) {
                     $this->line('Per-cycle trade limit reached ('.$maxPerCycle.'). Waiting for next cycle.');
@@ -613,7 +694,13 @@ Artisan::command('mt5:auto-forex
                     'ai_decision' => $aiDecision,
                     'ai_confidence' => $aiConfidence,
                     'ai_summary' => $aiSummary,
-                    'meta_payload' => ['bot_score' => $botScore, 'min_bot_score' => $minBotScore],
+                    'meta_payload' => [
+                        'bot_score' => $botScore,
+                        'min_bot_score' => $minBotScore,
+                        'volume_multiplier' => $volumeMultiplier,
+                        'effective_volume' => $effectiveVolume,
+                        'min_effective_volume' => $minEffectiveVolume,
+                    ],
                     'message' => 'Trade open failed.',
                     'error_message' => $e->getMessage(),
                 ]);
@@ -626,6 +713,7 @@ Artisan::command('mt5:auto-forex
             .' noMove='.$skippedNoMove
             .' spread='.$skippedSpread
             .' lowScore='.$skippedLowScore
+            .' lowVolume='.$skippedLowVolume
             .' cooldown='.$skippedCooldown
             .' hasOpen='.$skippedOpen
         );

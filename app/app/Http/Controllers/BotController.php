@@ -280,11 +280,16 @@ class BotController extends Controller
         $recentLogs->getCollection()->transform(static function (BotTradeLog $log) use (&$tradeBuckets, &$closingDealsBySymbol) {
             $delta = is_numeric($log->signal_delta_pips) ? abs((float) $log->signal_delta_pips) : null;
             $spread = is_numeric($log->spread_pips) ? (float) $log->spread_pips : null;
+            $metaPayload = is_array($log->meta_payload) ? $log->meta_payload : [];
 
             // Bot score is a heuristic quality score from signal strength and spread quality.
-            $signalStrengthScore = $delta !== null ? min(100.0, ($delta / 10.0) * 100.0) : 0.0;
-            $spreadScore = $spread !== null ? max(0.0, min(100.0, (1 - ($spread / 3.0)) * 100.0)) : 0.0;
-            $botScore = (int) round(($signalStrengthScore * 0.7) + ($spreadScore * 0.3));
+            if (is_numeric($metaPayload['bot_score'] ?? null)) {
+                $botScore = (int) $metaPayload['bot_score'];
+            } else {
+                $signalStrengthScore = $delta !== null ? min(100.0, ($delta / 10.0) * 100.0) : 0.0;
+                $spreadScore = $spread !== null ? max(0.0, min(100.0, (1 - ($spread / 3.0)) * 100.0)) : 0.0;
+                $botScore = (int) round(($signalStrengthScore * 0.7) + ($spreadScore * 0.3));
+            }
 
             $log->linked_trade = '-';
             $log->trade_outcome = '-';

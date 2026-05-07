@@ -6,6 +6,7 @@ use App\Models\AppSetting;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\RequestException;
+use Illuminate\Support\Facades\Cache;
 use RuntimeException;
 
 class Mt5Service
@@ -24,11 +25,12 @@ class Mt5Service
         $this->assertMetaApiSettings($metaApiToken, $metaApiAccountId);
 
         $actionType = strtolower($side) === 'buy' ? 'ORDER_TYPE_BUY' : 'ORDER_TYPE_SELL';
+        $scaledLotSize = $this->applyConfiguredVolumeMultiplier($settings, $lotSize);
 
         $accountId = $metaApiAccountId;
         $symbolCandidates = $this->buildTradeSymbolCandidates($client, $accountId, $symbol);
         $resolvedSymbol = $symbolCandidates[0] ?? strtoupper(str_replace('/', '', trim($symbol)));
-        $normalizedVolume = $this->normalizeVolume($resolvedSymbol, $lotSize);
+        $normalizedVolume = $this->normalizeVolume($resolvedSymbol, $scaledLotSize);
         $legs = $this->normalizeExitLegs($exitLegs);
 
         if (empty($legs)) {
@@ -39,7 +41,7 @@ class Mt5Service
                 $payload = [
                     'actionType' => $actionType,
                     'symbol' => $candidateSymbol,
-                    'volume' => $this->normalizeVolume($candidateSymbol, $lotSize),
+                    'volume' => $this->normalizeVolume($candidateSymbol, $scaledLotSize),
                 ];
 
                 try {
@@ -61,7 +63,7 @@ class Mt5Service
             $payload = [
                 'actionType' => $actionType,
                 'symbol' => $resolvedSymbol,
-                'volume' => $this->normalizeVolume($resolvedSymbol, $lotSize),
+                'volume' => $this->normalizeVolume($resolvedSymbol, $scaledLotSize),
             ];
 
             return [
@@ -81,7 +83,7 @@ class Mt5Service
 
         foreach ($symbolCandidates as $candidateSymbol) {
             try {
-                $candidateTotalVolume = $this->normalizeVolume($candidateSymbol, $lotSize);
+                $candidateTotalVolume = $this->normalizeVolume($candidateSymbol, $scaledLotSize);
                 $step = $this->volumeStep($candidateSymbol);
                 $remainingVolume = $candidateTotalVolume;
                 $candidateOrderResults = [];
@@ -403,10 +405,10 @@ class Mt5Service
         return array_values(array_unique($forexSymbols));
     }
 
-    public function applyTrailingStops(float $startPips, float $trailPips): array
+    public function applyTrailingStops(float $startPips, float $trailPips, float $tpMultiplier = 2.0): array
     {
-        if ($startPips <= 0 || $trailPips <= 0) {
-            throw new RuntimeException('Trailing stop pip values must be greater than zero.');
+        if ($startPips <= 0 || $trailPips <= 0 || $tpMultiplier < 1) {
+            throw new RuntimeException('Trailing parameters are invalid. startPips/trailPips must be > 0 and tpMultiplier must be >= 1.');
         }
 
         $snapshot = $this->getOpenTradeSnapshot();
@@ -470,8 +472,31 @@ class Mt5Service
                 }
             }
 
+            $newTp = $currentTp;
+            $tpAdjustedCacheKey = 'mt5_tp_adjusted_'.$positionId;
+
+            // Apply TP multiplier once when trailing first modifies this position.
+            if ($currentTp !== null && !Cache::has($tpAdjustedCacheKey) && $tpMultiplier > 1) {
+                if ($isBuy) {
+                    $tpDistance = $currentTp - $openPrice;
+                    if ($tpDistance > 0) {
+                        $newTp = round($openPrice + ($tpDistance * $tpMultiplier), 5);
+                    }
+                } else {
+                    $tpDistance = $openPrice - $currentTp;
+                    if ($tpDistance > 0) {
+                        $newTp = round($openPrice - ($tpDistance * $tpMultiplier), 5);
+                    }
+                }
+            }
+
             try {
-                $this->modifyPositionStops($positionId, $newSl, $currentTp);
+                $this->modifyPositionStops($positionId, $newSl, $newTp);
+
+                if ($newTp !== $currentTp) {
+                    Cache::put($tpAdjustedCacheKey, true, now()->addDays(30));
+                }
+
                 $updated++;
             } catch (RuntimeException $e) {
                 $errors[] = [
@@ -677,6 +702,13 @@ class Mt5Service
 
         // Default FX lot granularity.
         return max(0.01, round($requestedVolume, 2));
+    }
+
+    private function applyConfiguredVolumeMultiplier(AppSetting $settings, float $lotSize): float
+    {
+        $multiplier = max(1, (int) ($settings->mt5_volume_multiplier ?? 1));
+
+        return $lotSize * $multiplier;
     }
 
     private function pickBestSymbolForPair(string $pair, array $availableSymbols): ?string
