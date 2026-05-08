@@ -166,6 +166,28 @@ class BotController extends Controller
 
     public function alerts(Request $request, Mt5Service $mt5Service)
     {
+        $normalizeSymbolForMatch = static function (?string $rawSymbol): string {
+            $symbol = strtoupper(trim((string) $rawSymbol));
+            if ($symbol === '') {
+                return '';
+            }
+
+            $symbol = preg_replace('/[^A-Z0-9._-]/', '', $symbol) ?? '';
+
+            foreach (['.', '_', '-'] as $separator) {
+                if (str_contains($symbol, $separator)) {
+                    $symbol = explode($separator, $symbol)[0] ?? $symbol;
+                    break;
+                }
+            }
+
+            if (preg_match('/^[A-Z]{6}/', $symbol, $matches) === 1) {
+                return $matches[0];
+            }
+
+            return $symbol;
+        };
+
         $validated = $request->validate([
             'date_from'  => ['nullable', 'date'],
             'date_to'    => ['nullable', 'date'],
@@ -226,7 +248,7 @@ class BotController extends Controller
 
         $tradeBuckets = [];
         foreach ($tradeCandidates as $tradeLog) {
-            $key = strtoupper((string) ($tradeLog->symbol ?? '')).'|'.strtolower((string) ($tradeLog->side ?? ''));
+            $key = $normalizeSymbolForMatch((string) ($tradeLog->symbol ?? '')).'|'.strtolower((string) ($tradeLog->side ?? ''));
             if (!isset($tradeBuckets[$key])) {
                 $tradeBuckets[$key] = [];
             }
@@ -234,6 +256,7 @@ class BotController extends Controller
         }
 
         $closingDealsBySymbol = [];
+        $closingDealsByPosition = [];
         try {
             $deals = $mt5Service->getHistoryDeals(now()->subDays(30), now());
             foreach ($deals as $deal) {
@@ -246,7 +269,7 @@ class BotController extends Controller
                     continue;
                 }
 
-                $symbolKey = strtoupper((string) ($deal['symbol'] ?? ''));
+                $symbolKey = $normalizeSymbolForMatch((string) ($deal['symbol'] ?? ''));
                 if ($symbolKey === '') {
                     continue;
                 }
@@ -262,22 +285,34 @@ class BotController extends Controller
                     continue;
                 }
 
-                $closingDealsBySymbol[$symbolKey][] = [
+                $dealRecord = [
                     'time' => $dealTime,
                     'profit' => (float) ($deal['profit'] ?? 0),
                     'used' => false,
                 ];
+
+                $closingDealsBySymbol[$symbolKey][] = $dealRecord;
+
+                $positionId = trim((string) ($deal['positionId'] ?? $deal['position_id'] ?? ''));
+                if ($positionId !== '') {
+                    $closingDealsByPosition[$positionId][] = $dealRecord;
+                }
             }
 
             foreach ($closingDealsBySymbol as $symbolKey => $symbolDeals) {
                 usort($symbolDeals, static fn ($a, $b) => $a['time']->lessThan($b['time']) ? -1 : 1);
                 $closingDealsBySymbol[$symbolKey] = $symbolDeals;
             }
+            foreach ($closingDealsByPosition as $positionId => $positionDeals) {
+                usort($positionDeals, static fn ($a, $b) => $a['time']->lessThan($b['time']) ? -1 : 1);
+                $closingDealsByPosition[$positionId] = $positionDeals;
+            }
         } catch (\Throwable) {
             $closingDealsBySymbol = [];
+            $closingDealsByPosition = [];
         }
 
-        $recentLogs->getCollection()->transform(static function (BotTradeLog $log) use (&$tradeBuckets, &$closingDealsBySymbol) {
+        $recentLogs->getCollection()->transform(static function (BotTradeLog $log) use (&$tradeBuckets, &$closingDealsBySymbol, &$closingDealsByPosition, $normalizeSymbolForMatch) {
             $delta = is_numeric($log->signal_delta_pips) ? abs((float) $log->signal_delta_pips) : null;
             $spread = is_numeric($log->spread_pips) ? (float) $log->spread_pips : null;
             $metaPayload = is_array($log->meta_payload) ? $log->meta_payload : [];
@@ -294,7 +329,7 @@ class BotController extends Controller
             $log->linked_trade = '-';
             $log->trade_outcome = '-';
 
-            $bucketKey = strtoupper((string) ($log->symbol ?? '')).'|'.strtolower((string) ($log->side ?? ''));
+            $bucketKey = $normalizeSymbolForMatch((string) ($log->symbol ?? '')).'|'.strtolower((string) ($log->side ?? ''));
             $candidateTrades = $tradeBuckets[$bucketKey] ?? [];
             $matchedTrade = null;
 
@@ -330,8 +365,37 @@ class BotController extends Controller
                 } elseif ($matchedTrade->status === 'success') {
                     $log->trade_outcome = 'PENDING';
 
-                    $symbolKey = strtoupper((string) ($log->symbol ?? ''));
-                    if (isset($closingDealsBySymbol[$symbolKey])) {
+                    $resolveOutcome = static function (float $profit): string {
+                        if ($profit > 0) {
+                            return 'WIN';
+                        }
+                        if ($profit < 0) {
+                            return 'LOSS';
+                        }
+
+                        return 'BREAKEVEN';
+                    };
+
+                    if (!empty($positionId) && isset($closingDealsByPosition[$positionId])) {
+                        foreach ($closingDealsByPosition[$positionId] as $dealIdx => $deal) {
+                            if (($deal['used'] ?? false) === true) {
+                                continue;
+                            }
+                            if ($deal['time']->lt($matchedTrade->created_at)) {
+                                continue;
+                            }
+                            if ($deal['time']->gt($matchedTrade->created_at->copy()->addDays(7))) {
+                                break;
+                            }
+
+                            $closingDealsByPosition[$positionId][$dealIdx]['used'] = true;
+                            $log->trade_outcome = $resolveOutcome((float) ($deal['profit'] ?? 0));
+                            break;
+                        }
+                    }
+
+                    $symbolKey = $normalizeSymbolForMatch((string) ($log->symbol ?? ''));
+                    if ($log->trade_outcome === 'PENDING' && isset($closingDealsBySymbol[$symbolKey])) {
                         foreach ($closingDealsBySymbol[$symbolKey] as $dealIdx => $deal) {
                             if (($deal['used'] ?? false) === true) {
                                 continue;
@@ -344,14 +408,7 @@ class BotController extends Controller
                             }
 
                             $closingDealsBySymbol[$symbolKey][$dealIdx]['used'] = true;
-                            $profit = (float) ($deal['profit'] ?? 0);
-                            if ($profit > 0) {
-                                $log->trade_outcome = 'WIN';
-                            } elseif ($profit < 0) {
-                                $log->trade_outcome = 'LOSS';
-                            } else {
-                                $log->trade_outcome = 'BREAKEVEN';
-                            }
+                            $log->trade_outcome = $resolveOutcome((float) ($deal['profit'] ?? 0));
                             break;
                         }
                     }
