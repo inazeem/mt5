@@ -328,6 +328,7 @@ class BotController extends Controller
 
             $log->linked_trade = '-';
             $log->trade_outcome = '-';
+            $log->trade_pnl = null;
 
             $bucketKey = $normalizeSymbolForMatch((string) ($log->symbol ?? '')).'|'.strtolower((string) ($log->side ?? ''));
             $candidateTrades = $tradeBuckets[$bucketKey] ?? [];
@@ -389,7 +390,9 @@ class BotController extends Controller
                             }
 
                             $closingDealsByPosition[$positionId][$dealIdx]['used'] = true;
-                            $log->trade_outcome = $resolveOutcome((float) ($deal['profit'] ?? 0));
+                            $profit = (float) ($deal['profit'] ?? 0);
+                            $log->trade_outcome = $resolveOutcome($profit);
+                            $log->trade_pnl = $profit;
                             break;
                         }
                     }
@@ -408,7 +411,9 @@ class BotController extends Controller
                             }
 
                             $closingDealsBySymbol[$symbolKey][$dealIdx]['used'] = true;
-                            $log->trade_outcome = $resolveOutcome((float) ($deal['profit'] ?? 0));
+                            $profit = (float) ($deal['profit'] ?? 0);
+                            $log->trade_outcome = $resolveOutcome($profit);
+                            $log->trade_pnl = $profit;
                             break;
                         }
                     }
@@ -423,7 +428,30 @@ class BotController extends Controller
             return $log;
         });
 
-        return view('bot.alerts', compact('recentLogs', 'dateFrom', 'dateTo', 'eventType', 'symbol', 'perPage'));
+        $alertsSummary = [
+            'won' => 0.0,
+            'lost' => 0.0,
+            'net' => 0.0,
+            'resolved_count' => 0,
+        ];
+
+        foreach ($recentLogs->getCollection() as $log) {
+            if (!is_numeric($log->trade_pnl ?? null)) {
+                continue;
+            }
+
+            $pnl = (float) $log->trade_pnl;
+            $alertsSummary['net'] += $pnl;
+            $alertsSummary['resolved_count']++;
+
+            if ($pnl >= 0) {
+                $alertsSummary['won'] += $pnl;
+            } else {
+                $alertsSummary['lost'] += abs($pnl);
+            }
+        }
+
+        return view('bot.alerts', compact('recentLogs', 'dateFrom', 'dateTo', 'eventType', 'symbol', 'perPage', 'alertsSummary'));
     }
 
     public function exportCsv()

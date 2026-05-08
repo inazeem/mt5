@@ -72,6 +72,33 @@
                     </div>
                 </form>
 
+                @php
+                    $summary = is_array($alertsSummary ?? null) ? $alertsSummary : ['won' => 0, 'lost' => 0, 'net' => 0, 'resolved_count' => 0];
+                    $resolvedCount = (int) ($summary['resolved_count'] ?? 0);
+                    $netValue = (float) ($summary['net'] ?? 0);
+                    $netClass = $netValue > 0 ? 'text-emerald-800' : ($netValue < 0 ? 'text-rose-800' : 'text-sky-800');
+                    $netPrefix = $netValue > 0 ? '+' : '';
+                @endphp
+
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-emerald-700">Total Won</div>
+                        <div class="mt-1 text-lg font-bold text-emerald-800">+{{ number_format((float) ($summary['won'] ?? 0), 2) }}</div>
+                    </div>
+                    <div class="rounded-lg border border-rose-200 bg-rose-50 p-3">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-rose-700">Total Lost</div>
+                        <div class="mt-1 text-lg font-bold text-rose-800">-{{ number_format((float) ($summary['lost'] ?? 0), 2) }}</div>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-700">Net P/L</div>
+                        <div class="mt-1 text-lg font-bold {{ $netClass }}">{{ $netPrefix }}{{ number_format($netValue, 2) }}</div>
+                    </div>
+                    <div class="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-indigo-700">Resolved Trades</div>
+                        <div class="mt-1 text-lg font-bold text-indigo-800">{{ $resolvedCount }}</div>
+                    </div>
+                </div>
+
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-sm">
                         <thead>
@@ -84,6 +111,7 @@
                                 <th class="py-2 pr-3">TP</th>
                                 <th class="py-2 pr-3">Trade</th>
                                 <th class="py-2 pr-3">Outcome</th>
+                                <th class="py-2 pr-3">P/L</th>
                                 <th class="py-2 pr-3">AI Score</th>
                                 <th class="py-2 pr-3">Bot Score</th>
                                 <th class="py-2 pr-3">Bot Thinking</th>
@@ -114,13 +142,23 @@
                                         @endphp
                                         <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold {{ $outcomeClass }}">{{ $outcome }}</span>
                                     </td>
+                                    <td class="py-2 pr-3 whitespace-nowrap">
+                                        @php
+                                            $tradePnl = is_numeric($log->trade_pnl ?? null) ? (float) $log->trade_pnl : null;
+                                            $pnlClass = $tradePnl === null
+                                                ? 'text-gray-500'
+                                                : ($tradePnl > 0 ? 'text-emerald-700' : ($tradePnl < 0 ? 'text-rose-700' : 'text-sky-700'));
+                                            $pnlText = $tradePnl === null ? '-' : (($tradePnl > 0 ? '+' : '').number_format($tradePnl, 2));
+                                        @endphp
+                                        <span class="font-semibold {{ $pnlClass }}">{{ $pnlText }}</span>
+                                    </td>
                                     <td class="py-2 pr-3">{{ is_numeric($log->ai_confidence) ? (int) $log->ai_confidence.'%' : '-' }}</td>
                                     <td class="py-2 pr-3">{{ is_numeric($log->bot_score) ? (int) $log->bot_score.'%' : '-' }}</td>
                                     <td class="py-2 pr-3 max-w-md whitespace-pre-wrap break-words">{{ $log->alert_reasoning !== '' ? $log->alert_reasoning : '-' }}</td>
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="11" class="py-4 text-gray-500">No alerts yet.</td>
+                                    <td colspan="12" class="py-4 text-gray-500">No alerts yet.</td>
                                 </tr>
                             @endforelse
                         </tbody>
