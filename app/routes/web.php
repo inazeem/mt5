@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AiController;
 use App\Http\Controllers\BotController;
+use App\Http\Controllers\BotProfileController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\TickerController;
@@ -33,6 +34,8 @@ Route::middleware(['auth', 'owner'])->group(function () {
     Route::post('/bot/trade', [BotController::class, 'store'])->name('bot.trade');
     Route::post('/bot/close-position', [BotController::class, 'closePosition'])->name('bot.close-position');
     Route::get('/bot/price', [BotController::class, 'price'])->name('bot.price');
+
+    Route::resource('/bot-profiles', BotProfileController::class)->only(['index', 'create', 'store', 'edit', 'update', 'destroy']);
 
     Route::get('/ai', [AiController::class, 'index'])->name('ai.index');
     Route::post('/ai/ask', [AiController::class, 'ask'])->name('ai.ask');

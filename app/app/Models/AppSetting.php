@@ -40,6 +40,7 @@ class AppSetting extends Model
         'bot_ai_confirm',
         'bot_max_symbols',
         'bot_ai_min_confidence',
+        'bot_profiles',
     ];
 
     protected function casts(): array
@@ -69,6 +70,7 @@ class AppSetting extends Model
             'bot_ai_confirm' => 'boolean',
             'bot_max_symbols' => 'integer',
             'bot_ai_min_confidence' => 'integer',
+            'bot_profiles' => 'array',
         ];
     }
 

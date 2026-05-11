@@ -193,6 +193,7 @@ class BotController extends Controller
             'date_to'    => ['nullable', 'date'],
             'event_type' => ['nullable', 'string', 'in:signal,trade_open,trailing_update,guardrail'],
             'symbol'     => ['nullable', 'string', 'max:20', 'regex:/^[A-Za-z0-9._-]*$/'],
+            'bot'        => ['nullable', 'string', 'max:120'],
             'per_page'   => ['nullable', 'integer', 'in:25,50,100,200'],
         ]);
 
@@ -200,6 +201,7 @@ class BotController extends Controller
         $dateTo    = !empty($validated['date_to'])   ? $validated['date_to']   : null;
         $eventType = $validated['event_type'] ?? 'signal';
         $symbol    = !empty($validated['symbol']) ? strtoupper($validated['symbol']) : null;
+        $botFilter = !empty($validated['bot']) ? trim((string) $validated['bot']) : null;
         $perPage   = (int) ($validated['per_page'] ?? 50);
 
         $logsQuery = BotTradeLog::query()->latest();
@@ -215,6 +217,12 @@ class BotController extends Controller
         }
         if ($symbol) {
             $logsQuery->where('symbol', 'like', $symbol.'%');
+        }
+        if ($botFilter) {
+            $logsQuery->where(function ($query) use ($botFilter) {
+                $query->where('bot_key', $botFilter)
+                    ->orWhere('bot_name', $botFilter);
+            });
         }
 
         // Show only high-quality signal alerts (bot score >= 70) in this page.
@@ -232,23 +240,40 @@ class BotController extends Controller
             ->map(static fn ($s) => strtoupper((string) $s))
             ->unique()
             ->values();
+        $botOptions = BotTradeLog::query()
+            ->whereNotNull('bot_key')
+            ->select(['bot_key', 'bot_name'])
+            ->distinct()
+            ->orderBy('bot_name')
+            ->get();
 
         $timeStart = $alertsCollection->min('created_at');
         $timeEnd = $alertsCollection->max('created_at');
 
         $tradeCandidates = collect();
         if ($timeStart && $timeEnd && $symbols->isNotEmpty()) {
-            $tradeCandidates = BotTradeLog::query()
+            $tradeCandidatesQuery = BotTradeLog::query()
                 ->where('event_type', 'trade_open')
                 ->whereIn('symbol', $symbols->all())
-                ->whereBetween('created_at', [$timeStart, $timeEnd->copy()->addDay()])
+                ->whereBetween('created_at', [$timeStart, $timeEnd->copy()->addDay()]);
+
+            if ($botFilter) {
+                $tradeCandidatesQuery->where(function ($query) use ($botFilter) {
+                    $query->where('bot_key', $botFilter)
+                        ->orWhere('bot_name', $botFilter);
+                });
+            }
+
+            $tradeCandidates = $tradeCandidatesQuery
                 ->orderBy('created_at')
                 ->get();
         }
 
         $tradeBuckets = [];
         foreach ($tradeCandidates as $tradeLog) {
-            $key = $normalizeSymbolForMatch((string) ($tradeLog->symbol ?? '')).'|'.strtolower((string) ($tradeLog->side ?? ''));
+            $key = $normalizeSymbolForMatch((string) ($tradeLog->symbol ?? ''))
+                .'|'.strtolower((string) ($tradeLog->side ?? ''))
+                .'|'.strtolower((string) ($tradeLog->bot_key ?? $tradeLog->bot_name ?? 'default'));
             if (!isset($tradeBuckets[$key])) {
                 $tradeBuckets[$key] = [];
             }
@@ -330,7 +355,9 @@ class BotController extends Controller
             $log->trade_outcome = '-';
             $log->trade_pnl = null;
 
-            $bucketKey = $normalizeSymbolForMatch((string) ($log->symbol ?? '')).'|'.strtolower((string) ($log->side ?? ''));
+            $bucketKey = $normalizeSymbolForMatch((string) ($log->symbol ?? ''))
+                .'|'.strtolower((string) ($log->side ?? ''))
+                .'|'.strtolower((string) ($log->bot_key ?? $log->bot_name ?? 'default'));
             $candidateTrades = $tradeBuckets[$bucketKey] ?? [];
             $matchedTrade = null;
 
@@ -451,7 +478,7 @@ class BotController extends Controller
             }
         }
 
-        return view('bot.alerts', compact('recentLogs', 'dateFrom', 'dateTo', 'eventType', 'symbol', 'perPage', 'alertsSummary'));
+        return view('bot.alerts', compact('recentLogs', 'dateFrom', 'dateTo', 'eventType', 'symbol', 'botFilter', 'botOptions', 'perPage', 'alertsSummary'));
     }
 
     public function exportCsv()
@@ -467,7 +494,7 @@ class BotController extends Controller
             $handle = fopen('php://output', 'w');
 
             fputcsv($handle, [
-                'id', 'created_at', 'event_type', 'status', 'symbol', 'side',
+                'id', 'created_at', 'bot_key', 'bot_name', 'event_type', 'status', 'symbol', 'side',
                 'lot_size', 'entry_price', 'take_profit', 'stop_loss',
                 'spread_pips', 'signal_delta_pips', 'ai_provider', 'ai_decision',
                 'ai_confidence', 'ai_summary', 'message', 'error_message',
@@ -477,6 +504,8 @@ class BotController extends Controller
                 fputcsv($handle, [
                     $log->id,
                     $log->created_at?->toDateTimeString(),
+                    $log->bot_key,
+                    $log->bot_name,
                     $log->event_type,
                     $log->status,
                     $log->symbol,

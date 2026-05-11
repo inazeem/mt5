@@ -59,6 +59,22 @@
                                class="border border-gray-300 rounded px-2 py-1 text-sm w-32 focus:outline-none focus:ring focus:ring-indigo-200">
                     </div>
                     <div>
+                        <label class="block text-xs text-gray-500 mb-1">Bot</label>
+                        <select name="bot" class="border border-gray-300 rounded px-2 py-1 text-sm w-48 focus:outline-none focus:ring focus:ring-indigo-200">
+                            <option value="">All</option>
+                            @foreach (($botOptions ?? collect()) as $botOption)
+                                @php
+                                    $botValue = (string) ($botOption->bot_key ?? '');
+                                    $botLabel = trim((string) ($botOption->bot_name ?? ''));
+                                    if ($botLabel === '') {
+                                        $botLabel = $botValue !== '' ? $botValue : 'Default';
+                                    }
+                                @endphp
+                                <option value="{{ $botValue }}" {{ ($botFilter ?? '') === $botValue ? 'selected' : '' }}>{{ $botLabel }} ({{ $botValue !== '' ? $botValue : 'default' }})</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div>
                         <label class="block text-xs text-gray-500 mb-1">Per page</label>
                         <select name="per_page" class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-indigo-200">
                             @foreach ([25, 50, 100, 200] as $pp)
@@ -104,6 +120,7 @@
                         <thead>
                             <tr class="text-left text-gray-600 border-b">
                                 <th class="py-2 pr-3">Date</th>
+                                <th class="py-2 pr-3">Bot</th>
                                 <th class="py-2 pr-3">Symbol</th>
                                 <th class="py-2 pr-3">Direction</th>
                                 <th class="py-2 pr-3">Limit Buy</th>
@@ -121,6 +138,7 @@
                             @forelse ($recentLogs as $log)
                                 <tr class="border-b border-gray-100 align-top">
                                     <td class="py-2 pr-3 whitespace-nowrap">{{ $log->created_at?->format('Y-m-d H:i:s') }}</td>
+                                    <td class="py-2 pr-3 whitespace-nowrap">{{ $log->bot_name ?: ($log->bot_key ?: 'Default') }}</td>
                                     <td class="py-2 pr-3">{{ $log->symbol ?? '-' }}</td>
                                     <td class="py-2 pr-3">{{ $log->side ? strtoupper((string) $log->side) : '-' }}</td>
                                     <td class="py-2 pr-3">{{ is_numeric($log->entry_price) ? number_format((float) $log->entry_price, 5) : '-' }}</td>
@@ -158,7 +176,7 @@
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="12" class="py-4 text-gray-500">No alerts yet.</td>
+                                    <td colspan="13" class="py-4 text-gray-500">No alerts yet.</td>
                                 </tr>
                             @endforelse
                         </tbody>

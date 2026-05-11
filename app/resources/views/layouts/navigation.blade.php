@@ -27,6 +27,9 @@
                     <x-nav-link :href="route('bot.alerts')" :active="request()->routeIs('bot.alerts')">
                         {{ __('Bot Alerts') }}
                     </x-nav-link>
+                    <x-nav-link :href="route('bot-profiles.index')" :active="request()->routeIs('bot-profiles.*')">
+                        {{ __('Bot Profiles') }}
+                    </x-nav-link>
                     <x-nav-link :href="route('ai.index')" :active="request()->routeIs('ai.*')">
                         {{ __('AI') }}
                     </x-nav-link>
@@ -99,6 +102,9 @@
             </x-responsive-nav-link>
             <x-responsive-nav-link :href="route('bot.alerts')" :active="request()->routeIs('bot.alerts')">
                 {{ __('Bot Alerts') }}
+            </x-responsive-nav-link>
+            <x-responsive-nav-link :href="route('bot-profiles.index')" :active="request()->routeIs('bot-profiles.*')">
+                {{ __('Bot Profiles') }}
             </x-responsive-nav-link>
             <x-responsive-nav-link :href="route('ai.index')" :active="request()->routeIs('ai.*')">
                 {{ __('AI') }}

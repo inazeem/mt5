@@ -269,6 +269,28 @@
                     </div>
                 </section>
 
+                @php
+                    $botProfilesText = old('bot_profiles');
+                    if ($botProfilesText === null) {
+                        $profilesValue = $settings->bot_profiles;
+                        if (is_array($profilesValue) && !empty($profilesValue)) {
+                            $botProfilesText = json_encode($profilesValue, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                        } else {
+                            $botProfilesText = '';
+                        }
+                    }
+                @endphp
+
+                <section class="space-y-3">
+                    <h3 class="text-lg font-semibold text-gray-900">Multi-Bot Profiles (Optional)</h3>
+                    <p class="text-sm text-gray-500">Provide a JSON array of bot configs. If empty, the single Auto-Bot Parameters above are used as the default bot.</p>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Bot Profiles JSON</label>
+                        <textarea name="bot_profiles" rows="12" class="mt-1 block w-full rounded border-gray-300 font-mono text-xs" placeholder='[{"key":"scalp-1","name":"Scalper 1","enabled":true,"lot":0.01,"tp_pips":20,"sl_pips":8,"symbols":["EURUSD","GBPUSD"]}]'>{{ $botProfilesText }}</textarea>
+                        <p class="text-xs text-gray-500 mt-1">Supported keys: key, name, enabled, lot, tp_pips, sl_pips, trail_start_pips, trail_pips, trail_tp_multiplier, min_move_pips, max_spread_pips, cooldown_minutes, session_start_utc, session_end_utc, max_trades_per_day, max_daily_loss_percent, ai_confirm, ai_min_confidence, max_symbols, max_open_positions, max_per_cycle, min_bot_score, min_effective_volume, scalper, symbols.</p>
+                    </div>
+                </section>
+
                 <div>
                     <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-indigo-700">
                         Save Settings

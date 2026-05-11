@@ -37,11 +37,68 @@ Artisan::command('mt5:auto-forex
     {--max-open-positions=10 : Maximum concurrent open positions (demo-safe ceiling)}
     {--max-per-cycle=5 : Maximum new trades to open in a single cycle}
     {--scalper=1 : 1 enables scalper mode (quick in/out), 0 keeps normal mode}
+    {--bot= : Run only one bot profile key/name from settings bot_profiles JSON}
     {--test-mode : Bypass ALL filters and AI — trade the first --max-symbols symbols at market for testing only}
     {--once : Run one cycle only}
 ', function (Mt5Service $mt5Service, AiService $aiService) {
-    $runCycle = function () use ($mt5Service, $aiService) {
+    $resolveProfiles = function (): array {
         $db = AppSetting::singleton();
+        $rawProfiles = is_array($db->bot_profiles) ? $db->bot_profiles : [];
+
+        $profiles = [];
+        foreach ($rawProfiles as $index => $profile) {
+            if (!is_array($profile)) {
+                continue;
+            }
+
+            $name = trim((string) ($profile['name'] ?? ''));
+            if ($name === '') {
+                $name = 'Bot '.($index + 1);
+            }
+
+            $keyRaw = (string) ($profile['key'] ?? $name);
+            $key = strtolower(trim((string) preg_replace('/[^a-zA-Z0-9_-]/', '_', $keyRaw)));
+            $key = trim($key, '_');
+            if ($key === '') {
+                $key = 'bot_'.($index + 1);
+            }
+
+            $profiles[] = array_merge($profile, [
+                'key' => $key,
+                'name' => $name,
+                'enabled' => (bool) ($profile['enabled'] ?? true),
+            ]);
+        }
+
+        if (empty($profiles)) {
+            $profiles[] = [
+                'key' => 'default',
+                'name' => 'Default Bot',
+                'enabled' => true,
+            ];
+        }
+
+        $selectedBot = trim((string) $this->option('bot'));
+        if ($selectedBot !== '') {
+            $needle = strtolower($selectedBot);
+            $profiles = array_values(array_filter($profiles, static function (array $profile) use ($needle): bool {
+                $key = strtolower((string) ($profile['key'] ?? ''));
+                $name = strtolower((string) ($profile['name'] ?? ''));
+                return $key === $needle || $name === $needle;
+            }));
+        }
+
+        return array_values(array_filter($profiles, static fn (array $profile): bool => (bool) ($profile['enabled'] ?? true)));
+    };
+
+    $runCycle = function (array $botProfile) use ($mt5Service, $aiService) {
+        $db = AppSetting::singleton();
+        $botKey = (string) ($botProfile['key'] ?? 'default');
+        $botName = (string) ($botProfile['name'] ?? $botKey);
+        $botLogDefaults = [
+            'bot_key' => $botKey,
+            'bot_name' => $botName,
+        ];
 
         // Use CLI option only when the flag is explicitly passed; otherwise prefer DB settings.
         $optionProvided = static function (string $name): bool {
@@ -54,38 +111,46 @@ Artisan::command('mt5:auto-forex
             return false;
         };
 
-        $optionOrSetting = function (string $name, mixed $settingValue, mixed $fallbackDefault) use ($optionProvided) {
+        $optionOrProfileOrSetting = function (string $name, mixed $profileValue, mixed $settingValue, mixed $fallbackDefault) use ($optionProvided) {
             if ($optionProvided($name)) {
                 return $this->option($name);
+            }
+
+            if ($profileValue !== null) {
+                return $profileValue;
             }
 
             return $settingValue ?? $fallbackDefault;
         };
 
-        $lotSize           = (float) $optionOrSetting('lot', $db->bot_lot ?? null, 0.01);
-        $tpPips            = (float) $optionOrSetting('tp-pips', $db->bot_tp_pips ?? null, 25);
-        $slPips            = (float) $optionOrSetting('sl-pips', $db->bot_sl_pips ?? null, 15);
-        $trailStartPips    = (float) $optionOrSetting('trail-start-pips', $db->bot_trail_start_pips ?? null, 10);
-        $trailPips         = (float) $optionOrSetting('trail-pips', $db->bot_trail_pips ?? null, 8);
-        $trailTpMultiplier = (float) $optionOrSetting('trail-tp-multiplier', $db->bot_trail_tp_multiplier ?? null, 2);
-        $minMovePips       = (float) $optionOrSetting('min-move-pips', $db->bot_min_move_pips ?? null, 3);
-        $maxSpreadPips     = (float) $optionOrSetting('max-spread-pips', $db->bot_max_spread_pips ?? null, 2.5);
-        $cooldownMinutes   = max(0, (int) $optionOrSetting('cooldown-minutes', $db->bot_cooldown_minutes ?? null, 30));
-        $sessionStartUtc   = (int) $optionOrSetting('session-start-utc', $db->bot_session_start_utc ?? null, 6);
-        $sessionEndUtc     = (int) $optionOrSetting('session-end-utc', $db->bot_session_end_utc ?? null, 20);
-        $maxTradesPerDay   = max(1, (int) $optionOrSetting('max-trades-per-day', $db->bot_max_trades_per_day ?? null, 20));
-        $maxDailyLossPercent = (float) $optionOrSetting('max-daily-loss-percent', $db->bot_max_daily_loss_percent ?? null, 2);
-        $useAiConfirm      = (string) $this->option('ai-confirm') !== '0' && ($db->bot_ai_confirm ?? true);
-        $aiMinConfidence   = (int) $optionOrSetting('ai-min-confidence', $db->bot_ai_min_confidence ?? null, 70);
-        $minBotScore       = max(0, min(100, (int) $this->option('min-bot-score')));
+        $lotSize           = (float) $optionOrProfileOrSetting('lot', $botProfile['lot'] ?? null, $db->bot_lot ?? null, 0.01);
+        $tpPips            = (float) $optionOrProfileOrSetting('tp-pips', $botProfile['tp_pips'] ?? null, $db->bot_tp_pips ?? null, 25);
+        $slPips            = (float) $optionOrProfileOrSetting('sl-pips', $botProfile['sl_pips'] ?? null, $db->bot_sl_pips ?? null, 15);
+        $trailStartPips    = (float) $optionOrProfileOrSetting('trail-start-pips', $botProfile['trail_start_pips'] ?? null, $db->bot_trail_start_pips ?? null, 10);
+        $trailPips         = (float) $optionOrProfileOrSetting('trail-pips', $botProfile['trail_pips'] ?? null, $db->bot_trail_pips ?? null, 8);
+        $trailTpMultiplier = (float) $optionOrProfileOrSetting('trail-tp-multiplier', $botProfile['trail_tp_multiplier'] ?? null, $db->bot_trail_tp_multiplier ?? null, 2);
+        $minMovePips       = (float) $optionOrProfileOrSetting('min-move-pips', $botProfile['min_move_pips'] ?? null, $db->bot_min_move_pips ?? null, 3);
+        $maxSpreadPips     = (float) $optionOrProfileOrSetting('max-spread-pips', $botProfile['max_spread_pips'] ?? null, $db->bot_max_spread_pips ?? null, 2.5);
+        $cooldownMinutes   = max(0, (int) $optionOrProfileOrSetting('cooldown-minutes', $botProfile['cooldown_minutes'] ?? null, $db->bot_cooldown_minutes ?? null, 30));
+        $sessionStartUtc   = (int) $optionOrProfileOrSetting('session-start-utc', $botProfile['session_start_utc'] ?? null, $db->bot_session_start_utc ?? null, 6);
+        $sessionEndUtc     = (int) $optionOrProfileOrSetting('session-end-utc', $botProfile['session_end_utc'] ?? null, $db->bot_session_end_utc ?? null, 20);
+        $maxTradesPerDay   = max(1, (int) $optionOrProfileOrSetting('max-trades-per-day', $botProfile['max_trades_per_day'] ?? null, $db->bot_max_trades_per_day ?? null, 20));
+        $maxDailyLossPercent = (float) $optionOrProfileOrSetting('max-daily-loss-percent', $botProfile['max_daily_loss_percent'] ?? null, $db->bot_max_daily_loss_percent ?? null, 2);
+        $aiConfirmSetting = $optionOrProfileOrSetting('ai-confirm', $botProfile['ai_confirm'] ?? null, $db->bot_ai_confirm ?? true, true);
+        $useAiConfirm      = (string) $aiConfirmSetting !== '0' && (bool) $aiConfirmSetting;
+        $aiMinConfidence   = (int) $optionOrProfileOrSetting('ai-min-confidence', $botProfile['ai_min_confidence'] ?? null, $db->bot_ai_min_confidence ?? null, 70);
+        $minBotScore       = max(0, min(100, (int) $optionOrProfileOrSetting('min-bot-score', $botProfile['min_bot_score'] ?? null, null, 70)));
         $volumeMultiplier  = max(1, (int) ($db->mt5_volume_multiplier ?? 1));
         $defaultMinEffectiveVolume = 0.01 * $volumeMultiplier;
-        $minEffectiveVolume = (float) $optionOrSetting('min-effective-volume', null, $defaultMinEffectiveVolume);
-        $maxSymbols        = max(1, (int) $optionOrSetting('max-symbols', $db->bot_max_symbols ?? null, 200));
-        $scalperMode          = (string) $this->option('scalper') !== '0';
-        $maxOpenPositions     = max(1, (int) $optionOrSetting('max-open-positions', $db->bot_max_open_positions ?? null, 10));
-        $maxPerCycle          = max(1, (int) $optionOrSetting('max-per-cycle', $db->bot_max_per_cycle ?? null, 5));
+        $minEffectiveVolume = (float) $optionOrProfileOrSetting('min-effective-volume', $botProfile['min_effective_volume'] ?? null, null, $defaultMinEffectiveVolume);
+        $maxSymbols        = max(1, (int) $optionOrProfileOrSetting('max-symbols', $botProfile['max_symbols'] ?? null, $db->bot_max_symbols ?? null, 200));
+        $scalperSetting = $optionOrProfileOrSetting('scalper', $botProfile['scalper'] ?? null, null, 1);
+        $scalperMode = (string) $scalperSetting !== '0' && (bool) $scalperSetting;
+        $maxOpenPositions     = max(1, (int) $optionOrProfileOrSetting('max-open-positions', $botProfile['max_open_positions'] ?? null, $db->bot_max_open_positions ?? null, 10));
+        $maxPerCycle          = max(1, (int) $optionOrProfileOrSetting('max-per-cycle', $botProfile['max_per_cycle'] ?? null, $db->bot_max_per_cycle ?? null, 5));
         $testMode             = (bool) $this->option('test-mode');
+
+        $this->info('Running bot: '.$botName.' ('.$botKey.')');
 
         if ($scalperMode) {
             // Scalper defaults: 1:3 R:R (SL=10pip, TP=30pip).
@@ -139,16 +204,17 @@ Artisan::command('mt5:auto-forex
         if (!$testMode && !$inSession) {
             $msg = "Skipped cycle: outside trading session ({$sessionStartUtc}:00-{$sessionEndUtc}:59 UTC). Current UTC hour: {$currentHourUtc}.";
             $this->warn($msg);
-            BotTradeLog::query()->create([
+            BotTradeLog::query()->create(array_merge($botLogDefaults, [
                 'event_type' => 'guardrail',
                 'status' => 'session_block',
                 'message' => $msg,
-            ]);
+            ]));
             return 0;
         }
 
         $todayStart = now()->startOfDay();
         $openedToday = BotTradeLog::query()
+            ->where('bot_key', $botKey)
             ->where('event_type', 'trade_open')
             ->where('status', 'success')
             ->where('created_at', '>=', $todayStart)
@@ -157,11 +223,11 @@ Artisan::command('mt5:auto-forex
         if (!$testMode && $openedToday >= $maxTradesPerDay) {
             $msg = "Skipped entries: daily max trades reached ({$openedToday}/{$maxTradesPerDay}).";
             $this->warn($msg);
-            BotTradeLog::query()->create([
+            BotTradeLog::query()->create(array_merge($botLogDefaults, [
                 'event_type' => 'guardrail',
                 'status' => 'daily_trade_limit',
                 'message' => $msg,
-            ]);
+            ]));
             return 0;
         }
 
@@ -172,7 +238,7 @@ Artisan::command('mt5:auto-forex
         try {
             $accountInfo = $mt5Service->getAccountInformation();
             $equity = (float) ($accountInfo['equity'] ?? $accountInfo['balance'] ?? 0);
-            $baselineKey = 'auto_bot_day_start_equity_'.now()->format('Ymd');
+            $baselineKey = 'auto_bot_day_start_equity_'.preg_replace('/[^a-z0-9_]/', '_', strtolower($botKey)).'_'.now()->format('Ymd');
             $dayStartEquity = Cache::get($baselineKey);
             if (!is_numeric($dayStartEquity) && $equity > 0) {
                 Cache::put($baselineKey, $equity, now()->addDays(2));
@@ -185,11 +251,11 @@ Artisan::command('mt5:auto-forex
                     $msg = 'Skipped entries: daily loss guard triggered at '.number_format($drawdownPercent, 2).'%. ';
                     $msg .= 'Threshold is '.number_format($maxDailyLossPercent, 2).'%. '; 
                     $this->warn($msg);
-                    BotTradeLog::query()->create([
+                    BotTradeLog::query()->create(array_merge($botLogDefaults, [
                         'event_type' => 'guardrail',
                         'status' => 'daily_loss_limit',
                         'message' => $msg,
-                    ]);
+                    ]));
                     return 0;
                 }
             }
@@ -201,23 +267,23 @@ Artisan::command('mt5:auto-forex
         $trailResult = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier);
         $this->line('Trailing updated: '.$trailResult['updated'].', skipped: '.$trailResult['skipped']);
         if ($trailResult['updated'] > 0) {
-            BotTradeLog::query()->create([
+            BotTradeLog::query()->create(array_merge($botLogDefaults, [
                 'event_type' => 'trailing_update',
                 'status' => 'success',
                 'message' => 'Trailing stop updated on '.$trailResult['updated'].' positions.',
-            ]);
+            ]));
         }
 
         if (!empty($trailResult['errors'])) {
             foreach ($trailResult['errors'] as $error) {
                 $this->warn('Trailing error '.$error['symbol'].' #'.$error['position_id'].': '.$error['error']);
-                BotTradeLog::query()->create([
+                BotTradeLog::query()->create(array_merge($botLogDefaults, [
                     'event_type' => 'trailing_update',
                     'status' => 'failed',
                     'symbol' => $error['symbol'] ?? null,
                     'message' => 'Trailing stop update failed.',
                     'error_message' => $error['error'] ?? null,
-                ]);
+                ]));
             }
         }
 
@@ -226,11 +292,11 @@ Artisan::command('mt5:auto-forex
         if (!$testMode && count($positions) >= $maxOpenPositions) {
             $msg = 'Skipped entries: max open positions reached ('.count($positions).'/'.$maxOpenPositions.').';
             $this->line($msg);
-            BotTradeLog::query()->create([
+            BotTradeLog::query()->create(array_merge($botLogDefaults, [
                 'event_type' => 'guardrail',
                 'status' => 'max_open_positions',
                 'message' => $msg,
-            ]);
+            ]));
 
             return 0;
         }
@@ -248,7 +314,14 @@ Artisan::command('mt5:auto-forex
 
         // Prefer active tickers from the database; fall back to MetaAPI symbol discovery.
         $dbTickers = Ticker::query()->active()->orderBy('symbol')->get()->keyBy(fn ($t) => strtoupper($t->symbol));
-        if ($dbTickers->isNotEmpty()) {
+        $profileSymbols = isset($botProfile['symbols']) && is_array($botProfile['symbols'])
+            ? array_values(array_filter(array_map(static fn ($s) => strtoupper(trim((string) $s)), $botProfile['symbols']), static fn ($s) => $s !== ''))
+            : [];
+
+        if (!empty($profileSymbols)) {
+            $symbols = array_slice($profileSymbols, 0, $maxSymbols);
+            $this->line('Using '.count($symbols).' symbol(s) from bot profile list.');
+        } elseif ($dbTickers->isNotEmpty()) {
             $symbols = array_slice($dbTickers->keys()->all(), 0, $maxSymbols);
             $this->line('Using '.count($symbols).' symbol(s) from tickers table.');
         } else {
@@ -292,7 +365,7 @@ Artisan::command('mt5:auto-forex
             return null;
         };
 
-        $logSignal = static function (array $data) use ($calculateBotScore, $minBotScore, $testMode, $volumeMultiplier, $minEffectiveVolume, $lotSize): void {
+        $logSignal = static function (array $data) use ($calculateBotScore, $minBotScore, $testMode, $volumeMultiplier, $minEffectiveVolume, $lotSize, $botLogDefaults, $botKey, $botName): void {
             $payload = is_array($data['meta_payload'] ?? null) ? $data['meta_payload'] : [];
 
             $resolvedBotScore = null;
@@ -322,8 +395,14 @@ Artisan::command('mt5:auto-forex
                 $baseLotForPayload = is_numeric($data['lot_size'] ?? null) ? (float) $data['lot_size'] : $lotSize;
                 $payload['effective_volume'] = $baseLotForPayload * $volumeMultiplier;
             }
+            if (!isset($payload['bot_key'])) {
+                $payload['bot_key'] = $botKey;
+            }
+            if (!isset($payload['bot_name'])) {
+                $payload['bot_name'] = $botName;
+            }
 
-            BotTradeLog::query()->create(array_merge([
+            BotTradeLog::query()->create(array_merge($botLogDefaults, [
                 'event_type' => 'signal',
                 'ai_decision' => 'not_evaluated',
                 'meta_payload' => $payload,
@@ -364,7 +443,7 @@ Artisan::command('mt5:auto-forex
                 ?? (str_ends_with($base, 'JPY') ? 0.01 : 0.0001);
             $minMove = $minMovePips * $pipSize;
 
-            $cacheKey = 'auto_bot_last_bid_'.preg_replace('/[^A-Z0-9_]/', '_', $symbol);
+            $cacheKey = 'auto_bot_last_bid_'.preg_replace('/[^a-z0-9_]/', '_', strtolower($botKey)).'_'.preg_replace('/[^A-Z0-9_]/', '_', $symbol);
             $lastBid = Cache::get($cacheKey);
             Cache::put($cacheKey, $bid, now()->addHours(6));
 
@@ -468,6 +547,7 @@ Artisan::command('mt5:auto-forex
             }
 
             $lastSuccessfulTrade = BotTradeLog::query()
+                ->where('bot_key', $botKey)
                 ->where('event_type', 'trade_open')
                 ->where('status', 'success')
                 ->where('symbol', $symbol)
@@ -637,7 +717,7 @@ Artisan::command('mt5:auto-forex
                 $openBySymbol[$symbol] = true;
                 $this->info('Opened '.$side.' '.$symbol.' TP='.$takeProfit.' SL='.$stopLoss);
                 Log::info('Auto bot opened trade', ['symbol' => $symbol, 'side' => $side, 'result' => $result]);
-                BotTradeLog::query()->create([
+                BotTradeLog::query()->create(array_merge($botLogDefaults, [
                     'event_type' => 'trade_open',
                     'status' => 'success',
                     'symbol' => $symbol,
@@ -661,7 +741,7 @@ Artisan::command('mt5:auto-forex
                     ],
                     'message' => 'Trade opened successfully.',
                     'meta_response' => $result,
-                ]);
+                ]));
 
                 // Run one immediate trailing pass so new trades do not wait for the next cycle.
                 try {
@@ -679,7 +759,7 @@ Artisan::command('mt5:auto-forex
                 }
             } catch (\Throwable $e) {
                 Log::warning('Auto bot trade failed', ['symbol' => $symbol, 'side' => $side, 'error' => $e->getMessage()]);
-                BotTradeLog::query()->create([
+                BotTradeLog::query()->create(array_merge($botLogDefaults, [
                     'event_type' => 'trade_open',
                     'status' => 'failed',
                     'symbol' => $symbol,
@@ -703,12 +783,12 @@ Artisan::command('mt5:auto-forex
                     ],
                     'message' => 'Trade open failed.',
                     'error_message' => $e->getMessage(),
-                ]);
+                ]));
             }
         }
 
         $this->info(
-            'Cycle complete. Scanned='.$scanned
+            'Cycle complete ['.$botName.']. Scanned='.$scanned
             .' opened='.$opened
             .' noMove='.$skippedNoMove
             .' spread='.$skippedSpread
@@ -721,12 +801,29 @@ Artisan::command('mt5:auto-forex
         return 0;
     };
 
+    $runAllBots = function () use ($resolveProfiles, $runCycle) {
+        $profiles = $resolveProfiles();
+        if (empty($profiles)) {
+            $this->error('No enabled bot profiles found.');
+            return 1;
+        }
+
+        foreach ($profiles as $profile) {
+            $code = $runCycle($profile);
+            if ($code !== 0) {
+                return $code;
+            }
+        }
+
+        return 0;
+    };
+
     if ($this->option('once')) {
-        return $runCycle();
+        return $runAllBots();
     }
 
     while (true) {
-        $code = $runCycle();
+        $code = $runAllBots();
         if ($code !== 0) {
             return $code;
         }

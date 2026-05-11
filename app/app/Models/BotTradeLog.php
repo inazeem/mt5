@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Model;
 class BotTradeLog extends Model
 {
     protected $fillable = [
+        'bot_key',
+        'bot_name',
         'event_type',
         'status',
         'symbol',
@@ -30,6 +32,8 @@ class BotTradeLog extends Model
     protected function casts(): array
     {
         return [
+            'bot_key' => 'string',
+            'bot_name' => 'string',
             'lot_size' => 'float',
             'entry_price' => 'float',
             'take_profit' => 'float',
