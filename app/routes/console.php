@@ -37,6 +37,8 @@ Artisan::command('mt5:auto-forex
     {--max-open-positions=10 : Maximum concurrent open positions (demo-safe ceiling)}
     {--max-per-cycle=5 : Maximum new trades to open in a single cycle}
     {--scalper=1 : 1 enables scalper mode (quick in/out), 0 keeps normal mode}
+    {--trend-filter=1 : 1 requires M15 and M5 trend agreement with signal side, 0 disables this filter}
+    {--cooldown-override-ratio=1.25 : Allow cooldown override when current move is this multiple of the last successful signal move}
     {--bot= : Run only one bot profile key/name from settings bot_profiles JSON}
     {--test-mode : Bypass ALL filters and AI — trade the first --max-symbols symbols at market for testing only}
     {--once : Run one cycle only}
@@ -146,6 +148,9 @@ Artisan::command('mt5:auto-forex
         $maxSymbols        = max(1, (int) $optionOrProfileOrSetting('max-symbols', $botProfile['max_symbols'] ?? null, $db->bot_max_symbols ?? null, 200));
         $scalperSetting = $optionOrProfileOrSetting('scalper', $botProfile['scalper'] ?? null, null, 1);
         $scalperMode = (string) $scalperSetting !== '0' && (bool) $scalperSetting;
+        $trendFilterSetting = $optionOrProfileOrSetting('trend-filter', $botProfile['trend_filter'] ?? null, null, 1);
+        $useTrendFilter = (string) $trendFilterSetting !== '0' && (bool) $trendFilterSetting;
+        $cooldownOverrideRatio = (float) $optionOrProfileOrSetting('cooldown-override-ratio', $botProfile['cooldown_override_ratio'] ?? null, null, 1.25);
         $maxOpenPositions     = max(1, (int) $optionOrProfileOrSetting('max-open-positions', $botProfile['max_open_positions'] ?? null, $db->bot_max_open_positions ?? null, 10));
         $maxPerCycle          = max(1, (int) $optionOrProfileOrSetting('max-per-cycle', $botProfile['max_per_cycle'] ?? null, $db->bot_max_per_cycle ?? null, 5));
         $testMode             = (bool) $this->option('test-mode');
@@ -173,7 +178,8 @@ Artisan::command('mt5:auto-forex
             $minMovePips <= 0 ||
             $maxSpreadPips <= 0 ||
             $maxDailyLossPercent <= 0 ||
-            $minEffectiveVolume <= 0
+            $minEffectiveVolume <= 0 ||
+            $cooldownOverrideRatio < 1
         ) {
             $this->error('All numeric options must be greater than zero.');
             return 1;
@@ -190,6 +196,10 @@ Artisan::command('mt5:auto-forex
 
         if ($scalperMode) {
             $this->line('Scalper mode ON  TP='.$tpPips.'pip  SL='.$slPips.'pip  maxSpread='.$maxSpreadPips.'pip  cooldown='.$cooldownMinutes.'min');
+        }
+
+        if ($useTrendFilter) {
+            $this->line('Trend filter ON  requires M15 + M5 agreement with signal direction.');
         }
 
         $this->line('Volume settings  multiplier='.$volumeMultiplier.'  minEffectiveVolume='.$minEffectiveVolume);
@@ -338,6 +348,50 @@ Artisan::command('mt5:auto-forex
         $skippedOpen = 0;
         $skippedLowScore = 0;
         $skippedLowVolume = 0;
+        $skippedTrend = 0;
+
+        $trendCache = [];
+        $resolveTrend = function (string $symbol, string $timeframe) use ($mt5Service, &$trendCache): ?string {
+            $key = strtoupper($symbol).'|'.$timeframe;
+            if (array_key_exists($key, $trendCache)) {
+                return $trendCache[$key];
+            }
+
+            try {
+                $candles = $mt5Service->getCandles($symbol, $timeframe, 8);
+                $closes = [];
+                foreach ($candles as $candle) {
+                    if (is_array($candle) && isset($candle['close']) && is_numeric($candle['close'])) {
+                        $closes[] = (float) $candle['close'];
+                    }
+                }
+
+                if (count($closes) < 6) {
+                    $trendCache[$key] = null;
+                    return null;
+                }
+
+                $latest = array_slice($closes, -3);
+                $previous = array_slice($closes, -6, 3);
+                $latestAvg = array_sum($latest) / count($latest);
+                $previousAvg = array_sum($previous) / count($previous);
+
+                if ($latestAvg > $previousAvg) {
+                    $trendCache[$key] = 'buy';
+                    return 'buy';
+                }
+
+                if ($latestAvg < $previousAvg) {
+                    $trendCache[$key] = 'sell';
+                    return 'sell';
+                }
+            } catch (\Throwable) {
+                // Keep trend null when candle retrieval fails; caller will decide whether to skip.
+            }
+
+            $trendCache[$key] = null;
+            return null;
+        };
 
         $calculateBotScore = static function (float $signalDeltaPips, float $spreadPips, float $effectiveVolume, float $minEffectiveVolume): int {
             $signalStrengthScore = min(100.0, (abs($signalDeltaPips) / 10.0) * 100.0);
@@ -482,6 +536,28 @@ Artisan::command('mt5:auto-forex
             $effectiveVolume = $lotSize * $volumeMultiplier;
             $botScore = $calculateBotScore($signalDeltaPips, $spreadPips, $effectiveVolume, $minEffectiveVolume);
 
+            if (!$testMode && $useTrendFilter) {
+                $trend15m = $resolveTrend($symbol, '15m');
+                $trend5m = $resolveTrend($symbol, '5m');
+                if ($trend15m === null || $trend5m === null || $trend15m !== $side || $trend5m !== $side) {
+                    $skippedTrend++;
+                    $logSignal([
+                        'status' => 'trend_rejected',
+                        'symbol' => $symbol,
+                        'side' => $side,
+                        'spread_pips' => $spreadPips,
+                        'signal_delta_pips' => $signalDeltaPips,
+                        'meta_payload' => [
+                            'trend_15m' => $trend15m,
+                            'trend_5m' => $trend5m,
+                            'required_side' => $side,
+                        ],
+                        'message' => 'Signal rejected because M15/M5 trend is not aligned with signal side.',
+                    ]);
+                    continue;
+                }
+            }
+
             if (!$testMode && $effectiveVolume < $minEffectiveVolume) {
                 $this->line("  {$symbol}: VOLUME {$effectiveVolume} < min {$minEffectiveVolume} — skipped");
                 $skippedLowVolume++;
@@ -556,17 +632,34 @@ Artisan::command('mt5:auto-forex
 
             if (!$testMode && $lastSuccessfulTrade && $cooldownMinutes > 0 && $lastSuccessfulTrade->created_at?->gt(now()->subMinutes($cooldownMinutes))) {
                 $remaining = now()->diffInSeconds($lastSuccessfulTrade->created_at->addMinutes($cooldownMinutes));
-                $this->line("  {$symbol}: COOLDOWN — {$remaining}s remaining");
-                $skippedCooldown++;
-                $logSignal([
-                    'status' => 'cooldown_rejected',
-                    'symbol' => $symbol,
-                    'side' => $side,
-                    'spread_pips' => $spreadPips,
-                    'signal_delta_pips' => $signalDeltaPips,
-                    'message' => 'Signal rejected due to symbol cooldown.',
-                ]);
-                continue;
+                $lastSignalMove = is_numeric($lastSuccessfulTrade->signal_delta_pips ?? null)
+                    ? abs((float) $lastSuccessfulTrade->signal_delta_pips)
+                    : null;
+                $currentSignalMove = abs((float) $signalDeltaPips);
+                $canOverrideCooldown = $lastSignalMove !== null
+                    && $lastSignalMove > 0
+                    && $currentSignalMove >= ($lastSignalMove * $cooldownOverrideRatio);
+
+                if ($canOverrideCooldown) {
+                    $this->line("  {$symbol}: COOLDOWN OVERRIDE — stronger signal (".number_format($currentSignalMove, 2).' vs '.number_format($lastSignalMove, 2)." pips)");
+                } else {
+                    $this->line("  {$symbol}: COOLDOWN — {$remaining}s remaining");
+                    $skippedCooldown++;
+                    $logSignal([
+                        'status' => 'cooldown_rejected',
+                        'symbol' => $symbol,
+                        'side' => $side,
+                        'spread_pips' => $spreadPips,
+                        'signal_delta_pips' => $signalDeltaPips,
+                        'meta_payload' => [
+                            'cooldown_override_ratio' => $cooldownOverrideRatio,
+                            'current_signal_move' => $currentSignalMove,
+                            'last_success_signal_move' => $lastSignalMove,
+                        ],
+                        'message' => 'Signal rejected due to symbol cooldown.',
+                    ]);
+                    continue;
+                }
             }
 
             $this->line("  {$symbol}: signal {$side} — move=".number_format($signalDeltaPips,2)."pip spread=".number_format($spreadPips,2)."pip bid={$bid} ask={$ask}");
@@ -794,6 +887,7 @@ Artisan::command('mt5:auto-forex
             .' spread='.$skippedSpread
             .' lowScore='.$skippedLowScore
             .' lowVolume='.$skippedLowVolume
+            .' trend='.$skippedTrend
             .' cooldown='.$skippedCooldown
             .' hasOpen='.$skippedOpen
         );
