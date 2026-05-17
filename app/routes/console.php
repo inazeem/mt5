@@ -37,6 +37,8 @@ Artisan::command('mt5:auto-forex
     {--max-open-positions=10 : Maximum concurrent open positions (demo-safe ceiling)}
     {--max-per-cycle=5 : Maximum new trades to open in a single cycle}
     {--scalper=1 : 1 enables scalper mode (quick in/out), 0 keeps normal mode}
+    {--trend-filter=0 : 1 requires M15 and M5 candle trend to align with the signal side}
+    {--cooldown-override-ratio=0 : During cooldown, allow a new trade only when signal strength exceeds the last successful trade by this ratio}
     {--bot= : Run only one bot profile key/name from settings bot_profiles JSON}
     {--test-mode : Bypass ALL filters and AI — trade the first --max-symbols symbols at market for testing only}
     {--once : Run one cycle only}
@@ -146,6 +148,9 @@ Artisan::command('mt5:auto-forex
         $maxSymbols        = max(1, (int) $optionOrProfileOrSetting('max-symbols', $botProfile['max_symbols'] ?? null, $db->bot_max_symbols ?? null, 200));
         $scalperSetting = $optionOrProfileOrSetting('scalper', $botProfile['scalper'] ?? null, null, 1);
         $scalperMode = (string) $scalperSetting !== '0' && (bool) $scalperSetting;
+        $trendFilterSetting = $optionOrProfileOrSetting('trend-filter', $botProfile['trend_filter'] ?? null, null, 0);
+        $useTrendFilter = (string) $trendFilterSetting !== '0' && (bool) $trendFilterSetting;
+        $cooldownOverrideRatio = (float) $optionOrProfileOrSetting('cooldown-override-ratio', $botProfile['cooldown_override_ratio'] ?? null, null, 0);
         $maxOpenPositions     = max(1, (int) $optionOrProfileOrSetting('max-open-positions', $botProfile['max_open_positions'] ?? null, $db->bot_max_open_positions ?? null, 10));
         $maxPerCycle          = max(1, (int) $optionOrProfileOrSetting('max-per-cycle', $botProfile['max_per_cycle'] ?? null, $db->bot_max_per_cycle ?? null, 5));
         $testMode             = (bool) $this->option('test-mode');
@@ -173,6 +178,7 @@ Artisan::command('mt5:auto-forex
             $minMovePips <= 0 ||
             $maxSpreadPips <= 0 ||
             $maxDailyLossPercent <= 0 ||
+            $cooldownOverrideRatio < 0 ||
             $minEffectiveVolume <= 0
         ) {
             $this->error('All numeric options must be greater than zero.');
@@ -190,6 +196,14 @@ Artisan::command('mt5:auto-forex
 
         if ($scalperMode) {
             $this->line('Scalper mode ON  TP='.$tpPips.'pip  SL='.$slPips.'pip  maxSpread='.$maxSpreadPips.'pip  cooldown='.$cooldownMinutes.'min');
+        }
+
+        if ($useTrendFilter) {
+            $this->line('Trend filter ON  timeframes=M15+M5');
+        }
+
+        if ($cooldownOverrideRatio > 0) {
+            $this->line('Cooldown override ON  ratio='.$cooldownOverrideRatio);
         }
 
         $this->line('Volume settings  multiplier='.$volumeMultiplier.'  minEffectiveVolume='.$minEffectiveVolume);
@@ -363,6 +377,26 @@ Artisan::command('mt5:auto-forex
             }
 
             return null;
+        };
+
+        $resolveTrendSide = static function (array $candles): ?string {
+            if (empty($candles)) {
+                return null;
+            }
+
+            $lastCandle = $candles[array_key_last($candles)] ?? null;
+            if (!is_array($lastCandle)) {
+                return null;
+            }
+
+            $open = isset($lastCandle['open']) ? (float) $lastCandle['open'] : null;
+            $close = isset($lastCandle['close']) ? (float) $lastCandle['close'] : null;
+
+            if ($open === null || $close === null || $open === $close) {
+                return null;
+            }
+
+            return $close > $open ? 'buy' : 'sell';
         };
 
         $logSignal = static function (array $data) use ($calculateBotScore, $minBotScore, $testMode, $volumeMultiplier, $minEffectiveVolume, $lotSize, $botLogDefaults, $botKey, $botName): void {
@@ -556,17 +590,77 @@ Artisan::command('mt5:auto-forex
 
             if (!$testMode && $lastSuccessfulTrade && $cooldownMinutes > 0 && $lastSuccessfulTrade->created_at?->gt(now()->subMinutes($cooldownMinutes))) {
                 $remaining = now()->diffInSeconds($lastSuccessfulTrade->created_at->addMinutes($cooldownMinutes));
-                $this->line("  {$symbol}: COOLDOWN — {$remaining}s remaining");
-                $skippedCooldown++;
-                $logSignal([
-                    'status' => 'cooldown_rejected',
-                    'symbol' => $symbol,
-                    'side' => $side,
-                    'spread_pips' => $spreadPips,
-                    'signal_delta_pips' => $signalDeltaPips,
-                    'message' => 'Signal rejected due to symbol cooldown.',
-                ]);
-                continue;
+                $lastSuccessfulMovePips = abs((float) ($lastSuccessfulTrade->signal_delta_pips ?? 0));
+                $currentMovePips = abs($signalDeltaPips);
+                $requiredOverrideMovePips = $cooldownOverrideRatio > 0
+                    ? ($lastSuccessfulMovePips * $cooldownOverrideRatio)
+                    : null;
+                $canOverrideCooldown = $cooldownOverrideRatio > 0
+                    && $lastSuccessfulMovePips > 0
+                    && $currentMovePips >= $requiredOverrideMovePips;
+
+                if (!$canOverrideCooldown) {
+                    $this->line("  {$symbol}: COOLDOWN — {$remaining}s remaining");
+                    $skippedCooldown++;
+                    $logSignal([
+                        'status' => 'cooldown_rejected',
+                        'symbol' => $symbol,
+                        'side' => $side,
+                        'spread_pips' => $spreadPips,
+                        'signal_delta_pips' => $signalDeltaPips,
+                        'meta_payload' => [
+                            'last_successful_signal_delta_pips' => $lastSuccessfulMovePips,
+                            'cooldown_override_ratio' => $cooldownOverrideRatio,
+                            'required_override_move_pips' => $requiredOverrideMovePips,
+                            'remaining_cooldown_seconds' => $remaining,
+                        ],
+                        'message' => 'Signal rejected due to symbol cooldown.',
+                    ]);
+                    continue;
+                }
+
+                $this->line("  {$symbol}: cooldown override — move=".number_format($currentMovePips, 2)."pip required=".number_format((float) $requiredOverrideMovePips, 2)."pip");
+            }
+
+            if (!$testMode && $useTrendFilter) {
+                try {
+                    $candles15m = $mt5Service->getCandles($symbol, '15m', 1);
+                    $candles5m = $mt5Service->getCandles($symbol, '5m', 1);
+                    $trend15m = $resolveTrendSide($candles15m);
+                    $trend5m = $resolveTrendSide($candles5m);
+
+                    if ($trend15m !== $side || $trend5m !== $side) {
+                        $logSignal([
+                            'status' => 'trend_rejected',
+                            'symbol' => $symbol,
+                            'side' => $side,
+                            'spread_pips' => $spreadPips,
+                            'signal_delta_pips' => $signalDeltaPips,
+                            'meta_payload' => [
+                                'trend_15m' => $trend15m,
+                                'trend_5m' => $trend5m,
+                                'trend_filter' => true,
+                            ],
+                            'message' => 'Signal rejected because M15 and M5 trends do not align with the signal side.',
+                        ]);
+                        continue;
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('Auto bot trend filter failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
+                    $logSignal([
+                        'status' => 'trend_rejected',
+                        'symbol' => $symbol,
+                        'side' => $side,
+                        'spread_pips' => $spreadPips,
+                        'signal_delta_pips' => $signalDeltaPips,
+                        'error_message' => $e->getMessage(),
+                        'meta_payload' => [
+                            'trend_filter' => true,
+                        ],
+                        'message' => 'Signal rejected because trend filter data was unavailable.',
+                    ]);
+                    continue;
+                }
             }
 
             $this->line("  {$symbol}: signal {$side} — move=".number_format($signalDeltaPips,2)."pip spread=".number_format($spreadPips,2)."pip bid={$bid} ask={$ask}");
