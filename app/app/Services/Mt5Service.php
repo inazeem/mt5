@@ -21,6 +21,7 @@ use RuntimeException;
 class Mt5Service
 {
     private const BASE_URL = 'https://mt-client-api-v1.{region}.agiliumtrade.ai';
+    private const COMMON_SPREAD_BET_SUFFIXES = ['_SB', '_sb'];
     private const COMMON_PEPPERSTONE_SUFFIXES = ['', '.a', '.m', '.r', '.pro', '.c', 'a', 'm', 'r', 'pro', 'c'];
     private const HISTORY_DEALS_CACHE_SECONDS = 60;
     private const HISTORY_DEALS_STALE_CACHE_MINUTES = 15;
@@ -267,41 +268,7 @@ class Mt5Service
             throw new RuntimeException('Symbol is required to fetch current ticker price.');
         }
 
-        $candidateSymbols = [];
-
-        try {
-            $response = $client->get("/users/current/accounts/{$accountId}/symbols");
-            $decoded = json_decode((string) $response->getBody(), true);
-            $availableSymbols = $this->extractSymbolNames($decoded);
-
-            if (!empty($availableSymbols)) {
-                $availableMap = [];
-                foreach ($availableSymbols as $availableSymbol) {
-                    $availableMap[strtoupper($availableSymbol)] = $availableSymbol;
-                }
-
-                foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
-                    $candidate = $requested.$suffix;
-                    if (isset($availableMap[$candidate])) {
-                        $candidateSymbols[] = $availableMap[$candidate];
-                    }
-                }
-
-                foreach ($availableMap as $upper => $original) {
-                    if (str_starts_with($upper, $requested)) {
-                        $candidateSymbols[] = $original;
-                    }
-                }
-            }
-        } catch (\Throwable) {
-            // If symbols discovery fails, continue with fallback candidates below.
-        }
-
-        foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
-            $candidateSymbols[] = $requested.$suffix;
-        }
-        $candidateSymbols[] = $requested;
-        $candidateSymbols = array_values(array_unique($candidateSymbols));
+        $candidateSymbols = $this->buildTradeSymbolCandidates($client, $accountId, $requested);
 
         $quote = null;
         $resolvedSymbol = null;
@@ -677,7 +644,10 @@ class Mt5Service
 
         $baseRequested = str_ends_with($requested, '_SB') ? substr($requested, 0, -3) : $requested;
 
-        $candidates = [$baseRequested.'_SB'];
+        $candidates = [];
+        foreach (self::COMMON_SPREAD_BET_SUFFIXES as $suffix) {
+            $candidates[] = $baseRequested.$suffix;
+        }
         foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
             $candidates[] = $baseRequested.$suffix;
         }
@@ -696,8 +666,11 @@ class Mt5Service
                 $availableMap[strtoupper($availableSymbol)] = $availableSymbol;
             }
 
-            if (isset($availableMap[$baseRequested.'_SB'])) {
-                return $availableMap[$baseRequested.'_SB'];
+            foreach (self::COMMON_SPREAD_BET_SUFFIXES as $suffix) {
+                $spreadBetCandidate = $baseRequested.$suffix;
+                if (isset($availableMap[strtoupper($spreadBetCandidate)])) {
+                    return $availableMap[strtoupper($spreadBetCandidate)];
+                }
             }
 
             if (isset($availableMap[$requested])) {
@@ -868,9 +841,11 @@ class Mt5Service
             }
         }
 
-        $spreadBetCandidate = $pair.'_SB';
-        if (isset($availableMap[$spreadBetCandidate])) {
-            return $availableMap[$spreadBetCandidate];
+        foreach (self::COMMON_SPREAD_BET_SUFFIXES as $suffix) {
+            $spreadBetCandidate = $pair.$suffix;
+            if (isset($availableMap[strtoupper($spreadBetCandidate)])) {
+                return $availableMap[strtoupper($spreadBetCandidate)];
+            }
         }
 
         foreach (self::COMMON_PEPPERSTONE_SUFFIXES as $suffix) {
@@ -926,7 +901,9 @@ class Mt5Service
         $baseRequested = str_ends_with($requested, '_SB') ? substr($requested, 0, -3) : $requested;
 
         // Pepperstone spread-bet symbols should be preferred first.
-        $candidates[] = $baseRequested.'_SB';
+        foreach (self::COMMON_SPREAD_BET_SUFFIXES as $suffix) {
+            $candidates[] = $baseRequested.$suffix;
+        }
 
         // Also try exactly what user typed.
         $candidates[] = $requested;
