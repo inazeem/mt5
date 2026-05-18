@@ -164,6 +164,133 @@ class BotController extends Controller
         ]);
     }
 
+    public function health(Request $request, Mt5Service $mt5Service)
+    {
+        $settings = AppSetting::singleton();
+        $botProfile = $this->resolveHealthBotProfile($settings);
+
+        $validated = $request->validate([
+            'symbol' => ['nullable', 'string', 'max:20', 'regex:/^[A-Za-z0-9._-]+$/'],
+        ]);
+
+        $profileSymbols = isset($botProfile['symbols']) && is_array($botProfile['symbols'])
+            ? array_values(array_filter(array_map(static fn ($symbol) => strtoupper(trim((string) $symbol)), $botProfile['symbols'])))
+            : [];
+
+        $healthSymbol = strtoupper((string) ($validated['symbol'] ?? ($profileSymbols[0] ?? 'GBPUSD')));
+        if ($healthSymbol === '') {
+            $healthSymbol = 'GBPUSD';
+        }
+
+        $sessionStartUtc = (int) ($botProfile['session_start_utc'] ?? $settings->bot_session_start_utc ?? 6);
+        $sessionEndUtc = (int) ($botProfile['session_end_utc'] ?? $settings->bot_session_end_utc ?? 20);
+        $currentHourUtc = (int) now('UTC')->format('G');
+        $inSession = $sessionStartUtc <= $sessionEndUtc
+            ? ($currentHourUtc >= $sessionStartUtc && $currentHourUtc <= $sessionEndUtc)
+            : ($currentHourUtc >= $sessionStartUtc || $currentHourUtc <= $sessionEndUtc);
+
+        $runtime = [
+            'bot_key' => (string) ($botProfile['key'] ?? 'default'),
+            'bot_name' => (string) ($botProfile['name'] ?? ($botProfile['key'] ?? 'Default')),
+            'session_start_utc' => $sessionStartUtc,
+            'session_end_utc' => $sessionEndUtc,
+            'current_hour_utc' => $currentHourUtc,
+            'in_session' => $inSession,
+            'trend_filter' => (bool) ($botProfile['trend_filter'] ?? false),
+            'ai_confirm' => array_key_exists('ai_confirm', $botProfile) ? (bool) $botProfile['ai_confirm'] : (bool) ($settings->bot_ai_confirm ?? true),
+            'max_symbols' => (int) ($botProfile['max_symbols'] ?? $settings->bot_max_symbols ?? 200),
+            'max_per_cycle' => (int) ($botProfile['max_per_cycle'] ?? $settings->bot_max_per_cycle ?? 5),
+            'max_open_positions' => (int) ($botProfile['max_open_positions'] ?? $settings->bot_max_open_positions ?? 10),
+            'min_move_pips' => (float) ($botProfile['min_move_pips'] ?? $settings->bot_min_move_pips ?? 3),
+            'max_spread_pips' => (float) ($botProfile['max_spread_pips'] ?? $settings->bot_max_spread_pips ?? 2.5),
+            'health_symbol' => $healthSymbol,
+        ];
+
+        $checks = [];
+
+        try {
+            $account = $mt5Service->getAccountInformation();
+            $checks[] = [
+                'name' => 'Account',
+                'ok' => true,
+                'detail' => 'Balance='.(float) ($account['balance'] ?? 0).' Equity='.(float) ($account['equity'] ?? 0),
+            ];
+        } catch (Throwable $e) {
+            $checks[] = [
+                'name' => 'Account',
+                'ok' => false,
+                'detail' => $e->getMessage(),
+            ];
+        }
+
+        try {
+            $snapshot = $mt5Service->getOpenTradeSnapshot();
+            $checks[] = [
+                'name' => 'Open snapshot',
+                'ok' => true,
+                'detail' => 'Positions='.count($snapshot['positions'] ?? []).' Orders='.count($snapshot['orders'] ?? []),
+            ];
+        } catch (Throwable $e) {
+            $checks[] = [
+                'name' => 'Open snapshot',
+                'ok' => false,
+                'detail' => $e->getMessage(),
+            ];
+        }
+
+        try {
+            $quote = $mt5Service->getTickerPrice($healthSymbol);
+            $checks[] = [
+                'name' => 'Quote '.$healthSymbol,
+                'ok' => true,
+                'detail' => 'Bid='.(string) ($quote['bid'] ?? '?').' Ask='.(string) ($quote['ask'] ?? '?').' Symbol='.(string) ($quote['symbol'] ?? $healthSymbol),
+            ];
+        } catch (Throwable $e) {
+            $checks[] = [
+                'name' => 'Quote '.$healthSymbol,
+                'ok' => false,
+                'detail' => $e->getMessage(),
+            ];
+        }
+
+        foreach (['15m', '5m'] as $timeframe) {
+            try {
+                $candles = $mt5Service->getCandles($healthSymbol, $timeframe, 1);
+                $lastCandle = is_array($candles[array_key_last($candles)] ?? null) ? $candles[array_key_last($candles)] : [];
+                $checks[] = [
+                    'name' => 'Candles '.$healthSymbol.' '.$timeframe,
+                    'ok' => true,
+                    'detail' => 'Fetched '.count($candles).' candle(s). Last time='.(string) ($lastCandle['time'] ?? $lastCandle['brokerTime'] ?? 'n/a'),
+                ];
+            } catch (Throwable $e) {
+                $checks[] = [
+                    'name' => 'Candles '.$healthSymbol.' '.$timeframe,
+                    'ok' => false,
+                    'detail' => $e->getMessage(),
+                ];
+            }
+        }
+
+        $recentIssues = BotTradeLog::query()
+            ->where(function ($query) {
+                $query->where('event_type', 'guardrail')
+                    ->orWhereNotNull('error_message')
+                    ->orWhere('status', 'like', '%_rejected')
+                    ->orWhereIn('status', ['quote_error', 'invalid_quote']);
+            })
+            ->latest()
+            ->limit(30)
+            ->get();
+
+        $latestCycleSummary = BotTradeLog::query()
+            ->where('event_type', 'guardrail')
+            ->where('status', 'cycle_complete')
+            ->latest()
+            ->first();
+
+        return view('bot.health', compact('settings', 'runtime', 'checks', 'recentIssues', 'latestCycleSummary', 'healthSymbol'));
+    }
+
     public function alerts(Request $request, Mt5Service $mt5Service)
     {
         $normalizeSymbolForMatch = static function (?string $rawSymbol): string {
@@ -225,9 +352,12 @@ class BotController extends Controller
             });
         }
 
-        // Show only high-quality signal alerts (bot score >= 70) in this page.
+        // Keep the page focused, but never hide diagnostic failures.
         $logsQuery->where(function ($query) {
             $query->where('event_type', '!=', 'signal')
+            ->orWhereNotNull('error_message')
+            ->orWhere('status', 'like', '%_rejected')
+            ->orWhereIn('status', ['quote_error', 'invalid_quote'])
                 ->orWhere('meta_payload->bot_score', '>=', 70);
         });
 
@@ -337,7 +467,22 @@ class BotController extends Controller
             $closingDealsByPosition = [];
         }
 
-        $recentLogs->getCollection()->transform(static function (BotTradeLog $log) use (&$tradeBuckets, &$closingDealsBySymbol, &$closingDealsByPosition, $normalizeSymbolForMatch) {
+        $buildReasoning = static function (?string $aiSummary, ?string $message, ?string $errorMessage): string {
+            $parts = [];
+
+            foreach ([$aiSummary, $message, $errorMessage] as $value) {
+                $text = trim((string) $value);
+                if ($text === '' || in_array($text, $parts, true)) {
+                    continue;
+                }
+
+                $parts[] = $text;
+            }
+
+            return implode("\n", $parts);
+        };
+
+        $recentLogs->getCollection()->transform(static function (BotTradeLog $log) use (&$tradeBuckets, &$closingDealsBySymbol, &$closingDealsByPosition, $normalizeSymbolForMatch, $buildReasoning) {
             $delta = is_numeric($log->signal_delta_pips) ? abs((float) $log->signal_delta_pips) : null;
             $spread = is_numeric($log->spread_pips) ? (float) $log->spread_pips : null;
             $metaPayload = is_array($log->meta_payload) ? $log->meta_payload : [];
@@ -449,7 +594,7 @@ class BotController extends Controller
                 $log->trade_outcome = 'NOT_OPENED';
             }
 
-            $log->alert_reasoning = trim((string) ($log->ai_summary ?: $log->message ?: $log->error_message ?: ''));
+            $log->alert_reasoning = $buildReasoning($log->ai_summary, $log->message, $log->error_message);
             $log->bot_score = max(0, min(100, $botScore));
 
             return $log;
@@ -631,5 +776,25 @@ class BotController extends Controller
 
             return $history;
         });
+    }
+
+    private function resolveHealthBotProfile(AppSetting $settings): array
+    {
+        $profiles = is_array($settings->bot_profiles ?? null)
+            ? array_values(array_filter($settings->bot_profiles, static fn ($profile) => is_array($profile) && (bool) ($profile['enabled'] ?? true)))
+            : [];
+
+        $latestBotKey = (string) (BotTradeLog::query()->latest()->value('bot_key') ?? '');
+        if ($latestBotKey !== '') {
+            foreach ($profiles as $profile) {
+                $profileKey = (string) ($profile['key'] ?? '');
+                $profileName = (string) ($profile['name'] ?? '');
+                if ($profileKey === $latestBotKey || $profileName === $latestBotKey) {
+                    return $profile;
+                }
+            }
+        }
+
+        return $profiles[0] ?? [];
     }
 }

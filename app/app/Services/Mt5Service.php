@@ -362,8 +362,8 @@ class Mt5Service
     {
         [, , $accountId, $client] = $this->metaApiContext();
 
-        $symbol = trim($symbol);
-        if ($symbol === '') {
+        $requested = strtoupper(str_replace('/', '', trim($symbol)));
+        if ($requested === '') {
             throw new RuntimeException('Symbol is required to fetch candles.');
         }
 
@@ -373,21 +373,33 @@ class Mt5Service
         }
 
         $limit = max(1, min(1000, $limit));
-        $encodedSymbol = rawurlencode($symbol);
         $encodedTimeframe = rawurlencode($timeframe);
+        $candidateSymbols = $this->buildTradeSymbolCandidates($client, $accountId, $requested);
 
-        $response = $client->get(
-            "/users/current/accounts/{$accountId}/symbols/{$encodedSymbol}/candles/{$encodedTimeframe}",
-            ['query' => ['limit' => $limit]]
-        );
+        $lastError = null;
+        foreach ($candidateSymbols as $candidateSymbol) {
+            $encodedSymbol = rawurlencode($candidateSymbol);
 
-        $decoded = json_decode((string) $response->getBody(), true);
+            try {
+                $response = $client->get(
+                    "/users/current/accounts/{$accountId}/symbols/{$encodedSymbol}/candles/{$encodedTimeframe}",
+                    ['query' => ['limit' => $limit]]
+                );
 
-        if (!is_array($decoded)) {
-            return [];
+                $decoded = json_decode((string) $response->getBody(), true);
+
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+            } catch (\Throwable $e) {
+                $lastError = $e->getMessage();
+            }
         }
 
-        return $decoded;
+        $detail = $lastError ? ' '.$lastError : '';
+        throw new RuntimeException(
+            'Unable to fetch candles for symbol '.$requested.' timeframe '.$timeframe.'. Tried: '.implode(', ', $candidateSymbols).'.'.$detail
+        );
     }
 
     /**

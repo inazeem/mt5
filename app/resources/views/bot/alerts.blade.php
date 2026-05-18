@@ -22,6 +22,10 @@
                                 Clear Alerts
                             </button>
                         </form>
+                        <a href="{{ route('bot.health') }}"
+                           class="inline-flex items-center px-3 py-1.5 bg-amber-500 text-white text-xs font-semibold rounded hover:bg-amber-600">
+                            Bot Health
+                        </a>
                         <a href="{{ route('bot.analytics') }}"
                            class="inline-flex items-center px-3 py-1.5 bg-gray-200 text-gray-700 text-xs font-semibold rounded hover:bg-gray-300">
                             Back to Analytics

@@ -222,6 +222,18 @@ Artisan::command('mt5:auto-forex
                 'event_type' => 'guardrail',
                 'status' => 'session_block',
                 'message' => $msg,
+                'meta_payload' => [
+                    'session_start_utc' => $sessionStartUtc,
+                    'session_end_utc' => $sessionEndUtc,
+                    'current_hour_utc' => $currentHourUtc,
+                    'in_session' => false,
+                    'test_mode' => $testMode,
+                    'scalper_mode' => $scalperMode,
+                    'trend_filter' => $useTrendFilter,
+                    'ai_confirm' => $useAiConfirm,
+                    'max_symbols' => $maxSymbols,
+                    'max_per_cycle' => $maxPerCycle,
+                ],
             ]));
             return 0;
         }
@@ -647,6 +659,7 @@ Artisan::command('mt5:auto-forex
                     }
                 } catch (\Throwable $e) {
                     Log::warning('Auto bot trend filter failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
+                    $this->warn("  {$symbol}: trend filter data unavailable - {$e->getMessage()}");
                     $logSignal([
                         'status' => 'trend_rejected',
                         'symbol' => $symbol,
@@ -656,6 +669,7 @@ Artisan::command('mt5:auto-forex
                         'error_message' => $e->getMessage(),
                         'meta_payload' => [
                             'trend_filter' => true,
+                            'trend_timeframes' => ['15m', '5m'],
                         ],
                         'message' => 'Signal rejected because trend filter data was unavailable.',
                     ]);
@@ -891,6 +905,35 @@ Artisan::command('mt5:auto-forex
             .' cooldown='.$skippedCooldown
             .' hasOpen='.$skippedOpen
         );
+
+        BotTradeLog::query()->create(array_merge($botLogDefaults, [
+            'event_type' => 'guardrail',
+            'status' => 'cycle_complete',
+            'message' => 'Cycle complete with diagnostic counters recorded.',
+            'meta_payload' => [
+                'scanned' => $scanned,
+                'opened' => $opened,
+                'skipped_no_move' => $skippedNoMove,
+                'skipped_spread' => $skippedSpread,
+                'skipped_low_score' => $skippedLowScore,
+                'skipped_low_volume' => $skippedLowVolume,
+                'skipped_cooldown' => $skippedCooldown,
+                'skipped_open_position' => $skippedOpen,
+                'session_start_utc' => $sessionStartUtc,
+                'session_end_utc' => $sessionEndUtc,
+                'current_hour_utc' => $currentHourUtc,
+                'in_session' => $inSession,
+                'test_mode' => $testMode,
+                'scalper_mode' => $scalperMode,
+                'trend_filter' => $useTrendFilter,
+                'ai_confirm' => $useAiConfirm,
+                'max_symbols' => $maxSymbols,
+                'max_per_cycle' => $maxPerCycle,
+                'max_open_positions' => $maxOpenPositions,
+                'min_move_pips' => $minMovePips,
+                'max_spread_pips' => $maxSpreadPips,
+            ],
+        ]));
 
         return 0;
     };

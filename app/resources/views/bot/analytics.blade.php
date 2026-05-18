@@ -171,6 +171,10 @@
                         <p class="text-sm text-gray-500">Detailed logs and filters moved to a dedicated page to keep analytics lightweight.</p>
                     </div>
                     <div class="flex gap-2">
+                        <a href="{{ route('bot.health') }}"
+                           class="inline-flex items-center px-3 py-1.5 bg-amber-500 text-white text-xs font-semibold rounded hover:bg-amber-600">
+                            Bot Health
+                        </a>
                         <a href="{{ route('bot.alerts') }}"
                            class="inline-flex items-center px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700">
                             Open Alerts

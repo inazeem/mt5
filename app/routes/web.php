@@ -27,6 +27,7 @@ Route::middleware(['auth', 'owner'])->group(function () {
     Route::get('/bot', [BotController::class, 'index'])->name('bot.index');
     Route::get('/bot/analytics', [BotController::class, 'analytics'])->name('bot.analytics');
     Route::get('/bot/analytics/live', [BotController::class, 'analyticsLive'])->name('bot.analytics.live');
+    Route::get('/bot/health', [BotController::class, 'health'])->name('bot.health');
     Route::get('/bot/alerts', [BotController::class, 'alerts'])->name('bot.alerts');
     Route::post('/bot/alerts/clear', [BotController::class, 'clearAlerts'])->name('bot.alerts.clear');
     Route::get('/bot/analytics/export', [BotController::class, 'exportCsv'])->name('bot.analytics.export');
