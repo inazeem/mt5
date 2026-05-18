@@ -560,11 +560,14 @@ class BotController extends Controller
         $todayStart = now()->startOfDay();
         $todayLogs = BotTradeLog::query()->where('created_at', '>=', $todayStart);
 
+        $signalLogs = (clone $todayLogs)->where('event_type', 'signal');
+        $visibleSignalLogs = (clone $signalLogs)->where('meta_payload->bot_score', '>=', 70);
+
         $stats = [
             'active_positions' => count($positions),
-            'today_signals' => (clone $todayLogs)->where('event_type', 'signal')->count(),
+            'today_signals' => (clone $visibleSignalLogs)->count(),
             'today_opened' => (clone $todayLogs)->where('event_type', 'trade_open')->where('status', 'success')->count(),
-            'today_rejected_ai' => (clone $todayLogs)->where('event_type', 'signal')->where('status', 'ai_rejected')->count(),
+            'today_rejected_ai' => (clone $visibleSignalLogs)->where('status', 'ai_rejected')->count(),
             'today_failed' => (clone $todayLogs)->where('event_type', 'trade_open')->where('status', 'failed')->count(),
             'today_trailing_updates' => (clone $todayLogs)->where('event_type', 'trailing_update')->where('status', 'success')->count(),
         ];
