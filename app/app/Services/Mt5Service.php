@@ -21,6 +21,7 @@ use RuntimeException;
 class Mt5Service
 {
     private const BASE_URL = 'https://mt-client-api-v1.{region}.agiliumtrade.ai';
+    private const MARKET_DATA_BASE_URL = 'https://mt-market-data-client-api-v1.{region}.agiliumtrade.ai';
     private const COMMON_SPREAD_BET_SUFFIXES = ['_SB', '_sb'];
     private const COMMON_PEPPERSTONE_SUFFIXES = ['', '.a', '.m', '.r', '.pro', '.c', 'a', 'm', 'r', 'pro', 'c'];
     private const HISTORY_DEALS_CACHE_SECONDS = 60;
@@ -360,7 +361,7 @@ class Mt5Service
      */
     public function getCandles(string $symbol, string $timeframe = '1h', int $limit = 20): array
     {
-        [, , $accountId, $client] = $this->metaApiContext();
+        [$settings, $metaApiToken, $accountId, $client] = $this->metaApiContext();
 
         $requested = strtoupper(str_replace('/', '', trim($symbol)));
         if ($requested === '') {
@@ -374,6 +375,7 @@ class Mt5Service
 
         $limit = max(1, min(1000, $limit));
         $encodedTimeframe = rawurlencode($timeframe);
+        $marketDataClient = $this->marketDataClient($metaApiToken, (string) ($settings->metaapi_region ?? 'new-york'));
         $candidateSymbols = $this->buildTradeSymbolCandidates($client, $accountId, $requested);
 
         $lastError = null;
@@ -381,8 +383,8 @@ class Mt5Service
             $encodedSymbol = rawurlencode($candidateSymbol);
 
             try {
-                $response = $client->get(
-                    "/users/current/accounts/{$accountId}/symbols/{$encodedSymbol}/candles/{$encodedTimeframe}",
+                $response = $marketDataClient->get(
+                    "/users/current/accounts/{$accountId}/historical-market-data/symbols/{$encodedSymbol}/timeframes/{$encodedTimeframe}/candles",
                     ['query' => ['limit' => $limit]]
                 );
 
@@ -1126,19 +1128,41 @@ class Mt5Service
 
         $this->assertMetaApiSettings($metaApiToken, $metaApiAccountId);
 
-        $baseUrl = str_replace('{region}', $metaApiRegion, self::BASE_URL);
+        $client = $this->metaApiClient($metaApiToken, $metaApiRegion);
 
-        $client = new Client([
-            'base_uri' => $baseUrl,
-            'timeout'  => 45,
+        return [$settings, $metaApiToken, $metaApiAccountId, $client];
+    }
+
+    /**
+     * Build a MetaApi client for trading terminal and execution endpoints.
+     */
+    private function metaApiClient(string $metaApiToken, string $metaApiRegion): Client
+    {
+        return new Client([
+            'base_uri' => str_replace('{region}', $metaApiRegion, self::BASE_URL),
+            'timeout' => 45,
             'connect_timeout' => 10,
-            'headers'  => [
-                'auth-token'   => $metaApiToken,
+            'headers' => [
+                'auth-token' => $metaApiToken,
                 'Content-Type' => 'application/json',
             ],
         ]);
+    }
 
-        return [$settings, $metaApiToken, $metaApiAccountId, $client];
+    /**
+     * Build a MetaApi market-data client for historical candles/ticks endpoints.
+     */
+    private function marketDataClient(string $metaApiToken, string $metaApiRegion): Client
+    {
+        return new Client([
+            'base_uri' => str_replace('{region}', $metaApiRegion, self::MARKET_DATA_BASE_URL),
+            'timeout' => 45,
+            'connect_timeout' => 10,
+            'headers' => [
+                'auth-token' => $metaApiToken,
+                'Content-Type' => 'application/json',
+            ],
+        ]);
     }
 
     /**
