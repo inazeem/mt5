@@ -22,8 +22,8 @@ class Mt5Service
 {
     private const BASE_URL = 'https://mt-client-api-v1.{region}.agiliumtrade.ai';
     private const MARKET_DATA_BASE_URL = 'https://mt-market-data-client-api-v1.{region}.agiliumtrade.ai';
-    private const COMMON_SPREAD_BET_SUFFIXES = ['_SB', '_sb'];
-    private const COMMON_PEPPERSTONE_SUFFIXES = ['', '.a', '.m', '.r', '.pro', '.c', 'a', 'm', 'r', 'pro', 'c'];
+    private const COMMON_SPREAD_BET_SUFFIXES = ['_SB'];
+    private const COMMON_PEPPERSTONE_SUFFIXES = ['_SB'];
     private const HISTORY_DEALS_CACHE_SECONDS = 60;
     private const HISTORY_DEALS_STALE_CACHE_MINUTES = 15;
     private const HISTORY_DEALS_MAX_RETRIES = 3;
@@ -269,7 +269,7 @@ class Mt5Service
             throw new RuntimeException('Symbol is required to fetch current ticker price.');
         }
 
-        $candidateSymbols = $this->buildTradeSymbolCandidates($client, $accountId, $requested);
+        $candidateSymbols = $this->buildQuoteSymbolCandidates($client, $accountId, $requested);
 
         $quote = null;
         $resolvedSymbol = null;
@@ -940,7 +940,64 @@ class Mt5Service
             }
 
             $upper = strtoupper($candidate);
-            $normalized[$upper] = $candidate;
+            if (!isset($normalized[$upper])) {
+                $normalized[$upper] = $candidate;
+            }
+        }
+
+        return array_values($normalized);
+    }
+
+    /**
+     * Build ordered candidate symbols for quote/current-price requests.
+     *
+     * Keep spread-bet variants first and avoid bare broker suffixes like
+     * "EURUSDc" which are noisy for this account setup.
+     *
+     * @param Client $client Configured MetaApi HTTP client.
+     * @param string $accountId MetaApi account id.
+     * @param string $symbol Requested user symbol.
+     * @return array<int, string>
+     */
+    private function buildQuoteSymbolCandidates(Client $client, string $accountId, string $symbol): array
+    {
+        $requested = strtoupper(str_replace('/', '', trim($symbol)));
+        if ($requested === '') {
+            return [];
+        }
+
+        $baseRequested = str_ends_with($requested, '_SB') ? substr($requested, 0, -3) : $requested;
+        $candidates = [];
+        $isPlainFxPair = preg_match('/^[A-Z]{6}$/', $requested) === 1;
+
+        foreach (self::COMMON_SPREAD_BET_SUFFIXES as $suffix) {
+            $candidates[] = $baseRequested.$suffix;
+        }
+
+        // For plain FX symbols, keep quote lookups strict to spread-bet variants.
+        if (!$isPlainFxPair) {
+            $candidates[] = $requested;
+        }
+
+        $resolved = $this->resolveBrokerSymbol($client, $accountId, $requested);
+        if ($resolved !== '' && (!$isPlainFxPair || $this->isSpreadBetSymbol($resolved))) {
+            $candidates[] = $resolved;
+        }
+
+        if (!$isPlainFxPair) {
+            $candidates[] = $baseRequested;
+        }
+
+        $normalized = [];
+        foreach ($candidates as $candidate) {
+            if (!is_string($candidate) || trim($candidate) === '') {
+                continue;
+            }
+
+            $upper = strtoupper($candidate);
+            if (!isset($normalized[$upper])) {
+                $normalized[$upper] = $candidate;
+            }
         }
 
         return array_values($normalized);
