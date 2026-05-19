@@ -376,7 +376,7 @@ class Mt5Service
         $limit = max(1, min(1000, $limit));
         $encodedTimeframe = rawurlencode($timeframe);
         $marketDataClient = $this->marketDataClient($metaApiToken, (string) ($settings->metaapi_region ?? 'new-york'));
-        $candidateSymbols = $this->buildTradeSymbolCandidates($client, $accountId, $requested);
+        $candidateSymbols = $this->buildCandleSymbolCandidates($client, $accountId, $requested);
 
         $lastError = null;
         foreach ($candidateSymbols as $candidateSymbol) {
@@ -932,6 +932,75 @@ class Mt5Service
         }
 
         $candidates[] = $requested;
+
+        $normalized = [];
+        foreach ($candidates as $candidate) {
+            if (!is_string($candidate) || trim($candidate) === '') {
+                continue;
+            }
+
+            $upper = strtoupper($candidate);
+            $normalized[$upper] = $candidate;
+        }
+
+        return array_values($normalized);
+    }
+
+    /**
+     * Build ordered candidate symbols for candle/history requests.
+     *
+     * Historical-market-data can differ from tradable symbol naming
+     * (for example, base pair candles may exist while *_SB candles do not).
+     *
+     * @param Client $client Configured MetaApi HTTP client.
+     * @param string $accountId MetaApi account id.
+     * @param string $symbol Requested user symbol.
+     * @return array<int, string>
+     */
+    private function buildCandleSymbolCandidates(Client $client, string $accountId, string $symbol): array
+    {
+        $requested = strtoupper(str_replace('/', '', trim($symbol)));
+        if ($requested === '') {
+            return [];
+        }
+
+        $baseRequested = $this->baseSymbol($requested);
+        $candidates = [];
+
+        // Candle endpoints may reject spread-bet suffixes, so try base first.
+        $candidates[] = $baseRequested;
+        $candidates[] = $requested;
+
+        try {
+            $response = $client->get("/users/current/accounts/{$accountId}/symbols");
+            $decoded = json_decode((string) $response->getBody(), true);
+            $availableSymbols = $this->extractSymbolNames($decoded);
+
+            if (!empty($availableSymbols)) {
+                $preferred = $this->pickBestSymbolForPair($baseRequested, $availableSymbols);
+                if ($preferred !== null && $preferred !== '') {
+                    $candidates[] = $preferred;
+                }
+
+                foreach ($availableSymbols as $availableSymbol) {
+                    if (!is_string($availableSymbol) || $availableSymbol === '') {
+                        continue;
+                    }
+
+                    $availableUpper = strtoupper($availableSymbol);
+                    if ($this->baseSymbol($availableUpper) === $baseRequested && !$this->isSpreadBetSymbol($availableUpper)) {
+                        $candidates[] = $availableSymbol;
+                    }
+                }
+            }
+        } catch (\Throwable) {
+            // Keep best-effort local candidates when discovery fails.
+        }
+
+        foreach ($this->buildTradeSymbolCandidates($client, $accountId, $requested) as $tradeCandidate) {
+            $candidates[] = $tradeCandidate;
+            $candidates[] = $this->baseSymbol($tradeCandidate);
+        }
 
         $normalized = [];
         foreach ($candidates as $candidate) {
