@@ -1086,4 +1086,399 @@ Artisan::command('mt5:auto-forex
     }
 })->purpose('Run automated forex trading with TP/SL and trailing stop on MetaApi');
 
+Artisan::command('mt5:learn-policy
+    {--bot= : Bot profile key/name to tune}
+    {--lookback-days=30 : Number of days to analyze}
+    {--min-resolved=20 : Minimum resolved trades needed before applying changes}
+    {--apply : Apply recommendation to selected bot profile}
+', function (Mt5Service $mt5Service) {
+    $settings = AppSetting::singleton();
+    $lookbackDays = max(7, (int) $this->option('lookback-days'));
+    $minResolved = max(10, (int) $this->option('min-resolved'));
+    $apply = (bool) $this->option('apply');
+
+    $profiles = is_array($settings->bot_profiles) ? $settings->bot_profiles : [];
+    $hasStoredProfiles = !empty($profiles);
+    if (!$hasStoredProfiles) {
+        $profiles = [[
+            'key' => 'default',
+            'name' => 'Default Bot',
+            'enabled' => true,
+        ]];
+    }
+
+    $selectedBot = strtolower(trim((string) $this->option('bot')));
+    if ($selectedBot === '') {
+        $latestBotKey = strtolower((string) (BotTradeLog::query()->latest()->value('bot_key') ?? ''));
+        $selectedBot = $latestBotKey !== '' ? $latestBotKey : strtolower((string) ($profiles[0]['key'] ?? ''));
+    }
+
+    $profileIndex = collect($profiles)->search(static function (array $profile) use ($selectedBot): bool {
+        $key = strtolower((string) ($profile['key'] ?? ''));
+        $name = strtolower((string) ($profile['name'] ?? ''));
+        return $key === $selectedBot || $name === $selectedBot;
+    });
+
+    if ($profileIndex === false) {
+        $this->error('Bot profile not found for selector: '.$selectedBot);
+        return 1;
+    }
+
+    $profile = $profiles[$profileIndex];
+    $botKey = (string) ($profile['key'] ?? 'default');
+    $botName = (string) ($profile['name'] ?? $botKey);
+    $botLogDefaults = [
+        'bot_key' => $botKey,
+        'bot_name' => $botName,
+    ];
+
+    $normalizeSymbolForMatch = static function (?string $rawSymbol): string {
+        $symbol = strtoupper(trim((string) $rawSymbol));
+        if ($symbol === '') {
+            return '';
+        }
+
+        $symbol = preg_replace('/[^A-Z0-9._-]/', '', $symbol) ?? '';
+        foreach (['.', '_', '-'] as $separator) {
+            if (str_contains($symbol, $separator)) {
+                $symbol = explode($separator, $symbol)[0] ?? $symbol;
+                break;
+            }
+        }
+
+        if (preg_match('/^[A-Z]{6}/', $symbol, $matches) === 1) {
+            return $matches[0];
+        }
+
+        return $symbol;
+    };
+
+    $from = now()->subDays($lookbackDays);
+    $signals = BotTradeLog::query()
+        ->where('bot_key', $botKey)
+        ->where('event_type', 'signal')
+        ->where('status', 'confirmed')
+        ->where('created_at', '>=', $from)
+        ->orderBy('created_at')
+        ->get();
+
+    if ($signals->isEmpty()) {
+        $this->warn('No confirmed signals found in lookback window.');
+        return 0;
+    }
+
+    $symbols = $signals
+        ->pluck('symbol')
+        ->filter()
+        ->map(static fn ($symbol) => strtoupper((string) $symbol))
+        ->unique()
+        ->values();
+
+    $tradeCandidates = BotTradeLog::query()
+        ->where('bot_key', $botKey)
+        ->where('event_type', 'trade_open')
+        ->where('created_at', '>=', $from)
+        ->when($symbols->isNotEmpty(), static fn ($query) => $query->whereIn('symbol', $symbols->all()))
+        ->orderBy('created_at')
+        ->get();
+
+    $tradeBuckets = [];
+    foreach ($tradeCandidates as $tradeLog) {
+        $bucketKey = $normalizeSymbolForMatch((string) ($tradeLog->symbol ?? ''))
+            .'|'.strtolower((string) ($tradeLog->side ?? ''))
+            .'|'.strtolower((string) ($tradeLog->bot_key ?? $tradeLog->bot_name ?? 'default'));
+        if (!isset($tradeBuckets[$bucketKey])) {
+            $tradeBuckets[$bucketKey] = [];
+        }
+        $tradeBuckets[$bucketKey][] = $tradeLog;
+    }
+
+    $deals = [];
+    try {
+        $deals = $mt5Service->getHistoryDeals($from->copy()->subDays(2), now());
+    } catch (\Throwable $e) {
+        $this->warn('History deals unavailable: '.$e->getMessage());
+    }
+
+    $closingDealsBySymbol = [];
+    $closingDealsByPosition = [];
+    foreach ($deals as $deal) {
+        if (!is_array($deal)) {
+            continue;
+        }
+
+        $entry = strtoupper((string) ($deal['entryType'] ?? $deal['entry'] ?? ''));
+        if (!str_contains($entry, 'OUT')) {
+            continue;
+        }
+
+        $timeRaw = $deal['brokerTime'] ?? $deal['time'] ?? null;
+        if (!$timeRaw) {
+            continue;
+        }
+
+        try {
+            $dealTime = \Carbon\Carbon::parse((string) $timeRaw);
+        } catch (\Throwable) {
+            continue;
+        }
+
+        $record = [
+            'time' => $dealTime,
+            'profit' => (float) ($deal['profit'] ?? 0),
+            'used' => false,
+        ];
+
+        $symbolKey = $normalizeSymbolForMatch((string) ($deal['symbol'] ?? ''));
+        if ($symbolKey !== '') {
+            $closingDealsBySymbol[$symbolKey][] = $record;
+        }
+
+        $positionId = trim((string) ($deal['positionId'] ?? $deal['position_id'] ?? ''));
+        if ($positionId !== '') {
+            $closingDealsByPosition[$positionId][] = $record;
+        }
+    }
+
+    foreach ($closingDealsBySymbol as $symbolKey => $symbolDeals) {
+        usort($symbolDeals, static fn ($a, $b) => $a['time']->lessThan($b['time']) ? -1 : 1);
+        $closingDealsBySymbol[$symbolKey] = $symbolDeals;
+    }
+    foreach ($closingDealsByPosition as $positionId => $positionDeals) {
+        usort($positionDeals, static fn ($a, $b) => $a['time']->lessThan($b['time']) ? -1 : 1);
+        $closingDealsByPosition[$positionId] = $positionDeals;
+    }
+
+    $resolved = [];
+    foreach ($signals as $signal) {
+        $bucketKey = $normalizeSymbolForMatch((string) ($signal->symbol ?? ''))
+            .'|'.strtolower((string) ($signal->side ?? ''))
+            .'|'.strtolower((string) ($signal->bot_key ?? $signal->bot_name ?? 'default'));
+
+        $candidateTrades = $tradeBuckets[$bucketKey] ?? [];
+        $matchedTrade = null;
+        foreach ($candidateTrades as $idx => $trade) {
+            if ($trade->created_at?->lt($signal->created_at)) {
+                continue;
+            }
+            if ($trade->created_at?->gt($signal->created_at?->copy()->addMinutes(30))) {
+                break;
+            }
+
+            $matchedTrade = $trade;
+            unset($tradeBuckets[$bucketKey][$idx]);
+            break;
+        }
+
+        if (!$matchedTrade || $matchedTrade->status !== 'success') {
+            continue;
+        }
+
+        $tradeResponse = is_array($matchedTrade->meta_response) ? $matchedTrade->meta_response : [];
+        $firstOrder = is_array($tradeResponse['orders'][0] ?? null) ? $tradeResponse['orders'][0] : [];
+        $response = is_array($firstOrder['response'] ?? null) ? $firstOrder['response'] : [];
+        $positionId = trim((string) ($response['positionId'] ?? ''));
+
+        $profit = null;
+        if ($positionId !== '' && isset($closingDealsByPosition[$positionId])) {
+            foreach ($closingDealsByPosition[$positionId] as $dealIdx => $deal) {
+                if (($deal['used'] ?? false) === true) {
+                    continue;
+                }
+                if ($deal['time']->lt($matchedTrade->created_at)) {
+                    continue;
+                }
+                if ($deal['time']->gt($matchedTrade->created_at->copy()->addDays(7))) {
+                    break;
+                }
+
+                $closingDealsByPosition[$positionId][$dealIdx]['used'] = true;
+                $profit = (float) ($deal['profit'] ?? 0);
+                break;
+            }
+        }
+
+        if ($profit === null) {
+            $symbolKey = $normalizeSymbolForMatch((string) ($signal->symbol ?? ''));
+            if ($symbolKey !== '' && isset($closingDealsBySymbol[$symbolKey])) {
+                foreach ($closingDealsBySymbol[$symbolKey] as $dealIdx => $deal) {
+                    if (($deal['used'] ?? false) === true) {
+                        continue;
+                    }
+                    if ($deal['time']->lt($matchedTrade->created_at)) {
+                        continue;
+                    }
+                    if ($deal['time']->gt($matchedTrade->created_at->copy()->addDays(7))) {
+                        break;
+                    }
+
+                    $closingDealsBySymbol[$symbolKey][$dealIdx]['used'] = true;
+                    $profit = (float) ($deal['profit'] ?? 0);
+                    break;
+                }
+            }
+        }
+
+        if ($profit === null) {
+            continue;
+        }
+
+        $metaPayload = is_array($signal->meta_payload) ? $signal->meta_payload : [];
+        $botScore = is_numeric($metaPayload['bot_score'] ?? null) ? (int) $metaPayload['bot_score'] : null;
+
+        $resolved[] = [
+            'time' => $signal->created_at,
+            'hour' => (int) $signal->created_at?->copy()->utc()->format('G'),
+            'symbol' => strtoupper((string) ($signal->symbol ?? '')),
+            'profit' => $profit,
+            'bot_score' => $botScore,
+        ];
+    }
+
+    $resolvedCount = count($resolved);
+    if ($resolvedCount < $minResolved) {
+        $this->warn("Resolved trades ({$resolvedCount}) below minimum {$minResolved}; recommendation will be informational only.");
+    }
+
+    $currentMinScore = isset($profile['min_bot_score']) ? (int) $profile['min_bot_score'] : 70;
+    $scoreCandidates = [80, 85, 90, 92, 95];
+    $scoreStats = [];
+    $bestScore = $currentMinScore;
+    $bestScoreNet = PHP_FLOAT_MIN;
+
+    foreach ($scoreCandidates as $candidate) {
+        $rows = array_values(array_filter($resolved, static fn (array $row): bool => is_numeric($row['bot_score']) && (int) $row['bot_score'] >= $candidate));
+        if (count($rows) < max(10, (int) floor($minResolved / 2))) {
+            continue;
+        }
+
+        $net = array_sum(array_column($rows, 'profit'));
+        $wins = count(array_filter($rows, static fn (array $row): bool => (float) $row['profit'] > 0));
+        $count = count($rows);
+        $scoreStats[] = [
+            'candidate' => $candidate,
+            'count' => $count,
+            'net_pnl' => round($net, 2),
+            'win_rate' => round(($wins * 100) / max(1, $count), 1),
+        ];
+
+        if ($net > $bestScoreNet) {
+            $bestScoreNet = $net;
+            $bestScore = $candidate;
+        }
+    }
+
+    $hourBuckets = [];
+    foreach ($resolved as $row) {
+        $hour = (int) ($row['hour'] ?? -1);
+        if ($hour < 0 || $hour > 23) {
+            continue;
+        }
+
+        if (!isset($hourBuckets[$hour])) {
+            $hourBuckets[$hour] = [];
+        }
+        $hourBuckets[$hour][] = $row;
+    }
+
+    $preferredHours = [];
+    $blockedHours = [];
+    foreach ($hourBuckets as $hour => $rows) {
+        $count = count($rows);
+        if ($count < 5) {
+            continue;
+        }
+
+        $net = array_sum(array_column($rows, 'profit'));
+        $wins = count(array_filter($rows, static fn (array $row): bool => (float) $row['profit'] > 0));
+        $winRate = ($wins * 100.0) / max(1, $count);
+
+        if ($net > 0 && $winRate >= 45.0) {
+            $preferredHours[] = ['hour' => $hour, 'net' => $net, 'count' => $count];
+        }
+        if ($net < -20 && $winRate < 40.0) {
+            $blockedHours[] = $hour;
+        }
+    }
+
+    usort($preferredHours, static fn (array $a, array $b): int => $b['net'] <=> $a['net']);
+    $preferredHours = array_values(array_map(static fn (array $row): int => (int) $row['hour'], array_slice($preferredHours, 0, 4)));
+    sort($blockedHours);
+    $blockedHours = array_values(array_unique($blockedHours));
+
+    $symbolBuckets = [];
+    foreach ($resolved as $row) {
+        $symbol = strtoupper((string) ($row['symbol'] ?? ''));
+        if ($symbol === '') {
+            continue;
+        }
+        if (!isset($symbolBuckets[$symbol])) {
+            $symbolBuckets[$symbol] = [];
+        }
+        $symbolBuckets[$symbol][] = $row;
+    }
+
+    $preferredSymbols = [];
+    foreach ($symbolBuckets as $symbol => $rows) {
+        $count = count($rows);
+        if ($count < 5) {
+            continue;
+        }
+        $net = array_sum(array_column($rows, 'profit'));
+        if ($net <= 0) {
+            continue;
+        }
+
+        $preferredSymbols[] = ['symbol' => $symbol, 'net' => $net];
+    }
+    usort($preferredSymbols, static fn (array $a, array $b): int => $b['net'] <=> $a['net']);
+    $preferredSymbols = array_values(array_map(static fn (array $row): string => $row['symbol'], array_slice($preferredSymbols, 0, 4)));
+
+    $recommendation = [
+        'min_bot_score' => $bestScore,
+        'preferred_hours_utc' => $preferredHours,
+        'blocked_hours_utc' => $blockedHours,
+        'preferred_symbols' => $preferredSymbols,
+    ];
+
+    $this->info("Auto-learning summary for {$botName} ({$botKey})");
+    $this->line("Lookback days: {$lookbackDays}");
+    $this->line("Resolved trades: {$resolvedCount}");
+    $this->line('Recommended min_bot_score: '.$recommendation['min_bot_score']);
+    $this->line('Recommended preferred_hours_utc: '.(!empty($recommendation['preferred_hours_utc']) ? implode(',', $recommendation['preferred_hours_utc']) : 'none'));
+    $this->line('Recommended blocked_hours_utc: '.(!empty($recommendation['blocked_hours_utc']) ? implode(',', $recommendation['blocked_hours_utc']) : 'none'));
+    $this->line('Recommended preferred_symbols: '.(!empty($recommendation['preferred_symbols']) ? implode(',', $recommendation['preferred_symbols']) : 'none'));
+
+    $applied = false;
+    if ($apply && $resolvedCount >= $minResolved) {
+        $profiles[$profileIndex] = array_merge($profiles[$profileIndex], $recommendation);
+        $settings->bot_profiles = $profiles;
+        $settings->save();
+        $applied = true;
+        $this->info($hasStoredProfiles
+            ? 'Recommendation applied to bot profile.'
+            : 'Recommendation applied and default bot profile created.');
+    } elseif ($apply) {
+        $this->warn('Apply flag ignored because resolved trades are below minimum threshold.');
+    }
+
+    BotTradeLog::query()->create(array_merge($botLogDefaults, [
+        'event_type' => 'guardrail',
+        'status' => 'policy_recommendation',
+        'message' => $applied
+            ? 'Auto-learning policy recommendation generated and applied.'
+            : 'Auto-learning policy recommendation generated (shadow mode).',
+        'meta_payload' => [
+            'lookback_days' => $lookbackDays,
+            'min_resolved' => $minResolved,
+            'resolved_trades' => $resolvedCount,
+            'score_stats' => $scoreStats,
+            'recommendation' => $recommendation,
+            'applied' => $applied,
+        ],
+    ]));
+
+    return 0;
+})->purpose('Learn bot policy recommendations from recent resolved trades.');
+
 Schedule::command('mt5:auto-forex --once')->everyMinute()->withoutOverlapping();
