@@ -30,7 +30,7 @@
                            class="inline-flex items-center px-3 py-1.5 bg-gray-200 text-gray-700 text-xs font-semibold rounded hover:bg-gray-300">
                             Back to Analytics
                         </a>
-                        <a href="{{ route('bot.alerts.export') }}"
+                        <a href="{{ route('bot.alerts.export', request()->query()) }}"
                            class="inline-flex items-center px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded hover:bg-emerald-700">
                             Export CSV
                         </a>

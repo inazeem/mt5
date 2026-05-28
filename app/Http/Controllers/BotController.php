@@ -6,6 +6,7 @@ use App\Models\BotTradeLog;
 use App\Models\AppSetting;
 use App\Services\Mt5Service;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Throwable;
 
@@ -363,13 +364,6 @@ class BotController extends Controller
 
         $recentLogs = $logsQuery->paginate($perPage)->withQueryString();
 
-        $alertsCollection = $recentLogs->getCollection();
-        $symbols = $alertsCollection
-            ->pluck('symbol')
-            ->filter()
-            ->map(static fn ($s) => strtoupper((string) $s))
-            ->unique()
-            ->values();
         $botOptions = BotTradeLog::query()
             ->whereNotNull('bot_key')
             ->select(['bot_key', 'bot_name'])
@@ -377,8 +371,168 @@ class BotController extends Controller
             ->orderBy('bot_name')
             ->get();
 
-        $timeStart = $alertsCollection->min('created_at');
-        $timeEnd = $alertsCollection->max('created_at');
+        $this->enrichAlertLogs($recentLogs->getCollection(), $mt5Service, $botFilter);
+
+        $alertsSummary = [
+            'won' => 0.0,
+            'lost' => 0.0,
+            'net' => 0.0,
+            'resolved_count' => 0,
+        ];
+
+        foreach ($recentLogs->getCollection() as $log) {
+            if (!is_numeric($log->trade_pnl ?? null)) {
+                continue;
+            }
+
+            $pnl = (float) $log->trade_pnl;
+            $alertsSummary['net'] += $pnl;
+            $alertsSummary['resolved_count']++;
+
+            if ($pnl >= 0) {
+                $alertsSummary['won'] += $pnl;
+            } else {
+                $alertsSummary['lost'] += abs($pnl);
+            }
+        }
+
+        return view('bot.alerts', compact('recentLogs', 'dateFrom', 'dateTo', 'eventType', 'symbol', 'botFilter', 'botOptions', 'perPage', 'alertsSummary'));
+    }
+
+    public function exportCsv(Request $request, Mt5Service $mt5Service)
+    {
+        $validated = $request->validate([
+            'date_from'  => ['nullable', 'date'],
+            'date_to'    => ['nullable', 'date'],
+            'event_type' => ['nullable', 'string', 'in:signal,trade_open,trailing_update,guardrail'],
+            'symbol'     => ['nullable', 'string', 'max:20', 'regex:/^[A-Za-z0-9._-]*$/'],
+            'bot'        => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $dateFrom = !empty($validated['date_from']) ? $validated['date_from'] : null;
+        $dateTo = !empty($validated['date_to']) ? $validated['date_to'] : null;
+        $eventType = $validated['event_type'] ?? 'signal';
+        $symbol = !empty($validated['symbol']) ? strtoupper($validated['symbol']) : null;
+        $botFilter = !empty($validated['bot']) ? trim((string) $validated['bot']) : null;
+
+        $logsQuery = BotTradeLog::query()->latest();
+
+        if ($dateFrom) {
+            $logsQuery->whereDate('created_at', '>=', $dateFrom);
+        }
+        if ($dateTo) {
+            $logsQuery->whereDate('created_at', '<=', $dateTo);
+        }
+        if ($eventType) {
+            $logsQuery->where('event_type', $eventType);
+        }
+        if ($symbol) {
+            $logsQuery->where('symbol', 'like', $symbol.'%');
+        }
+        if ($botFilter) {
+            $logsQuery->where(function ($query) use ($botFilter) {
+                $query->where('bot_key', $botFilter)
+                    ->orWhere('bot_name', $botFilter);
+            });
+        }
+
+        $logsQuery->where(function ($query) {
+            $query->where('event_type', '!=', 'signal')
+                ->orWhereNotNull('error_message')
+                ->orWhere('status', 'like', '%_rejected')
+                ->orWhereIn('status', ['quote_error', 'invalid_quote'])
+                ->orWhere('meta_payload->bot_score', '>=', 70);
+        });
+
+        $logs = $logsQuery->get();
+
+        $this->enrichAlertLogs($logs, $mt5Service, $botFilter);
+
+        $headers = [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="bot_trade_logs_'.now()->format('Ymd_His').'.csv"',
+        ];
+
+        $callback = function () use ($logs) {
+            $handle = fopen('php://output', 'w');
+
+            fputcsv($handle, [
+                'id', 'created_at', 'bot_key', 'bot_name', 'event_type', 'status', 'symbol', 'side',
+                'lot_size', 'entry_price', 'stop_loss', 'take_profit',
+                'linked_trade', 'trade_outcome', 'trade_pnl', 'ai_confidence', 'bot_score', 'alert_reasoning',
+                'spread_pips', 'signal_delta_pips', 'ai_provider', 'ai_decision',
+                'ai_summary', 'message', 'error_message',
+            ]);
+
+            foreach ($logs as $log) {
+                fputcsv($handle, [
+                    $log->id,
+                    $log->created_at?->toDateTimeString(),
+                    $log->bot_key,
+                    $log->bot_name,
+                    $log->event_type,
+                    $log->status,
+                    $log->symbol,
+                    $log->side,
+                    $log->lot_size,
+                    $log->entry_price,
+                    $log->stop_loss,
+                    $log->take_profit,
+                    $log->linked_trade,
+                    $log->trade_outcome,
+                    $log->trade_pnl,
+                    $log->ai_confidence,
+                    $log->bot_score,
+                    $log->alert_reasoning,
+                    $log->spread_pips,
+                    $log->signal_delta_pips,
+                    $log->ai_provider,
+                    $log->ai_decision,
+                    $log->ai_summary,
+                    $log->message,
+                    $log->error_message,
+                ]);
+            }
+
+            fclose($handle);
+        };
+
+        return response()->stream($callback, 200, $headers);
+    }
+
+    private function enrichAlertLogs(Collection $logs, Mt5Service $mt5Service, ?string $botFilter = null): Collection
+    {
+        $normalizeSymbolForMatch = static function (?string $rawSymbol): string {
+            $symbol = strtoupper(trim((string) $rawSymbol));
+            if ($symbol === '') {
+                return '';
+            }
+
+            $symbol = preg_replace('/[^A-Z0-9._-]/', '', $symbol) ?? '';
+
+            foreach (['.', '_', '-'] as $separator) {
+                if (str_contains($symbol, $separator)) {
+                    $symbol = explode($separator, $symbol)[0] ?? $symbol;
+                    break;
+                }
+            }
+
+            if (preg_match('/^[A-Z]{6}/', $symbol, $matches) === 1) {
+                return $matches[0];
+            }
+
+            return $symbol;
+        };
+
+        $symbols = $logs
+            ->pluck('symbol')
+            ->filter()
+            ->map(static fn ($symbol) => strtoupper((string) $symbol))
+            ->unique()
+            ->values();
+
+        $timeStart = $logs->min('created_at');
+        $timeEnd = $logs->max('created_at');
 
         $tradeCandidates = collect();
         if ($timeStart && $timeEnd && $symbols->isNotEmpty()) {
@@ -482,12 +636,11 @@ class BotController extends Controller
             return implode("\n", $parts);
         };
 
-        $recentLogs->getCollection()->transform(static function (BotTradeLog $log) use (&$tradeBuckets, &$closingDealsBySymbol, &$closingDealsByPosition, $normalizeSymbolForMatch, $buildReasoning) {
+        return $logs->transform(static function (BotTradeLog $log) use (&$tradeBuckets, &$closingDealsBySymbol, &$closingDealsByPosition, $normalizeSymbolForMatch, $buildReasoning) {
             $delta = is_numeric($log->signal_delta_pips) ? abs((float) $log->signal_delta_pips) : null;
             $spread = is_numeric($log->spread_pips) ? (float) $log->spread_pips : null;
             $metaPayload = is_array($log->meta_payload) ? $log->meta_payload : [];
 
-            // Bot score is a heuristic quality score from signal strength and spread quality.
             if (is_numeric($metaPayload['bot_score'] ?? null)) {
                 $botScore = (int) $metaPayload['bot_score'];
             } else {
@@ -525,9 +678,9 @@ class BotController extends Controller
                 $positionId = null;
                 if (is_array($tradeResponse)) {
                     $firstOrder = is_array($tradeResponse['orders'][0] ?? null) ? $tradeResponse['orders'][0] : null;
-                    $resp = is_array($firstOrder['response'] ?? null) ? $firstOrder['response'] : [];
-                    $orderId = $resp['orderId'] ?? null;
-                    $positionId = $resp['positionId'] ?? null;
+                    $response = is_array($firstOrder['response'] ?? null) ? $firstOrder['response'] : [];
+                    $orderId = $response['orderId'] ?? null;
+                    $positionId = $response['positionId'] ?? null;
                 }
 
                 $ref = $positionId ?: $orderId ?: (string) $matchedTrade->id;
@@ -599,81 +752,6 @@ class BotController extends Controller
 
             return $log;
         });
-
-        $alertsSummary = [
-            'won' => 0.0,
-            'lost' => 0.0,
-            'net' => 0.0,
-            'resolved_count' => 0,
-        ];
-
-        foreach ($recentLogs->getCollection() as $log) {
-            if (!is_numeric($log->trade_pnl ?? null)) {
-                continue;
-            }
-
-            $pnl = (float) $log->trade_pnl;
-            $alertsSummary['net'] += $pnl;
-            $alertsSummary['resolved_count']++;
-
-            if ($pnl >= 0) {
-                $alertsSummary['won'] += $pnl;
-            } else {
-                $alertsSummary['lost'] += abs($pnl);
-            }
-        }
-
-        return view('bot.alerts', compact('recentLogs', 'dateFrom', 'dateTo', 'eventType', 'symbol', 'botFilter', 'botOptions', 'perPage', 'alertsSummary'));
-    }
-
-    public function exportCsv()
-    {
-        $logs = BotTradeLog::query()->latest()->get();
-
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => 'attachment; filename="bot_trade_logs_'.now()->format('Ymd_His').'.csv"',
-        ];
-
-        $callback = function () use ($logs) {
-            $handle = fopen('php://output', 'w');
-
-            fputcsv($handle, [
-                'id', 'created_at', 'bot_key', 'bot_name', 'event_type', 'status', 'symbol', 'side',
-                'lot_size', 'entry_price', 'take_profit', 'stop_loss',
-                'spread_pips', 'signal_delta_pips', 'ai_provider', 'ai_decision',
-                'ai_confidence', 'ai_summary', 'message', 'error_message',
-            ]);
-
-            foreach ($logs as $log) {
-                fputcsv($handle, [
-                    $log->id,
-                    $log->created_at?->toDateTimeString(),
-                    $log->bot_key,
-                    $log->bot_name,
-                    $log->event_type,
-                    $log->status,
-                    $log->symbol,
-                    $log->side,
-                    $log->lot_size,
-                    $log->entry_price,
-                    $log->take_profit,
-                    $log->stop_loss,
-                    $log->spread_pips,
-                    $log->signal_delta_pips,
-                    $log->ai_provider,
-                    $log->ai_decision,
-                    $log->ai_confidence,
-                    $log->ai_summary,
-                    $log->message,
-                    $log->error_message,
-                ]);
-            }
-
-            fclose($handle);
-        };
-
-        return response()->stream($callback, 200, $headers);
     }
 
     public function clearAlerts(Request $request)
