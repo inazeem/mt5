@@ -49,6 +49,9 @@ class BotProfileController extends Controller
             'min_effective_volume'   => ['nullable', 'numeric', 'min:0.001'],
             'scalper'                => ['nullable', 'boolean'],
             'symbols'                => ['nullable', 'string'],
+            'preferred_hours_utc'    => ['nullable', 'string'],
+            'blocked_hours_utc'      => ['nullable', 'string'],
+            'preferred_symbols'      => ['nullable', 'string'],
         ]);
 
         $settings = AppSetting::singleton();
@@ -61,14 +64,10 @@ class BotProfileController extends Controller
             ]);
         }
 
-        $symbolsText = trim($validated['symbols'] ?? '');
-        $symbols = [];
-        if ($symbolsText !== '') {
-            $symbols = array_values(array_filter(
-                array_map(static fn ($s) => strtoupper(trim($s)), explode(',', $symbolsText)),
-                static fn ($s) => $s !== ''
-            ));
-        }
+        $symbols = $this->parseSymbolsCsv($validated['symbols'] ?? null);
+        $preferredSymbols = $this->parseSymbolsCsv($validated['preferred_symbols'] ?? null);
+        $preferredHoursUtc = $this->parseHoursCsv($validated['preferred_hours_utc'] ?? null);
+        $blockedHoursUtc = $this->parseHoursCsv($validated['blocked_hours_utc'] ?? null);
 
         $newProfile = [
             'key' => $key,
@@ -96,6 +95,9 @@ class BotProfileController extends Controller
             'min_effective_volume' => isset($validated['min_effective_volume']) ? (float) $validated['min_effective_volume'] : null,
             'scalper' => isset($validated['scalper']) ? (bool) $validated['scalper'] : null,
             'symbols' => !empty($symbols) ? $symbols : null,
+            'preferred_symbols' => !empty($preferredSymbols) ? $preferredSymbols : null,
+            'preferred_hours_utc' => !empty($preferredHoursUtc) ? $preferredHoursUtc : null,
+            'blocked_hours_utc' => !empty($blockedHoursUtc) ? $blockedHoursUtc : null,
         ];
 
         $profiles[] = $newProfile;
@@ -145,6 +147,9 @@ class BotProfileController extends Controller
             'min_effective_volume'   => ['nullable', 'numeric', 'min:0.001'],
             'scalper'                => ['nullable', 'boolean'],
             'symbols'                => ['nullable', 'string'],
+            'preferred_hours_utc'    => ['nullable', 'string'],
+            'blocked_hours_utc'      => ['nullable', 'string'],
+            'preferred_symbols'      => ['nullable', 'string'],
         ]);
 
         $settings = AppSetting::singleton();
@@ -155,14 +160,10 @@ class BotProfileController extends Controller
             abort(404, 'Bot profile not found.');
         }
 
-        $symbolsText = trim($validated['symbols'] ?? '');
-        $symbols = [];
-        if ($symbolsText !== '') {
-            $symbols = array_values(array_filter(
-                array_map(static fn ($s) => strtoupper(trim($s)), explode(',', $symbolsText)),
-                static fn ($s) => $s !== ''
-            ));
-        }
+        $symbols = $this->parseSymbolsCsv($validated['symbols'] ?? null);
+        $preferredSymbols = $this->parseSymbolsCsv($validated['preferred_symbols'] ?? null);
+        $preferredHoursUtc = $this->parseHoursCsv($validated['preferred_hours_utc'] ?? null);
+        $blockedHoursUtc = $this->parseHoursCsv($validated['blocked_hours_utc'] ?? null);
 
         $profiles[$profileIndex] = array_merge($profiles[$profileIndex], [
             'name' => trim($validated['name']),
@@ -189,6 +190,9 @@ class BotProfileController extends Controller
             'min_effective_volume' => isset($validated['min_effective_volume']) ? (float) $validated['min_effective_volume'] : null,
             'scalper' => isset($validated['scalper']) ? (bool) $validated['scalper'] : null,
             'symbols' => !empty($symbols) ? $symbols : null,
+            'preferred_symbols' => !empty($preferredSymbols) ? $preferredSymbols : null,
+            'preferred_hours_utc' => !empty($preferredHoursUtc) ? $preferredHoursUtc : null,
+            'blocked_hours_utc' => !empty($blockedHoursUtc) ? $blockedHoursUtc : null,
         ]);
 
         $settings->bot_profiles = $profiles;
@@ -207,5 +211,46 @@ class BotProfileController extends Controller
         $settings->save();
 
         return redirect()->route('bot-profiles.index')->with('status', 'Bot profile deleted successfully.');
+    }
+
+    private function parseSymbolsCsv(?string $raw): array
+    {
+        $text = trim((string) $raw);
+        if ($text === '') {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(
+            array_map(static fn ($symbol) => strtoupper(trim((string) $symbol)), explode(',', $text)),
+            static fn ($symbol) => $symbol !== ''
+        )));
+    }
+
+    private function parseHoursCsv(?string $raw): array
+    {
+        $text = trim((string) $raw);
+        if ($text === '') {
+            return [];
+        }
+
+        $hours = [];
+        foreach (explode(',', $text) as $chunk) {
+            $value = trim($chunk);
+            if ($value === '' || !is_numeric($value)) {
+                continue;
+            }
+
+            $hour = (int) $value;
+            if ($hour < 0 || $hour > 23) {
+                continue;
+            }
+
+            $hours[] = $hour;
+        }
+
+        $hours = array_values(array_unique($hours));
+        sort($hours);
+
+        return $hours;
     }
 }

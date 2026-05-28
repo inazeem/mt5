@@ -39,6 +39,9 @@ Artisan::command('mt5:auto-forex
     {--scalper=1 : 1 enables scalper mode (quick in/out), 0 keeps normal mode}
     {--trend-filter=0 : 1 requires M15 and M5 candle trend to align with the signal side}
     {--cooldown-override-ratio=0 : During cooldown, allow a new trade only when signal strength exceeds the last successful trade by this ratio}
+    {--preferred-hours-utc= : Comma-separated UTC hours allowed for entries (e.g. 8,14,17)}
+    {--blocked-hours-utc=15 : Comma-separated UTC hours blocked for entries (e.g. 15)}
+    {--preferred-symbols= : Comma-separated symbols allowed for entries (e.g. USDJPY_SB,EURUSD_SB)}
     {--bot= : Run only one bot profile key/name from settings bot_profiles JSON}
     {--test-mode : Bypass ALL filters and AI — trade the first --max-symbols symbols at market for testing only}
     {--once : Run one cycle only}
@@ -125,6 +128,55 @@ Artisan::command('mt5:auto-forex
             return $settingValue ?? $fallbackDefault;
         };
 
+        $normalizeHourList = static function (mixed $raw): array {
+            if (is_array($raw)) {
+                $source = $raw;
+            } else {
+                $text = trim((string) $raw);
+                if ($text === '') {
+                    return [];
+                }
+                $source = explode(',', $text);
+            }
+
+            $hours = [];
+            foreach ($source as $value) {
+                $token = trim((string) $value);
+                if ($token === '' || !is_numeric($token)) {
+                    continue;
+                }
+
+                $hour = (int) $token;
+                if ($hour < 0 || $hour > 23) {
+                    continue;
+                }
+
+                $hours[] = $hour;
+            }
+
+            $hours = array_values(array_unique($hours));
+            sort($hours);
+
+            return $hours;
+        };
+
+        $normalizeSymbolList = static function (mixed $raw): array {
+            if (is_array($raw)) {
+                $source = $raw;
+            } else {
+                $text = trim((string) $raw);
+                if ($text === '') {
+                    return [];
+                }
+                $source = explode(',', $text);
+            }
+
+            return array_values(array_unique(array_filter(
+                array_map(static fn ($symbol) => strtoupper(trim((string) $symbol)), $source),
+                static fn ($symbol) => $symbol !== ''
+            )));
+        };
+
         $lotSize           = (float) $optionOrProfileOrSetting('lot', $botProfile['lot'] ?? null, $db->bot_lot ?? null, 0.01);
         $tpPips            = (float) $optionOrProfileOrSetting('tp-pips', $botProfile['tp_pips'] ?? null, $db->bot_tp_pips ?? null, 25);
         $slPips            = (float) $optionOrProfileOrSetting('sl-pips', $botProfile['sl_pips'] ?? null, $db->bot_sl_pips ?? null, 15);
@@ -151,6 +203,9 @@ Artisan::command('mt5:auto-forex
         $trendFilterSetting = $optionOrProfileOrSetting('trend-filter', $botProfile['trend_filter'] ?? null, null, 0);
         $useTrendFilter = (string) $trendFilterSetting !== '0' && (bool) $trendFilterSetting;
         $cooldownOverrideRatio = (float) $optionOrProfileOrSetting('cooldown-override-ratio', $botProfile['cooldown_override_ratio'] ?? null, null, 0);
+        $preferredHoursUtc = $normalizeHourList($optionOrProfileOrSetting('preferred-hours-utc', $botProfile['preferred_hours_utc'] ?? null, null, null));
+        $blockedHoursUtc = $normalizeHourList($optionOrProfileOrSetting('blocked-hours-utc', $botProfile['blocked_hours_utc'] ?? null, null, 15));
+        $preferredSymbols = $normalizeSymbolList($optionOrProfileOrSetting('preferred-symbols', $botProfile['preferred_symbols'] ?? null, null, null));
         $maxOpenPositions     = max(1, (int) $optionOrProfileOrSetting('max-open-positions', $botProfile['max_open_positions'] ?? null, $db->bot_max_open_positions ?? null, 10));
         $maxPerCycle          = max(1, (int) $optionOrProfileOrSetting('max-per-cycle', $botProfile['max_per_cycle'] ?? null, $db->bot_max_per_cycle ?? null, 5));
         $testMode             = (bool) $this->option('test-mode');
@@ -227,6 +282,9 @@ Artisan::command('mt5:auto-forex
                     'session_end_utc' => $sessionEndUtc,
                     'current_hour_utc' => $currentHourUtc,
                     'in_session' => false,
+                    'preferred_hours_utc' => $preferredHoursUtc,
+                    'blocked_hours_utc' => $blockedHoursUtc,
+                    'preferred_symbols' => $preferredSymbols,
                     'test_mode' => $testMode,
                     'scalper_mode' => $scalperMode,
                     'trend_filter' => $useTrendFilter,
@@ -235,6 +293,40 @@ Artisan::command('mt5:auto-forex
                     'max_per_cycle' => $maxPerCycle,
                 ],
             ]));
+            return 0;
+        }
+
+        if (!$testMode && in_array($currentHourUtc, $blockedHoursUtc, true)) {
+            $msg = "Skipped cycle: blocked UTC hour {$currentHourUtc} by hour-performance guardrail.";
+            $this->warn($msg);
+            BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                'event_type' => 'guardrail',
+                'status' => 'hour_block',
+                'message' => $msg,
+                'meta_payload' => [
+                    'current_hour_utc' => $currentHourUtc,
+                    'blocked_hours_utc' => $blockedHoursUtc,
+                    'preferred_hours_utc' => $preferredHoursUtc,
+                ],
+            ]));
+
+            return 0;
+        }
+
+        if (!$testMode && !empty($preferredHoursUtc) && !in_array($currentHourUtc, $preferredHoursUtc, true)) {
+            $msg = "Skipped cycle: UTC hour {$currentHourUtc} is outside preferred entry hours.";
+            $this->warn($msg);
+            BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                'event_type' => 'guardrail',
+                'status' => 'hour_not_preferred',
+                'message' => $msg,
+                'meta_payload' => [
+                    'current_hour_utc' => $currentHourUtc,
+                    'preferred_hours_utc' => $preferredHoursUtc,
+                    'blocked_hours_utc' => $blockedHoursUtc,
+                ],
+            ]));
+
             return 0;
         }
 
@@ -355,6 +447,27 @@ Artisan::command('mt5:auto-forex
             $dbTickers = collect();
             $this->line('No tickers in DB — discovered '.count($symbols).' symbol(s) from MetaAPI.');
         }
+
+        if (!empty($preferredSymbols)) {
+            $symbols = array_values(array_intersect($symbols, $preferredSymbols));
+            $this->line('Applied preferred symbol filter: '.count($symbols).' symbol(s) remain.');
+        }
+
+        if (!$testMode && empty($symbols)) {
+            $msg = 'Skipped cycle: no symbols available after preferred symbol filter.';
+            $this->warn($msg);
+            BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                'event_type' => 'guardrail',
+                'status' => 'symbol_filter_block',
+                'message' => $msg,
+                'meta_payload' => [
+                    'preferred_symbols' => $preferredSymbols,
+                ],
+            ]));
+
+            return 0;
+        }
+
         $this->line('Scanning '.count($symbols).' symbols. Open positions: '.count($positions).'.');
         $opened = 0;
         $scanned = 0;
@@ -932,6 +1045,9 @@ Artisan::command('mt5:auto-forex
                 'max_open_positions' => $maxOpenPositions,
                 'min_move_pips' => $minMovePips,
                 'max_spread_pips' => $maxSpreadPips,
+                'preferred_hours_utc' => $preferredHoursUtc,
+                'blocked_hours_utc' => $blockedHoursUtc,
+                'preferred_symbols' => $preferredSymbols,
             ],
         ]));
 

@@ -93,6 +93,44 @@ class SettingsController extends Controller
         }
 
         $profiles = [];
+        $normalizeHours = static function (mixed $hours): ?array {
+            if (!is_array($hours)) {
+                return null;
+            }
+
+            $normalized = [];
+            foreach ($hours as $value) {
+                if (!is_numeric($value)) {
+                    continue;
+                }
+
+                $hour = (int) $value;
+                if ($hour < 0 || $hour > 23) {
+                    continue;
+                }
+
+                $normalized[] = $hour;
+            }
+
+            $normalized = array_values(array_unique($normalized));
+            sort($normalized);
+
+            return !empty($normalized) ? $normalized : null;
+        };
+
+        $normalizeSymbols = static function (mixed $symbols): ?array {
+            if (!is_array($symbols)) {
+                return null;
+            }
+
+            $normalized = array_values(array_unique(array_filter(
+                array_map(static fn ($symbol) => strtoupper(trim((string) $symbol)), $symbols),
+                static fn ($symbol) => $symbol !== ''
+            )));
+
+            return !empty($normalized) ? $normalized : null;
+        };
+
         foreach ($decoded as $index => $profile) {
             if (!is_array($profile)) {
                 throw \Illuminate\Validation\ValidationException::withMessages([
@@ -144,6 +182,9 @@ class SettingsController extends Controller
                 'symbols' => isset($profile['symbols']) && is_array($profile['symbols'])
                     ? array_values(array_filter(array_map(static fn ($s) => strtoupper(trim((string) $s)), $profile['symbols']), static fn ($s) => $s !== ''))
                     : null,
+                'preferred_hours_utc' => $normalizeHours($profile['preferred_hours_utc'] ?? null),
+                'blocked_hours_utc' => $normalizeHours($profile['blocked_hours_utc'] ?? null),
+                'preferred_symbols' => $normalizeSymbols($profile['preferred_symbols'] ?? null),
             ];
         }
 

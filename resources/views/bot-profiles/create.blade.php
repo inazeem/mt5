@@ -213,6 +213,32 @@
                         <p class="text-xs text-gray-500 mt-1">Leave blank to use all available symbols.</p>
                     </div>
 
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Preferred Hours UTC (comma-separated)</label>
+                            <input type="text" name="preferred_hours_utc"
+                                   value="{{ old('preferred_hours_utc') }}" placeholder="e.g. 8,14,17"
+                                   class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="text-xs text-gray-500 mt-1">Optional. If set, entries run only during these UTC hours.</p>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Blocked Hours UTC (comma-separated)</label>
+                            <input type="text" name="blocked_hours_utc"
+                                   value="{{ old('blocked_hours_utc', '15') }}" placeholder="e.g. 15"
+                                   class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="text-xs text-gray-500 mt-1">Default blocks 15:00 UTC due to recent underperformance.</p>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Preferred Symbols (comma-separated)</label>
+                            <input type="text" name="preferred_symbols"
+                                   value="{{ old('preferred_symbols') }}" placeholder="e.g. USDJPY_SB,EURUSD_SB"
+                                   class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="text-xs text-gray-500 mt-1">Optional entry whitelist applied after symbol discovery.</p>
+                        </div>
+                    </div>
+
                     <div class="flex gap-3">
                         <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700">
                             Create Bot Profile
