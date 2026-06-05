@@ -7,6 +7,8 @@ use Illuminate\Http\Request;
 
 class SettingsController extends Controller
 {
+    private const ALLOWED_SIGNAL_TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h'];
+
     public function edit()
     {
         $settings = AppSetting::singleton();
@@ -53,11 +55,14 @@ class SettingsController extends Controller
             'bot_ai_confirm'           => ['nullable', 'boolean'],
             'bot_max_symbols'          => ['nullable', 'integer', 'min:1'],
             'bot_ai_min_confidence'    => ['nullable', 'integer', 'min:0', 'max:100'],
+            'bot_signal_timeframes'    => ['nullable', 'array'],
+            'bot_signal_timeframes.*'  => ['required', 'in:5m,15m,30m,1h,4h'],
             'bot_profiles'             => ['nullable', 'string'],
         ]);
 
         $validated['demo_only'] = $request->boolean('demo_only');
         $validated['bot_ai_confirm'] = $request->boolean('bot_ai_confirm');
+        $validated['bot_signal_timeframes'] = $this->normalizeSignalTimeframes($validated['bot_signal_timeframes'] ?? null);
         $validated['bot_profiles'] = $this->normalizeBotProfiles($validated['bot_profiles'] ?? null);
 
         foreach (['mt5_manager_password', 'claude_api_key', 'perplexity_api_key', 'metaapi_token'] as $secretField) {
@@ -131,6 +136,14 @@ class SettingsController extends Controller
             return !empty($normalized) ? $normalized : null;
         };
 
+        $normalizeTimeframes = function (mixed $timeframes): ?array {
+            if (!is_array($timeframes)) {
+                return null;
+            }
+
+            return $this->normalizeSignalTimeframes($timeframes);
+        };
+
         foreach ($decoded as $index => $profile) {
             if (!is_array($profile)) {
                 throw \Illuminate\Validation\ValidationException::withMessages([
@@ -155,6 +168,8 @@ class SettingsController extends Controller
             }
 
             $profiles[] = [
+                'signal_timeframes' => $normalizeTimeframes($profile['signal_timeframes'] ?? null)
+                    ?? $this->normalizeSignalTimeframes(isset($profile['signal_timeframe']) ? [(string) $profile['signal_timeframe']] : null),
                 'key' => $key,
                 'name' => $name,
                 'enabled' => (bool) ($profile['enabled'] ?? true),
@@ -185,6 +200,9 @@ class SettingsController extends Controller
                 'preferred_hours_utc' => $normalizeHours($profile['preferred_hours_utc'] ?? null),
                 'blocked_hours_utc' => $normalizeHours($profile['blocked_hours_utc'] ?? null),
                 'preferred_symbols' => $normalizeSymbols($profile['preferred_symbols'] ?? null),
+                'signal_timeframe' => in_array(strtolower(trim((string) ($profile['signal_timeframe'] ?? ''))), self::ALLOWED_SIGNAL_TIMEFRAMES, true)
+                    ? strtolower(trim((string) ($profile['signal_timeframe'] ?? '')))
+                    : null,
             ];
         }
 
@@ -196,5 +214,22 @@ class SettingsController extends Controller
         }
 
         return $profiles;
+    }
+
+    private function normalizeSignalTimeframes(?array $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        $order = array_flip(self::ALLOWED_SIGNAL_TIMEFRAMES);
+        $timeframes = array_values(array_unique(array_filter(array_map(
+            static fn ($value) => strtolower(trim((string) $value)),
+            $raw
+        ), static fn ($value) => isset($order[$value]))));
+
+        usort($timeframes, static fn ($a, $b) => $order[$a] <=> $order[$b]);
+
+        return !empty($timeframes) ? $timeframes : null;
     }
 }

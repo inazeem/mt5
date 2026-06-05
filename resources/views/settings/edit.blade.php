@@ -193,6 +193,12 @@
                 <section class="space-y-4">
                     <h3 class="text-lg font-semibold text-gray-900">Auto-Bot Parameters</h3>
                     <p class="text-sm text-gray-500">These values are used as defaults when the <code>mt5:auto-forex</code> command runs without explicit flags.</p>
+                    @php
+                        $selectedSignalTimeframes = old('bot_signal_timeframes', $settings->bot_signal_timeframes ?? ['15m']);
+                        if (!is_array($selectedSignalTimeframes) || empty($selectedSignalTimeframes)) {
+                            $selectedSignalTimeframes = ['15m'];
+                        }
+                    @endphp
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Lot Size</label>
@@ -260,6 +266,26 @@
                             <input name="bot_ai_min_confidence" type="number" min="0" max="100" value="{{ old('bot_ai_min_confidence', $settings->bot_ai_min_confidence ?? 70) }}" class="mt-1 block w-full rounded border-gray-300" />
                             <p class="text-xs text-gray-500 mt-1">AI must express ≥ this confidence to approve. 0 = any APPROVE accepted.</p>
                         </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700">Trend Timeframes (must all align)</label>
+                            <div class="mt-2 flex flex-wrap gap-4">
+                                @foreach (['5m', '15m', '30m', '1h', '4h'] as $timeframe)
+                                    <label class="inline-flex items-center gap-2">
+                                        <input type="checkbox" name="bot_signal_timeframes[]" value="{{ $timeframe }}"
+                                               {{ in_array($timeframe, $selectedSignalTimeframes, true) ? 'checked' : '' }}
+                                               class="rounded border-gray-300" />
+                                        <span class="text-sm text-gray-700">{{ strtoupper($timeframe) }}</span>
+                                    </label>
+                                @endforeach
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1">If you select 2, both must align. If you select 3, all 3 must align before trade entry.</p>
+                            @error('bot_signal_timeframes')
+                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                            @enderror
+                            @error('bot_signal_timeframes.*')
+                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                            @enderror
+                        </div>
                         <div class="flex items-center">
                             <label class="inline-flex items-center gap-2 mt-5">
                                 <input type="checkbox" name="bot_ai_confirm" value="1" {{ old('bot_ai_confirm', $settings->bot_ai_confirm ?? true) ? 'checked' : '' }} class="rounded border-gray-300" />
@@ -287,7 +313,7 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Bot Profiles JSON</label>
                         <textarea name="bot_profiles" rows="12" class="mt-1 block w-full rounded border-gray-300 font-mono text-xs" placeholder='[{"key":"scalp-1","name":"Scalper 1","enabled":true,"lot":0.01,"tp_pips":20,"sl_pips":8,"symbols":["EURUSD","GBPUSD"]}]'>{{ $botProfilesText }}</textarea>
-                        <p class="text-xs text-gray-500 mt-1">Supported keys: key, name, enabled, lot, tp_pips, sl_pips, trail_start_pips, trail_pips, trail_tp_multiplier, min_move_pips, max_spread_pips, cooldown_minutes, session_start_utc, session_end_utc, max_trades_per_day, max_daily_loss_percent, ai_confirm, ai_min_confidence, max_symbols, max_open_positions, max_per_cycle, min_bot_score, min_effective_volume, scalper, symbols.</p>
+                        <p class="text-xs text-gray-500 mt-1">Supported keys: key, name, enabled, lot, tp_pips, sl_pips, trail_start_pips, trail_pips, trail_tp_multiplier, min_move_pips, max_spread_pips, cooldown_minutes, session_start_utc, session_end_utc, max_trades_per_day, max_daily_loss_percent, ai_confirm, ai_min_confidence, max_symbols, max_open_positions, max_per_cycle, min_bot_score, min_effective_volume, scalper, symbols, signal_timeframe, signal_timeframes.</p>
                     </div>
                 </section>
 

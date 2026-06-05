@@ -20,6 +20,17 @@
                 <form method="POST" action="{{ route('bot-profiles.update', $profile['key']) }}" class="space-y-6">
                     @csrf
                     @method('PUT')
+                    @php
+                        $selectedSignalTimeframes = old('signal_timeframes');
+                        if (!is_array($selectedSignalTimeframes)) {
+                            $selectedSignalTimeframes = isset($profile['signal_timeframes']) && is_array($profile['signal_timeframes'])
+                                ? $profile['signal_timeframes']
+                                : [];
+                        }
+                        if (empty($selectedSignalTimeframes) && !empty($profile['signal_timeframe'])) {
+                            $selectedSignalTimeframes = [(string) $profile['signal_timeframe']];
+                        }
+                    @endphp
 
                     <div class="p-3 bg-gray-50 rounded text-xs text-gray-600 font-mono">
                         Bot Key: <strong>{{ $profile['key'] }}</strong>
@@ -114,6 +125,27 @@
                             <input type="number" name="cooldown_minutes" min="0"
                                    value="{{ old('cooldown_minutes', isset($profile['cooldown_minutes']) ? $profile['cooldown_minutes'] : '') }}" placeholder="e.g. 30"
                                    class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+
+                        <div class="sm:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700">Trend Timeframes (must all align)</label>
+                            <div class="mt-2 flex flex-wrap gap-4">
+                                @foreach (['5m', '15m', '30m', '1h', '4h'] as $timeframe)
+                                    <label class="inline-flex items-center gap-2">
+                                        <input type="checkbox" name="signal_timeframes[]" value="{{ $timeframe }}"
+                                               {{ in_array($timeframe, $selectedSignalTimeframes, true) ? 'checked' : '' }}
+                                               class="rounded border-gray-300" />
+                                        <span class="text-sm text-gray-700">{{ strtoupper($timeframe) }}</span>
+                                    </label>
+                                @endforeach
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1">Leave all unchecked to use global Auto-Bot timeframe defaults.</p>
+                            @error('signal_timeframes')
+                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                            @enderror
+                            @error('signal_timeframes.*')
+                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                            @enderror
                         </div>
 
                         <div>

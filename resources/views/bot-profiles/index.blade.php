@@ -33,6 +33,7 @@
                                     <th class="py-3 px-4">Key</th>
                                     <th class="py-3 px-4">Name</th>
                                     <th class="py-3 px-4">Status</th>
+                                    <th class="py-3 px-4">Timeframe</th>
                                     <th class="py-3 px-4">Lot</th>
                                     <th class="py-3 px-4">TP/SL (pips)</th>
                                     <th class="py-3 px-4">Session (UTC)</th>
@@ -53,6 +54,21 @@
                                             <span class="inline-flex items-center rounded px-2.5 py-0.5 text-xs font-semibold {{ $statusClass }}">
                                                 {{ $status }}
                                             </span>
+                                        </td>
+                                        <td class="py-3 px-4 text-xs">
+                                            @php
+                                                $trendTimeframes = isset($profile['signal_timeframes']) && is_array($profile['signal_timeframes'])
+                                                    ? array_values($profile['signal_timeframes'])
+                                                    : [];
+                                                if (empty($trendTimeframes) && !empty($profile['signal_timeframe'])) {
+                                                    $trendTimeframes = [(string) $profile['signal_timeframe']];
+                                                }
+                                            @endphp
+                                            @if (!empty($trendTimeframes))
+                                                {{ strtoupper(implode(',', $trendTimeframes)) }}
+                                            @else
+                                                <span class="text-gray-400">DEFAULT</span>
+                                            @endif
                                         </td>
                                         <td class="py-3 px-4">{{ isset($profile['lot']) ? number_format($profile['lot'], 4) : '—' }}</td>
                                         <td class="py-3 px-4">

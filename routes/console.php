@@ -37,7 +37,8 @@ Artisan::command('mt5:auto-forex
     {--max-open-positions=10 : Maximum concurrent open positions (demo-safe ceiling)}
     {--max-per-cycle=5 : Maximum new trades to open in a single cycle}
     {--scalper=1 : 1 enables scalper mode (quick in/out), 0 keeps normal mode}
-    {--trend-filter=0 : 1 requires M15 and M5 candle trend to align with the signal side}
+    {--trend-filter=0 : 1 requires all selected trend timeframes to align with the signal side}
+    {--signal-timeframes= : Comma-separated trend timeframes (5m,15m,30m,1h,4h). Example: 5m,15m,1h}
     {--cooldown-override-ratio=0 : During cooldown, allow a new trade only when signal strength exceeds the last successful trade by this ratio}
     {--preferred-hours-utc= : Comma-separated UTC hours allowed for entries (e.g. 8,14,17)}
     {--blocked-hours-utc=15 : Comma-separated UTC hours blocked for entries (e.g. 15)}
@@ -177,6 +178,30 @@ Artisan::command('mt5:auto-forex
             )));
         };
 
+        $normalizeTimeframeList = static function (mixed $raw): array {
+            $allowed = ['5m', '15m', '30m', '1h', '4h'];
+            $order = array_flip($allowed);
+
+            if (is_array($raw)) {
+                $source = $raw;
+            } else {
+                $text = trim((string) $raw);
+                if ($text === '') {
+                    return [];
+                }
+                $source = explode(',', $text);
+            }
+
+            $timeframes = array_values(array_unique(array_filter(array_map(
+                static fn ($value) => strtolower(trim((string) $value)),
+                $source
+            ), static fn ($value) => isset($order[$value]))));
+
+            usort($timeframes, static fn ($a, $b) => $order[$a] <=> $order[$b]);
+
+            return $timeframes;
+        };
+
         $lotSize           = (float) $optionOrProfileOrSetting('lot', $botProfile['lot'] ?? null, $db->bot_lot ?? null, 0.01);
         $tpPips            = (float) $optionOrProfileOrSetting('tp-pips', $botProfile['tp_pips'] ?? null, $db->bot_tp_pips ?? null, 25);
         $slPips            = (float) $optionOrProfileOrSetting('sl-pips', $botProfile['sl_pips'] ?? null, $db->bot_sl_pips ?? null, 15);
@@ -202,6 +227,15 @@ Artisan::command('mt5:auto-forex
         $scalperMode = (string) $scalperSetting !== '0' && (bool) $scalperSetting;
         $trendFilterSetting = $optionOrProfileOrSetting('trend-filter', $botProfile['trend_filter'] ?? null, null, 0);
         $useTrendFilter = (string) $trendFilterSetting !== '0' && (bool) $trendFilterSetting;
+        $trendTimeframes = $normalizeTimeframeList($optionOrProfileOrSetting(
+            'signal-timeframes',
+            $botProfile['signal_timeframes'] ?? (isset($botProfile['signal_timeframe']) ? [(string) $botProfile['signal_timeframe']] : null),
+            $db->bot_signal_timeframes ?? null,
+            ['15m']
+        ));
+        if (empty($trendTimeframes)) {
+            $trendTimeframes = ['15m'];
+        }
         $cooldownOverrideRatio = (float) $optionOrProfileOrSetting('cooldown-override-ratio', $botProfile['cooldown_override_ratio'] ?? null, null, 0);
         $preferredHoursUtc = $normalizeHourList($optionOrProfileOrSetting('preferred-hours-utc', $botProfile['preferred_hours_utc'] ?? null, null, null));
         $blockedHoursUtc = $normalizeHourList($optionOrProfileOrSetting('blocked-hours-utc', $botProfile['blocked_hours_utc'] ?? null, null, 15));
@@ -254,7 +288,7 @@ Artisan::command('mt5:auto-forex
         }
 
         if ($useTrendFilter) {
-            $this->line('Trend filter ON  timeframes=M15+M5');
+            $this->line('Trend filter ON  timeframes='.strtoupper(implode(',', $trendTimeframes)));
         }
 
         if ($cooldownOverrideRatio > 0) {
@@ -288,6 +322,7 @@ Artisan::command('mt5:auto-forex
                     'test_mode' => $testMode,
                     'scalper_mode' => $scalperMode,
                     'trend_filter' => $useTrendFilter,
+                    'trend_timeframes' => $trendTimeframes,
                     'ai_confirm' => $useAiConfirm,
                     'max_symbols' => $maxSymbols,
                     'max_per_cycle' => $maxPerCycle,
@@ -749,12 +784,14 @@ Artisan::command('mt5:auto-forex
 
             if (!$testMode && $useTrendFilter) {
                 try {
-                    $candles15m = $mt5Service->getCandles($symbol, '15m', 1);
-                    $candles5m = $mt5Service->getCandles($symbol, '5m', 1);
-                    $trend15m = $resolveTrendSide($candles15m);
-                    $trend5m = $resolveTrendSide($candles5m);
+                    $trendByTimeframe = [];
+                    foreach ($trendTimeframes as $timeframe) {
+                        $candles = $mt5Service->getCandles($symbol, $timeframe, 1);
+                        $trendByTimeframe[$timeframe] = $resolveTrendSide($candles);
+                    }
 
-                    if ($trend15m !== $side || $trend5m !== $side) {
+                    $aligned = collect($trendByTimeframe)->every(static fn ($trend) => $trend === $side);
+                    if (!$aligned) {
                         $logSignal([
                             'status' => 'trend_rejected',
                             'symbol' => $symbol,
@@ -762,11 +799,11 @@ Artisan::command('mt5:auto-forex
                             'spread_pips' => $spreadPips,
                             'signal_delta_pips' => $signalDeltaPips,
                             'meta_payload' => [
-                                'trend_15m' => $trend15m,
-                                'trend_5m' => $trend5m,
+                                'trend_by_timeframe' => $trendByTimeframe,
                                 'trend_filter' => true,
+                                'trend_timeframes' => $trendTimeframes,
                             ],
-                            'message' => 'Signal rejected because M15 and M5 trends do not align with the signal side.',
+                            'message' => 'Signal rejected because not all selected trend timeframes align with the signal side.',
                         ]);
                         continue;
                     }
@@ -782,7 +819,7 @@ Artisan::command('mt5:auto-forex
                         'error_message' => $e->getMessage(),
                         'meta_payload' => [
                             'trend_filter' => true,
-                            'trend_timeframes' => ['15m', '5m'],
+                            'trend_timeframes' => $trendTimeframes,
                         ],
                         'message' => 'Signal rejected because trend filter data was unavailable.',
                     ]);
@@ -812,9 +849,6 @@ Artisan::command('mt5:auto-forex
                     // Fetch candle context from MetaAPI for richer AI analysis.
                     $candleContext = '';
                     try {
-                        $candles1h = $mt5Service->getCandles($symbol, '1h', 20);
-                        $candles15m = $mt5Service->getCandles($symbol, '15m', 10);
-
                         $formatCandles = static function (array $candles): string {
                             $lines = [];
                             foreach ($candles as $c) {
@@ -832,11 +866,12 @@ Artisan::command('mt5:auto-forex
                             return implode("\n", $lines);
                         };
 
-                        if (!empty($candles1h)) {
-                            $candleContext .= "\n\nLast ".count($candles1h)." x 1H candles (oldest first):\n".$formatCandles($candles1h);
-                        }
-                        if (!empty($candles15m)) {
-                            $candleContext .= "\n\nLast ".count($candles15m)." x 15M candles (oldest first):\n".$formatCandles($candles15m);
+                        foreach ($trendTimeframes as $index => $timeframe) {
+                            $limit = $index === 0 ? 20 : 10;
+                            $candles = $mt5Service->getCandles($symbol, $timeframe, $limit);
+                            if (!empty($candles)) {
+                                $candleContext .= "\n\nLast ".count($candles)." x ".strtoupper($timeframe)." candles (oldest first):\n".$formatCandles($candles);
+                            }
                         }
                     } catch (\Throwable $candleError) {
                         Log::warning('Auto bot candle fetch failed', ['symbol' => $symbol, 'error' => $candleError->getMessage()]);
@@ -1039,6 +1074,7 @@ Artisan::command('mt5:auto-forex
                 'test_mode' => $testMode,
                 'scalper_mode' => $scalperMode,
                 'trend_filter' => $useTrendFilter,
+                'trend_timeframes' => $trendTimeframes,
                 'ai_confirm' => $useAiConfirm,
                 'max_symbols' => $maxSymbols,
                 'max_per_cycle' => $maxPerCycle,

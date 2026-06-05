@@ -19,6 +19,12 @@
 
                 <form method="POST" action="{{ route('bot-profiles.store') }}" class="space-y-6">
                     @csrf
+                    @php
+                        $selectedSignalTimeframes = old('signal_timeframes');
+                        if (!is_array($selectedSignalTimeframes)) {
+                            $selectedSignalTimeframes = [];
+                        }
+                    @endphp
 
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <div>
@@ -122,6 +128,27 @@
                             <input type="number" name="cooldown_minutes" min="0"
                                    value="{{ old('cooldown_minutes') }}" placeholder="e.g. 30"
                                    class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+
+                        <div class="sm:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700">Trend Timeframes (must all align)</label>
+                            <div class="mt-2 flex flex-wrap gap-4">
+                                @foreach (['5m', '15m', '30m', '1h', '4h'] as $timeframe)
+                                    <label class="inline-flex items-center gap-2">
+                                        <input type="checkbox" name="signal_timeframes[]" value="{{ $timeframe }}"
+                                               {{ in_array($timeframe, $selectedSignalTimeframes, true) ? 'checked' : '' }}
+                                               class="rounded border-gray-300" />
+                                        <span class="text-sm text-gray-700">{{ strtoupper($timeframe) }}</span>
+                                    </label>
+                                @endforeach
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1">Leave all unchecked to use global Auto-Bot timeframe defaults.</p>
+                            @error('signal_timeframes')
+                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                            @enderror
+                            @error('signal_timeframes.*')
+                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                            @enderror
                         </div>
 
                         <div>

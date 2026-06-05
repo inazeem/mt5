@@ -8,6 +8,8 @@ use Illuminate\Validation\ValidationException;
 
 class BotProfileController extends Controller
 {
+    private const ALLOWED_SIGNAL_TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h'];
+
     public function index()
     {
         $settings = AppSetting::singleton();
@@ -52,6 +54,9 @@ class BotProfileController extends Controller
             'preferred_hours_utc'    => ['nullable', 'string'],
             'blocked_hours_utc'      => ['nullable', 'string'],
             'preferred_symbols'      => ['nullable', 'string'],
+            'signal_timeframes'      => ['nullable', 'array'],
+            'signal_timeframes.*'    => ['required', 'in:5m,15m,30m,1h,4h'],
+            'signal_timeframe'       => ['nullable', 'in:5m,15m,30m,1h,4h'],
         ]);
 
         $settings = AppSetting::singleton();
@@ -68,6 +73,9 @@ class BotProfileController extends Controller
         $preferredSymbols = $this->parseSymbolsCsv($validated['preferred_symbols'] ?? null);
         $preferredHoursUtc = $this->parseHoursCsv($validated['preferred_hours_utc'] ?? null);
         $blockedHoursUtc = $this->parseHoursCsv($validated['blocked_hours_utc'] ?? null);
+        $signalTimeframes = $this->normalizeSignalTimeframes(
+            $validated['signal_timeframes'] ?? (isset($validated['signal_timeframe']) ? [(string) $validated['signal_timeframe']] : null)
+        );
 
         $newProfile = [
             'key' => $key,
@@ -98,6 +106,8 @@ class BotProfileController extends Controller
             'preferred_symbols' => !empty($preferredSymbols) ? $preferredSymbols : null,
             'preferred_hours_utc' => !empty($preferredHoursUtc) ? $preferredHoursUtc : null,
             'blocked_hours_utc' => !empty($blockedHoursUtc) ? $blockedHoursUtc : null,
+            'signal_timeframes' => $signalTimeframes,
+            'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
         ];
 
         $profiles[] = $newProfile;
@@ -150,6 +160,9 @@ class BotProfileController extends Controller
             'preferred_hours_utc'    => ['nullable', 'string'],
             'blocked_hours_utc'      => ['nullable', 'string'],
             'preferred_symbols'      => ['nullable', 'string'],
+            'signal_timeframes'      => ['nullable', 'array'],
+            'signal_timeframes.*'    => ['required', 'in:5m,15m,30m,1h,4h'],
+            'signal_timeframe'       => ['nullable', 'in:5m,15m,30m,1h,4h'],
         ]);
 
         $settings = AppSetting::singleton();
@@ -164,6 +177,9 @@ class BotProfileController extends Controller
         $preferredSymbols = $this->parseSymbolsCsv($validated['preferred_symbols'] ?? null);
         $preferredHoursUtc = $this->parseHoursCsv($validated['preferred_hours_utc'] ?? null);
         $blockedHoursUtc = $this->parseHoursCsv($validated['blocked_hours_utc'] ?? null);
+        $signalTimeframes = $this->normalizeSignalTimeframes(
+            $validated['signal_timeframes'] ?? (isset($validated['signal_timeframe']) ? [(string) $validated['signal_timeframe']] : null)
+        );
 
         $profiles[$profileIndex] = array_merge($profiles[$profileIndex], [
             'name' => trim($validated['name']),
@@ -193,6 +209,8 @@ class BotProfileController extends Controller
             'preferred_symbols' => !empty($preferredSymbols) ? $preferredSymbols : null,
             'preferred_hours_utc' => !empty($preferredHoursUtc) ? $preferredHoursUtc : null,
             'blocked_hours_utc' => !empty($blockedHoursUtc) ? $blockedHoursUtc : null,
+            'signal_timeframes' => $signalTimeframes,
+            'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
         ]);
 
         $settings->bot_profiles = $profiles;
@@ -252,5 +270,32 @@ class BotProfileController extends Controller
         sort($hours);
 
         return $hours;
+    }
+
+    private function normalizeSignalTimeframe(?string $raw): ?string
+    {
+        $value = strtolower(trim((string) $raw));
+        if ($value === '') {
+            return null;
+        }
+
+        return in_array($value, self::ALLOWED_SIGNAL_TIMEFRAMES, true) ? $value : null;
+    }
+
+    private function normalizeSignalTimeframes(?array $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        $order = array_flip(self::ALLOWED_SIGNAL_TIMEFRAMES);
+        $timeframes = array_values(array_unique(array_filter(array_map(
+            static fn ($value) => strtolower(trim((string) $value)),
+            $raw
+        ), static fn ($value) => isset($order[$value]))));
+
+        usort($timeframes, static fn ($a, $b) => $order[$a] <=> $order[$b]);
+
+        return !empty($timeframes) ? $timeframes : null;
     }
 }

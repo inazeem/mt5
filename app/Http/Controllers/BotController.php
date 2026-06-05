@@ -185,6 +185,18 @@ class BotController extends Controller
 
         $sessionStartUtc = (int) ($botProfile['session_start_utc'] ?? $settings->bot_session_start_utc ?? 6);
         $sessionEndUtc = (int) ($botProfile['session_end_utc'] ?? $settings->bot_session_end_utc ?? 20);
+        $allowedSignalTimeframes = ['5m', '15m', '30m', '1h', '4h'];
+        $timeframeSource = $botProfile['signal_timeframes']
+            ?? (isset($botProfile['signal_timeframe']) ? [(string) $botProfile['signal_timeframe']] : null)
+            ?? $settings->bot_signal_timeframes
+            ?? ['15m'];
+        $signalTimeframes = array_values(array_unique(array_filter(array_map(
+            static fn ($value) => strtolower(trim((string) $value)),
+            is_array($timeframeSource) ? $timeframeSource : []
+        ), static fn ($value) => in_array($value, $allowedSignalTimeframes, true))));
+        if (empty($signalTimeframes)) {
+            $signalTimeframes = ['15m'];
+        }
         $currentHourUtc = (int) now('UTC')->format('G');
         $inSession = $sessionStartUtc <= $sessionEndUtc
             ? ($currentHourUtc >= $sessionStartUtc && $currentHourUtc <= $sessionEndUtc)
@@ -204,6 +216,7 @@ class BotController extends Controller
             'max_open_positions' => (int) ($botProfile['max_open_positions'] ?? $settings->bot_max_open_positions ?? 10),
             'min_move_pips' => (float) ($botProfile['min_move_pips'] ?? $settings->bot_min_move_pips ?? 3),
             'max_spread_pips' => (float) ($botProfile['max_spread_pips'] ?? $settings->bot_max_spread_pips ?? 2.5),
+            'signal_timeframes' => $signalTimeframes,
             'health_symbol' => $healthSymbol,
         ];
 
@@ -254,7 +267,7 @@ class BotController extends Controller
             ];
         }
 
-        foreach (['15m', '5m'] as $timeframe) {
+        foreach ($signalTimeframes as $timeframe) {
             try {
                 $candles = $mt5Service->getCandles($healthSymbol, $timeframe, 1);
                 $lastCandle = is_array($candles[array_key_last($candles)] ?? null) ? $candles[array_key_last($candles)] : [];

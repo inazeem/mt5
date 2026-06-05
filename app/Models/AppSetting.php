@@ -40,6 +40,7 @@ class AppSetting extends Model
         'bot_ai_confirm',
         'bot_max_symbols',
         'bot_ai_min_confidence',
+        'bot_signal_timeframes',
         'bot_profiles',
     ];
 
@@ -70,6 +71,7 @@ class AppSetting extends Model
             'bot_ai_confirm' => 'boolean',
             'bot_max_symbols' => 'integer',
             'bot_ai_min_confidence' => 'integer',
+            'bot_signal_timeframes' => 'array',
             'bot_profiles' => 'array',
         ];
     }
