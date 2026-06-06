@@ -38,6 +38,7 @@ class AppSetting extends Model
         'bot_strategy',
         'bot_strategy_params',
         'bot_signal_timeframes',
+        'bot_entry_timeframe',
         'bot_profiles',
     ];
 
@@ -68,6 +69,7 @@ class AppSetting extends Model
             'bot_strategies' => 'array',
             'bot_strategy_params' => 'array',
             'bot_signal_timeframes' => 'array',
+            'bot_entry_timeframe' => 'string',
             'bot_profiles' => 'array',
         ];
     }

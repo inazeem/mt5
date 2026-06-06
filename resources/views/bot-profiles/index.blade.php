@@ -82,6 +82,15 @@
                                             @endphp
                                             @if (!empty($trendTimeframes))
                                                 {{ strtoupper(implode(',', $trendTimeframes)) }}
+                                                @php
+                                                    $entryTimeframe = isset($profile['entry_timeframe']) ? strtolower(trim((string) $profile['entry_timeframe'])) : '';
+                                                    if ($entryTimeframe === '' || !in_array($entryTimeframe, $trendTimeframes, true)) {
+                                                        $entryTimeframe = $trendTimeframes[0] ?? '';
+                                                    }
+                                                @endphp
+                                                @if ($entryTimeframe !== '')
+                                                    <div class="text-[10px] text-gray-500 mt-1">Entry: {{ strtoupper($entryTimeframe) }}</div>
+                                                @endif
                                             @else
                                                 <span class="text-gray-400">DEFAULT</span>
                                             @endif

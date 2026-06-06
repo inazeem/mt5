@@ -19,6 +19,7 @@ class EmaCrossStrategy implements TradingStrategyInterface
         $params = is_array($context['strategy_params'] ?? null) ? $context['strategy_params'] : [];
         $fastPeriod = max(2, min(200, (int) ($params['ema_fast'] ?? 9)));
         $slowPeriod = max(3, min(300, (int) ($params['ema_slow'] ?? 21)));
+        $confirmCandles = max(0, min(5, (int) ($params['ema_confirm_candles'] ?? 0)));
         if ($fastPeriod >= $slowPeriod) {
             $slowPeriod = min(300, $fastPeriod + 1);
         }
@@ -33,22 +34,44 @@ class EmaCrossStrategy implements TradingStrategyInterface
 
         $currentFast = IndicatorMath::ema($closes, $fastPeriod);
         $currentSlow = IndicatorMath::ema($closes, $slowPeriod);
-        $prevFast = IndicatorMath::ema(array_slice($closes, 0, -1), $fastPeriod);
-        $prevSlow = IndicatorMath::ema(array_slice($closes, 0, -1), $slowPeriod);
 
-        if ($currentFast === null || $currentSlow === null || $prevFast === null || $prevSlow === null) {
+        if ($currentFast === null || $currentSlow === null) {
             return ['signal' => false, 'status' => 'strategy_rejected', 'message' => 'Unable to compute EMA values.'];
         }
 
-        $side = null;
-        if ($prevFast <= $prevSlow && $currentFast > $currentSlow) {
-            $side = 'buy';
-        } elseif ($prevFast >= $prevSlow && $currentFast < $currentSlow) {
-            $side = 'sell';
+        if ($currentFast === $currentSlow) {
+            return ['signal' => false, 'status' => 'strategy_rejected', 'message' => 'EMA lines are flat/equal; no directional edge.'];
         }
 
-        if ($side === null) {
-            return ['signal' => false, 'status' => 'strategy_rejected', 'message' => 'No EMA crossover signal.'];
+        $side = $currentFast > $currentSlow ? 'buy' : 'sell';
+
+        if ($confirmCandles > 0) {
+            for ($offset = 1; $offset <= $confirmCandles; $offset++) {
+                $slice = array_slice($closes, 0, -$offset);
+                $fast = IndicatorMath::ema($slice, $fastPeriod);
+                $slow = IndicatorMath::ema($slice, $slowPeriod);
+
+                if ($fast === null || $slow === null) {
+                    return ['signal' => false, 'status' => 'strategy_rejected', 'message' => 'Not enough candles for EMA confirmation window.'];
+                }
+
+                if ($fast === $slow) {
+                    return ['signal' => false, 'status' => 'strategy_rejected', 'message' => 'EMA confirmation pending due to flat crossover zone.'];
+                }
+
+                $historicalSide = $fast > $slow ? 'buy' : 'sell';
+                if ($historicalSide !== $side) {
+                    return [
+                        'signal' => false,
+                        'status' => 'strategy_rejected',
+                        'message' => 'EMA confirmation pending: crossover has not held long enough.',
+                        'meta_payload' => [
+                            'strategy' => $this->key(),
+                            'ema_confirm_candles' => $confirmCandles,
+                        ],
+                    ];
+                }
+            }
         }
 
         $strength = $pipSize > 0 ? abs(($currentFast - $currentSlow) / $pipSize) : 0.0;
@@ -61,6 +84,7 @@ class EmaCrossStrategy implements TradingStrategyInterface
                 'strategy' => $this->key(),
                 'ema_fast_period' => $fastPeriod,
                 'ema_slow_period' => $slowPeriod,
+                'ema_confirm_candles' => $confirmCandles,
                 'ema_fast' => $currentFast,
                 'ema_slow' => $currentSlow,
             ],

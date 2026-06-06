@@ -42,6 +42,7 @@ Artisan::command('mt5:auto-forex
     {--scalper=1 : 1 enables scalper mode (quick in/out), 0 keeps normal mode}
     {--trend-filter=0 : 1 requires all selected trend timeframes to align with the signal side}
     {--signal-timeframes= : Comma-separated trend timeframes (5m,15m,30m,1h,4h). Example: 5m,15m,1h}
+    {--entry-timeframe= : Final entry trigger timeframe (must be one of signal timeframes; defaults to lowest selected)}
     {--cooldown-override-ratio=0 : During cooldown, allow a new trade only when signal strength exceeds the last successful trade by this ratio}
     {--preferred-hours-utc= : Comma-separated UTC hours allowed for entries (e.g. 8,14,17)}
     {--blocked-hours-utc=15 : Comma-separated UTC hours blocked for entries (e.g. 15)}
@@ -301,6 +302,25 @@ Artisan::command('mt5:auto-forex
         if (empty($trendTimeframes)) {
             $trendTimeframes = ['15m'];
         }
+        $entryTimeframeRaw = strtolower(trim((string) $optionOrProfileOrSetting(
+            'entry-timeframe',
+            $botProfile['entry_timeframe'] ?? null,
+            $db->bot_entry_timeframe ?? null,
+            $trendTimeframes[0]
+        )));
+        $entryTimeframe = in_array($entryTimeframeRaw, $trendTimeframes, true)
+            ? $entryTimeframeRaw
+            : $trendTimeframes[0];
+        $trendContextTimeframes = $trendTimeframes;
+        if (count($trendContextTimeframes) > 1) {
+            $trendContextTimeframes = array_values(array_filter(
+                $trendContextTimeframes,
+                static fn (string $timeframe): bool => $timeframe !== $entryTimeframe
+            ));
+        }
+        if (empty($trendContextTimeframes)) {
+            $trendContextTimeframes = [$entryTimeframe];
+        }
         $cooldownOverrideRatio = (float) $optionOrProfileOrSetting('cooldown-override-ratio', $botProfile['cooldown_override_ratio'] ?? null, null, 0);
         $preferredHoursUtc = $normalizeHourList($optionOrProfileOrSetting('preferred-hours-utc', $botProfile['preferred_hours_utc'] ?? null, null, null));
         $blockedHoursUtc = $normalizeHourList($optionOrProfileOrSetting('blocked-hours-utc', $botProfile['blocked_hours_utc'] ?? null, null, 15));
@@ -353,7 +373,7 @@ Artisan::command('mt5:auto-forex
         }
 
         if ($useTrendFilter) {
-            $this->line('Trend filter ON  timeframes='.strtoupper(implode(',', $trendTimeframes)));
+            $this->line('Trend filter ON  context='.strtoupper(implode(',', $trendContextTimeframes)).'  entry='.strtoupper($entryTimeframe));
         }
 
         if ($cooldownOverrideRatio > 0) {
@@ -361,7 +381,7 @@ Artisan::command('mt5:auto-forex
         }
 
         $this->line('Volume settings  multiplier='.$volumeMultiplier.'  minEffectiveVolume='.$minEffectiveVolume);
-        $this->line('Strategies '.strtoupper(implode(',', $selectedStrategyKeys)).' on '.strtoupper($trendTimeframes[0] ?? '15m'));
+        $this->line('Strategies '.strtoupper(implode(',', $selectedStrategyKeys)).' on '.strtoupper($entryTimeframe));
 
         // Force UTC timezone to ensure correct time comparison
         date_default_timezone_set('UTC');
@@ -627,7 +647,7 @@ Artisan::command('mt5:auto-forex
             return $close > $open ? 'buy' : 'sell';
         };
 
-        $logSignal = static function (array $data) use ($calculateBotScore, $minBotScore, $testMode, $volumeMultiplier, $minEffectiveVolume, $lotSize, $botLogDefaults, $botKey, $botName): void {
+        $logSignal = static function (array $data) use ($calculateBotScore, $minBotScore, $testMode, $volumeMultiplier, $minEffectiveVolume, $lotSize, $botLogDefaults, $botKey, $botName, $selectedStrategyKeys, $trendTimeframes, $strategyParams): void {
             $payload = is_array($data['meta_payload'] ?? null) ? $data['meta_payload'] : [];
 
             $resolvedBotScore = null;
@@ -662,6 +682,15 @@ Artisan::command('mt5:auto-forex
             }
             if (!isset($payload['bot_name'])) {
                 $payload['bot_name'] = $botName;
+            }
+            if (!isset($payload['strategies'])) {
+                $payload['strategies'] = $selectedStrategyKeys;
+            }
+            if (!isset($payload['trend_timeframes'])) {
+                $payload['trend_timeframes'] = $trendTimeframes;
+            }
+            if (!isset($payload['strategy_params'])) {
+                $payload['strategy_params'] = $strategyParams;
             }
 
             BotTradeLog::query()->create(array_merge($botLogDefaults, [
@@ -710,7 +739,7 @@ Artisan::command('mt5:auto-forex
             $spreadPips = ($ask - $bid) / $pipSize;
 
             $candlesForStrategy = [];
-            $primaryTimeframe = $trendTimeframes[0] ?? '15m';
+            $primaryTimeframe = $entryTimeframe;
             $requiredCandleCount = max(array_map(static fn ($s) => $s->requiredCandles(), $strategies));
             if ($requiredCandleCount > 0) {
                 try {
@@ -919,7 +948,7 @@ Artisan::command('mt5:auto-forex
             if (!$testMode && $useTrendFilter) {
                 try {
                     $trendByTimeframe = [];
-                    foreach ($trendTimeframes as $timeframe) {
+                    foreach ($trendContextTimeframes as $timeframe) {
                         $candles = $mt5Service->getCandles($symbol, $timeframe, 1);
                         $trendByTimeframe[$timeframe] = $resolveTrendSide($candles);
                     }
@@ -936,8 +965,32 @@ Artisan::command('mt5:auto-forex
                                 'trend_by_timeframe' => $trendByTimeframe,
                                 'trend_filter' => true,
                                 'trend_timeframes' => $trendTimeframes,
+                                'trend_context_timeframes' => $trendContextTimeframes,
+                                'entry_timeframe' => $entryTimeframe,
                             ],
-                            'message' => 'Signal rejected because not all selected trend timeframes align with the signal side.',
+                            'message' => 'Signal rejected because higher timeframe trend context is not aligned with the signal side.',
+                        ]);
+                        continue;
+                    }
+
+                    $entryCandles = $mt5Service->getCandles($symbol, $entryTimeframe, 1);
+                    $entryTrendSide = $resolveTrendSide($entryCandles);
+                    if ($entryTrendSide !== $side) {
+                        $logSignal([
+                            'status' => 'entry_timeframe_wait',
+                            'symbol' => $symbol,
+                            'side' => $side,
+                            'spread_pips' => $spreadPips,
+                            'signal_delta_pips' => $signalDeltaPips,
+                            'meta_payload' => [
+                                'trend_filter' => true,
+                                'trend_timeframes' => $trendTimeframes,
+                                'trend_context_timeframes' => $trendContextTimeframes,
+                                'trend_by_timeframe' => $trendByTimeframe,
+                                'entry_timeframe' => $entryTimeframe,
+                                'entry_timeframe_trend' => $entryTrendSide,
+                            ],
+                            'message' => 'Signal is waiting for entry timeframe trigger alignment.',
                         ]);
                         continue;
                     }
@@ -954,6 +1007,8 @@ Artisan::command('mt5:auto-forex
                         'meta_payload' => [
                             'trend_filter' => true,
                             'trend_timeframes' => $trendTimeframes,
+                            'trend_context_timeframes' => $trendContextTimeframes,
+                            'entry_timeframe' => $entryTimeframe,
                         ],
                         'message' => 'Signal rejected because trend filter data was unavailable.',
                     ]);
@@ -1211,6 +1266,8 @@ Artisan::command('mt5:auto-forex
                 'strategy_params' => $strategyParams,
                 'trend_filter' => $useTrendFilter,
                 'trend_timeframes' => $trendTimeframes,
+                'trend_context_timeframes' => $trendContextTimeframes,
+                'entry_timeframe' => $entryTimeframe,
                 'ai_confirm' => $useAiConfirm,
                 'max_symbols' => $maxSymbols,
                 'max_per_cycle' => $maxPerCycle,

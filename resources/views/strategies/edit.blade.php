@@ -40,25 +40,25 @@
                         'key' => 'sma_cross',
                         'name' => 'SMA Cross',
                         'desc' => 'Signals when fast SMA crosses slow SMA.',
-                        'status' => 'Editable fields: Fast Period, Slow Period.',
+                        'status' => 'Editable fields: Fast Period, Slow Period, Confirm Candles.',
                     ],
                     [
                         'key' => 'ema_cross',
                         'name' => 'EMA Cross',
                         'desc' => 'Like SMA cross, but reacts faster to recent price.',
-                        'status' => 'Editable fields: Fast Period, Slow Period.',
+                        'status' => 'Editable fields: Fast Period, Slow Period, Confirm Candles.',
                     ],
                     [
                         'key' => 'bollinger_reversion',
                         'name' => 'Bollinger Reversion',
                         'desc' => 'Looks for overextension and mean reversion.',
-                        'status' => 'Editable fields: Band Period, StdDev Multiplier.',
+                        'status' => 'Editable fields: Band Period, StdDev Multiplier, Confirm Candles.',
                     ],
                     [
                         'key' => 'vwap_reversion',
                         'name' => 'VWAP Reversion',
                         'desc' => 'Trades return to VWAP after distance threshold.',
-                        'status' => 'Editable fields: VWAP Period, Min Distance (pips).',
+                        'status' => 'Editable fields: VWAP Period, Min Distance (pips), Confirm Candles.',
                     ],
                 ];
             @endphp
@@ -93,19 +93,39 @@
                                 <td class="py-1">Moving-average lengths for crossover.</td>
                             </tr>
                             <tr class="border-b border-blue-100">
+                                <td class="py-1 pr-4">sma_confirm_candles</td>
+                                <td class="py-1 pr-4">Bar Confirmation</td>
+                                <td class="py-1">Requires crossover direction to hold for N closed candles.</td>
+                            </tr>
+                            <tr class="border-b border-blue-100">
                                 <td class="py-1 pr-4">ema_fast / ema_slow</td>
                                 <td class="py-1 pr-4">Fast Length / Slow Length</td>
                                 <td class="py-1">EMA lengths for crossover.</td>
+                            </tr>
+                            <tr class="border-b border-blue-100">
+                                <td class="py-1 pr-4">ema_confirm_candles</td>
+                                <td class="py-1 pr-4">Bar Confirmation</td>
+                                <td class="py-1">Requires EMA side to persist for N closed candles.</td>
                             </tr>
                             <tr class="border-b border-blue-100">
                                 <td class="py-1 pr-4">bb_period / bb_stddev</td>
                                 <td class="py-1 pr-4">Length / Mult</td>
                                 <td class="py-1">Bollinger window and band width factor.</td>
                             </tr>
-                            <tr>
+                            <tr class="border-b border-blue-100">
+                                <td class="py-1 pr-4">bb_confirm_candles</td>
+                                <td class="py-1 pr-4">Bar Confirmation</td>
+                                <td class="py-1">Requires price to remain outside the band for N candles.</td>
+                            </tr>
+                            <tr class="border-b border-blue-100">
                                 <td class="py-1 pr-4">vwap_period / vwap_min_distance_pips</td>
                                 <td class="py-1 pr-4">VWAP Length / Threshold</td>
                                 <td class="py-1">Rolling VWAP window and trigger distance.</td>
+                            </tr>
+                            <tr>
+                                <td class="py-1 pr-4">vwap_confirm_candles</td>
+                                <td class="py-1 pr-4">Bar Confirmation</td>
+                                <td class="py-1">Requires VWAP distance trigger to persist for N candles.</td>
                             </tr>
                         </tbody>
                     </table>
@@ -164,6 +184,14 @@
                             <input name="bot_strategy_params[sma_slow]" type="number" min="3" max="300" value="{{ $params['sma_slow'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" />
                             <p id="info-sma-slow" class="hidden text-xs text-indigo-800 mt-1">Best start: 21-50 to smooth noise. Keep Slow > Fast to preserve crossover meaning.</p>
                         </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <label class="block text-sm font-medium text-gray-700">Confirm Candles</label>
+                                <button type="button" class="text-xs text-indigo-600 border border-indigo-200 rounded px-2 py-0.5" data-info-target="info-sma-confirm">Info</button>
+                            </div>
+                            <input name="bot_strategy_params[sma_confirm_candles]" type="number" min="0" max="5" value="{{ $params['sma_confirm_candles'] ?? 0 }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <p id="info-sma-confirm" class="hidden text-xs text-indigo-800 mt-1">0 = immediate entry. 1-2 = wait for direction to hold and reduce fake crossovers.</p>
+                        </div>
                         <div class="flex justify-end gap-2 pt-2">
                             <button type="button" data-close-modal="modal-sma_cross" class="px-3 py-2 text-xs border rounded border-gray-300">Cancel</button>
                             <button type="submit" class="px-3 py-2 text-xs rounded bg-indigo-600 text-white">Save SMA</button>
@@ -197,6 +225,14 @@
                             </div>
                             <input name="bot_strategy_params[ema_slow]" type="number" min="3" max="300" value="{{ $params['ema_slow'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" />
                             <p id="info-ema-slow" class="hidden text-xs text-indigo-800 mt-1">Best start: 20-30 for stability. Wider gap vs Fast usually reduces whipsaws.</p>
+                        </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <label class="block text-sm font-medium text-gray-700">Confirm Candles</label>
+                                <button type="button" class="text-xs text-indigo-600 border border-indigo-200 rounded px-2 py-0.5" data-info-target="info-ema-confirm">Info</button>
+                            </div>
+                            <input name="bot_strategy_params[ema_confirm_candles]" type="number" min="0" max="5" value="{{ $params['ema_confirm_candles'] ?? 0 }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <p id="info-ema-confirm" class="hidden text-xs text-indigo-800 mt-1">0 = immediate entry. 1-2 helps filter EMA whipsaws before execution.</p>
                         </div>
                         <div class="flex justify-end gap-2 pt-2">
                             <button type="button" data-close-modal="modal-ema_cross" class="px-3 py-2 text-xs border rounded border-gray-300">Cancel</button>
@@ -232,6 +268,14 @@
                             <input name="bot_strategy_params[bb_stddev]" type="number" step="0.1" min="0.5" max="5" value="{{ $params['bb_stddev'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" />
                             <p id="info-bb-stddev" class="hidden text-xs text-indigo-800 mt-1">Best start: 2.0. Higher gives fewer but stronger extremes; lower gives frequent but noisier entries.</p>
                         </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <label class="block text-sm font-medium text-gray-700">Confirm Candles</label>
+                                <button type="button" class="text-xs text-indigo-600 border border-indigo-200 rounded px-2 py-0.5" data-info-target="info-bb-confirm">Info</button>
+                            </div>
+                            <input name="bot_strategy_params[bb_confirm_candles]" type="number" min="0" max="5" value="{{ $params['bb_confirm_candles'] ?? 0 }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <p id="info-bb-confirm" class="hidden text-xs text-indigo-800 mt-1">0 = react on first break. 1-2 waits for persistent band break before reversion entry.</p>
+                        </div>
                         <div class="flex justify-end gap-2 pt-2">
                             <button type="button" data-close-modal="modal-bollinger_reversion" class="px-3 py-2 text-xs border rounded border-gray-300">Cancel</button>
                             <button type="submit" class="px-3 py-2 text-xs rounded bg-indigo-600 text-white">Save Bollinger</button>
@@ -265,6 +309,14 @@
                             </div>
                             <input name="bot_strategy_params[vwap_min_distance_pips]" type="number" step="0.1" min="0.1" max="100" value="{{ $params['vwap_min_distance_pips'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" />
                             <p id="info-vwap-distance" class="hidden text-xs text-indigo-800 mt-1">Best start: 3-8 pips on majors. Higher threshold filters weak deviations.</p>
+                        </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <label class="block text-sm font-medium text-gray-700">Confirm Candles</label>
+                                <button type="button" class="text-xs text-indigo-600 border border-indigo-200 rounded px-2 py-0.5" data-info-target="info-vwap-confirm">Info</button>
+                            </div>
+                            <input name="bot_strategy_params[vwap_confirm_candles]" type="number" min="0" max="5" value="{{ $params['vwap_confirm_candles'] ?? 0 }}" class="mt-1 block w-full rounded border-gray-300" />
+                            <p id="info-vwap-confirm" class="hidden text-xs text-indigo-800 mt-1">0 = immediate trigger. 1-2 waits for distance to hold and avoids quick snap-back noise.</p>
                         </div>
                         <div class="flex justify-end gap-2 pt-2">
                             <button type="button" data-close-modal="modal-vwap_reversion" class="px-3 py-2 text-xs border rounded border-gray-300">Cancel</button>

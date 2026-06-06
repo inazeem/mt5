@@ -61,15 +61,20 @@ class BotProfileController extends Controller
             'strategy_params'        => ['nullable', 'array'],
             'strategy_params.sma_fast' => ['nullable', 'integer', 'min:2', 'max:200'],
             'strategy_params.sma_slow' => ['nullable', 'integer', 'min:3', 'max:300'],
+            'strategy_params.sma_confirm_candles' => ['nullable', 'integer', 'min:0', 'max:5'],
             'strategy_params.ema_fast' => ['nullable', 'integer', 'min:2', 'max:200'],
             'strategy_params.ema_slow' => ['nullable', 'integer', 'min:3', 'max:300'],
+            'strategy_params.ema_confirm_candles' => ['nullable', 'integer', 'min:0', 'max:5'],
             'strategy_params.bb_period' => ['nullable', 'integer', 'min:5', 'max:300'],
             'strategy_params.bb_stddev' => ['nullable', 'numeric', 'min:0.5', 'max:5'],
+            'strategy_params.bb_confirm_candles' => ['nullable', 'integer', 'min:0', 'max:5'],
             'strategy_params.vwap_period' => ['nullable', 'integer', 'min:5', 'max:500'],
             'strategy_params.vwap_min_distance_pips' => ['nullable', 'numeric', 'min:0.1', 'max:100'],
+            'strategy_params.vwap_confirm_candles' => ['nullable', 'integer', 'min:0', 'max:5'],
             'signal_timeframes'      => ['nullable', 'array'],
             'signal_timeframes.*'    => ['required', 'in:5m,15m,30m,1h,4h'],
             'signal_timeframe'       => ['nullable', 'in:5m,15m,30m,1h,4h'],
+            'entry_timeframe'        => ['nullable', 'in:5m,15m,30m,1h,4h'],
         ]);
 
         $settings = AppSetting::singleton();
@@ -89,6 +94,18 @@ class BotProfileController extends Controller
         $signalTimeframes = $this->normalizeSignalTimeframes(
             $validated['signal_timeframes'] ?? (isset($validated['signal_timeframe']) ? [(string) $validated['signal_timeframe']] : null)
         );
+        $entryTimeframe = $this->normalizeSignalTimeframe($validated['entry_timeframe'] ?? null);
+        if ($entryTimeframe !== null && empty($signalTimeframes)) {
+            $signalTimeframes = [$entryTimeframe];
+        }
+        if ($entryTimeframe !== null && !in_array($entryTimeframe, $signalTimeframes ?? [], true)) {
+            throw ValidationException::withMessages([
+                'entry_timeframe' => 'Entry timeframe must be one of the selected trend timeframes.',
+            ]);
+        }
+        if ($entryTimeframe === null) {
+            $entryTimeframe = !empty($signalTimeframes) ? $signalTimeframes[0] : null;
+        }
         $strategies = $this->normalizeStrategies($validated['strategies'] ?? null);
         if ($strategies === null && !empty($validated['strategy'])) {
             $strategies = [$this->normalizeStrategy($validated['strategy'])];
@@ -128,6 +145,7 @@ class BotProfileController extends Controller
             'strategy_params' => $this->normalizeStrategyParams($validated['strategy_params'] ?? null),
             'signal_timeframes' => $signalTimeframes,
             'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
+            'entry_timeframe' => $entryTimeframe,
         ];
 
         $profiles[] = $newProfile;
@@ -186,15 +204,20 @@ class BotProfileController extends Controller
             'strategy_params'        => ['nullable', 'array'],
             'strategy_params.sma_fast' => ['nullable', 'integer', 'min:2', 'max:200'],
             'strategy_params.sma_slow' => ['nullable', 'integer', 'min:3', 'max:300'],
+            'strategy_params.sma_confirm_candles' => ['nullable', 'integer', 'min:0', 'max:5'],
             'strategy_params.ema_fast' => ['nullable', 'integer', 'min:2', 'max:200'],
             'strategy_params.ema_slow' => ['nullable', 'integer', 'min:3', 'max:300'],
+            'strategy_params.ema_confirm_candles' => ['nullable', 'integer', 'min:0', 'max:5'],
             'strategy_params.bb_period' => ['nullable', 'integer', 'min:5', 'max:300'],
             'strategy_params.bb_stddev' => ['nullable', 'numeric', 'min:0.5', 'max:5'],
+            'strategy_params.bb_confirm_candles' => ['nullable', 'integer', 'min:0', 'max:5'],
             'strategy_params.vwap_period' => ['nullable', 'integer', 'min:5', 'max:500'],
             'strategy_params.vwap_min_distance_pips' => ['nullable', 'numeric', 'min:0.1', 'max:100'],
+            'strategy_params.vwap_confirm_candles' => ['nullable', 'integer', 'min:0', 'max:5'],
             'signal_timeframes'      => ['nullable', 'array'],
             'signal_timeframes.*'    => ['required', 'in:5m,15m,30m,1h,4h'],
             'signal_timeframe'       => ['nullable', 'in:5m,15m,30m,1h,4h'],
+            'entry_timeframe'        => ['nullable', 'in:5m,15m,30m,1h,4h'],
         ]);
 
         $settings = AppSetting::singleton();
@@ -212,6 +235,18 @@ class BotProfileController extends Controller
         $signalTimeframes = $this->normalizeSignalTimeframes(
             $validated['signal_timeframes'] ?? (isset($validated['signal_timeframe']) ? [(string) $validated['signal_timeframe']] : null)
         );
+        $entryTimeframe = $this->normalizeSignalTimeframe($validated['entry_timeframe'] ?? null);
+        if ($entryTimeframe !== null && empty($signalTimeframes)) {
+            $signalTimeframes = [$entryTimeframe];
+        }
+        if ($entryTimeframe !== null && !in_array($entryTimeframe, $signalTimeframes ?? [], true)) {
+            throw ValidationException::withMessages([
+                'entry_timeframe' => 'Entry timeframe must be one of the selected trend timeframes.',
+            ]);
+        }
+        if ($entryTimeframe === null) {
+            $entryTimeframe = !empty($signalTimeframes) ? $signalTimeframes[0] : null;
+        }
         $strategies = $this->normalizeStrategies($validated['strategies'] ?? null);
         if ($strategies === null && !empty($validated['strategy'])) {
             $strategies = [$this->normalizeStrategy($validated['strategy'])];
@@ -250,6 +285,7 @@ class BotProfileController extends Controller
             'strategy_params' => $this->normalizeStrategyParams($validated['strategy_params'] ?? null),
             'signal_timeframes' => $signalTimeframes,
             'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
+            'entry_timeframe' => $entryTimeframe,
         ]);
 
         $settings->bot_profiles = $profiles;
@@ -374,12 +410,16 @@ class BotProfileController extends Controller
         $normalized = [
             'sma_fast' => isset($raw['sma_fast']) ? (int) $raw['sma_fast'] : null,
             'sma_slow' => isset($raw['sma_slow']) ? (int) $raw['sma_slow'] : null,
+            'sma_confirm_candles' => isset($raw['sma_confirm_candles']) ? (int) $raw['sma_confirm_candles'] : null,
             'ema_fast' => isset($raw['ema_fast']) ? (int) $raw['ema_fast'] : null,
             'ema_slow' => isset($raw['ema_slow']) ? (int) $raw['ema_slow'] : null,
+            'ema_confirm_candles' => isset($raw['ema_confirm_candles']) ? (int) $raw['ema_confirm_candles'] : null,
             'bb_period' => isset($raw['bb_period']) ? (int) $raw['bb_period'] : null,
             'bb_stddev' => isset($raw['bb_stddev']) ? (float) $raw['bb_stddev'] : null,
+            'bb_confirm_candles' => isset($raw['bb_confirm_candles']) ? (int) $raw['bb_confirm_candles'] : null,
             'vwap_period' => isset($raw['vwap_period']) ? (int) $raw['vwap_period'] : null,
             'vwap_min_distance_pips' => isset($raw['vwap_min_distance_pips']) ? (float) $raw['vwap_min_distance_pips'] : null,
+            'vwap_confirm_candles' => isset($raw['vwap_confirm_candles']) ? (int) $raw['vwap_confirm_candles'] : null,
         ];
 
         $normalized = array_filter($normalized, static fn ($value) => $value !== null);

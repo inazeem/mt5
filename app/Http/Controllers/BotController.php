@@ -94,11 +94,16 @@ class BotController extends Controller
             'bot_strategies.*' => ['required', 'in:momentum,sma_cross,ema_cross,bollinger_reversion,vwap_reversion'],
             'bot_signal_timeframes' => ['nullable', 'array'],
             'bot_signal_timeframes.*' => ['required', 'in:5m,15m,30m,1h,4h'],
+            'bot_entry_timeframe' => ['nullable', 'in:5m,15m,30m,1h,4h'],
         ]);
 
         $validated['bot_ai_confirm'] = $request->boolean('bot_ai_confirm');
         $validated['bot_strategies'] = $this->normalizeStrategies($validated['bot_strategies'] ?? null) ?? ['momentum'];
         $validated['bot_signal_timeframes'] = $this->normalizeSignalTimeframes($validated['bot_signal_timeframes'] ?? null) ?? ['15m'];
+        $entryTimeframe = strtolower(trim((string) ($validated['bot_entry_timeframe'] ?? '')));
+        $validated['bot_entry_timeframe'] = in_array($entryTimeframe, $validated['bot_signal_timeframes'], true)
+            ? $entryTimeframe
+            : $validated['bot_signal_timeframes'][0];
         $validated['bot_strategy'] = $validated['bot_strategies'][0] ?? 'momentum';
 
         $settings = AppSetting::singleton();
@@ -238,6 +243,10 @@ class BotController extends Controller
         if (empty($signalTimeframes)) {
             $signalTimeframes = ['15m'];
         }
+        $entryTimeframe = strtolower(trim((string) ($botProfile['entry_timeframe'] ?? $settings->bot_entry_timeframe ?? '')));
+        if (!in_array($entryTimeframe, $signalTimeframes, true)) {
+            $entryTimeframe = $signalTimeframes[0];
+        }
         $currentHourUtc = (int) now('UTC')->format('G');
         $inSession = $sessionStartUtc <= $sessionEndUtc
             ? ($currentHourUtc >= $sessionStartUtc && $currentHourUtc <= $sessionEndUtc)
@@ -269,6 +278,7 @@ class BotController extends Controller
             'min_move_pips' => (float) ($botProfile['min_move_pips'] ?? $settings->bot_min_move_pips ?? 3),
             'max_spread_pips' => (float) ($botProfile['max_spread_pips'] ?? $settings->bot_max_spread_pips ?? 2.5),
             'signal_timeframes' => $signalTimeframes,
+            'entry_timeframe' => $entryTimeframe,
             'health_symbol' => $healthSymbol,
         ];
 
@@ -686,8 +696,45 @@ class BotController extends Controller
             $closingDealsByPosition = [];
         }
 
-        $buildReasoning = static function (?string $aiSummary, ?string $message, ?string $errorMessage): string {
+        $buildReasoning = static function (?string $aiSummary, ?string $message, ?string $errorMessage, array $metaPayload): string {
             $parts = [];
+
+            $strategies = [];
+            if (isset($metaPayload['strategies']) && is_array($metaPayload['strategies'])) {
+                $strategies = array_values(array_filter(array_map(
+                    static fn ($value) => strtoupper(trim((string) $value)),
+                    $metaPayload['strategies']
+                ), static fn ($value) => $value !== ''));
+            } elseif (!empty($metaPayload['strategy'])) {
+                $strategies = [strtoupper(trim((string) $metaPayload['strategy']))];
+            }
+
+            if (!empty($strategies)) {
+                $parts[] = 'Strategies: '.implode(', ', $strategies);
+            }
+
+            if (!empty($metaPayload['strategy_timeframe'])) {
+                $parts[] = 'Strategy timeframe: '.strtoupper((string) $metaPayload['strategy_timeframe']);
+            }
+
+            if (isset($metaPayload['strategy_results']) && is_array($metaPayload['strategy_results'])) {
+                foreach ($metaPayload['strategy_results'] as $strategyKey => $result) {
+                    if (!is_array($result)) {
+                        continue;
+                    }
+
+                    $status = (string) ($result['status'] ?? ($result['signal'] ?? false ? 'signal_ok' : 'strategy_rejected'));
+                    $side = (string) ($result['side'] ?? '-');
+                    $reason = trim((string) ($result['message'] ?? ''));
+                    $label = strtoupper((string) $strategyKey);
+                    $line = $label.': '.strtoupper($status).' side='.strtoupper($side);
+                    if ($reason !== '') {
+                        $line .= ' reason='.$reason;
+                    }
+
+                    $parts[] = $line;
+                }
+            }
 
             foreach ([$aiSummary, $message, $errorMessage] as $value) {
                 $text = trim((string) $value);
@@ -812,7 +859,7 @@ class BotController extends Controller
                 $log->trade_outcome = 'NOT_OPENED';
             }
 
-            $log->alert_reasoning = $buildReasoning($log->ai_summary, $log->message, $log->error_message);
+            $log->alert_reasoning = $buildReasoning($log->ai_summary, $log->message, $log->error_message, $metaPayload);
             $log->bot_score = max(0, min(100, $botScore));
 
             return $log;

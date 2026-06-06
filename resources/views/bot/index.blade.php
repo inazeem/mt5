@@ -30,6 +30,10 @@
                 if (!is_array($selectedSignalTimeframes) || empty($selectedSignalTimeframes)) {
                     $selectedSignalTimeframes = ['15m'];
                 }
+                $selectedEntryTimeframe = old('bot_entry_timeframe', $settings->bot_entry_timeframe ?? ($selectedSignalTimeframes[0] ?? '15m'));
+                if (!in_array($selectedEntryTimeframe, $selectedSignalTimeframes, true)) {
+                    $selectedEntryTimeframe = $selectedSignalTimeframes[0] ?? '15m';
+                }
                 $selectedStrategies = old('bot_strategies', $settings->bot_strategies ?? ['momentum']);
                 if (!is_array($selectedStrategies) || empty($selectedStrategies)) {
                     $selectedStrategies = ['momentum'];
@@ -133,6 +137,19 @@
                                 </label>
                             @endforeach
                         </div>
+                    </div>
+
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium text-gray-700">Entry Timeframe (final trigger)</label>
+                        <select name="bot_entry_timeframe" class="mt-1 block w-full rounded border-gray-300">
+                            @foreach ($selectedSignalTimeframes as $timeframe)
+                                <option value="{{ $timeframe }}" {{ $selectedEntryTimeframe === $timeframe ? 'selected' : '' }}>{{ strtoupper($timeframe) }}</option>
+                            @endforeach
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">Trade waits for this timeframe trigger after all selected timeframes confirm direction.</p>
+                        @error('bot_entry_timeframe')
+                            <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                        @enderror
                     </div>
 
                     <div class="md:col-span-3">

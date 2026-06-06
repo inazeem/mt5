@@ -176,7 +176,24 @@
                                     </td>
                                     <td class="py-2 pr-3">{{ is_numeric($log->ai_confidence) ? (int) $log->ai_confidence.'%' : '-' }}</td>
                                     <td class="py-2 pr-3">{{ is_numeric($log->bot_score) ? (int) $log->bot_score.'%' : '-' }}</td>
-                                    <td class="py-2 pr-3 max-w-md whitespace-pre-wrap break-words">{{ $log->alert_reasoning !== '' ? $log->alert_reasoning : '-' }}</td>
+                                    <td class="py-2 pr-3 max-w-md">
+                                        @php
+                                            $thinking = trim((string) ($log->alert_reasoning ?? ''));
+                                            $summary = $thinking !== '' ? explode("\n", $thinking)[0] : '-';
+                                        @endphp
+                                        <div class="text-xs text-gray-700 truncate" title="{{ $summary }}">{{ $summary }}</div>
+                                        @if ($thinking !== '')
+                                            <button
+                                                type="button"
+                                                class="mt-1 inline-flex items-center rounded border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                                                data-thinking-view="1"
+                                                data-thinking-title="{{ ($log->symbol ?? '-') }} {{ strtoupper((string) ($log->side ?? '-')) }} | {{ $log->created_at?->format('Y-m-d H:i:s') }}"
+                                                data-thinking-body="{{ base64_encode($thinking) }}"
+                                            >
+                                                View
+                                            </button>
+                                        @endif
+                                    </td>
                                 </tr>
                             @empty
                                 <tr>
@@ -193,4 +210,49 @@
             </div>
         </div>
     </div>
+
+    <div id="bot-thinking-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/40" data-thinking-close="1"></div>
+        <div class="relative bg-white rounded-lg shadow-xl w-full max-w-3xl p-5">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-base font-semibold text-gray-900" id="bot-thinking-title">Bot Thinking</h3>
+                <button type="button" class="text-gray-500 hover:text-gray-700" data-thinking-close="1">Close</button>
+            </div>
+            <pre id="bot-thinking-body" class="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words text-xs bg-slate-50 border border-slate-200 rounded p-3 text-slate-800"></pre>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            const modal = document.getElementById('bot-thinking-modal');
+            const titleEl = document.getElementById('bot-thinking-title');
+            const bodyEl = document.getElementById('bot-thinking-body');
+            if (!modal || !titleEl || !bodyEl) return;
+
+            document.querySelectorAll('[data-thinking-view="1"]').forEach((button) => {
+                button.addEventListener('click', () => {
+                    const title = button.getAttribute('data-thinking-title') || 'Bot Thinking';
+                    const encoded = button.getAttribute('data-thinking-body') || '';
+                    let text = '';
+                    try {
+                        text = atob(encoded);
+                    } catch (_) {
+                        text = 'Unable to decode bot thinking payload.';
+                    }
+
+                    titleEl.textContent = title;
+                    bodyEl.textContent = text;
+                    modal.classList.remove('hidden');
+                    modal.classList.add('flex');
+                });
+            });
+
+            document.querySelectorAll('[data-thinking-close="1"]').forEach((button) => {
+                button.addEventListener('click', () => {
+                    modal.classList.add('hidden');
+                    modal.classList.remove('flex');
+                });
+            });
+        })();
+    </script>
 </x-app-layout>

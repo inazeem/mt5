@@ -165,9 +165,18 @@ class SettingsController extends Controller
                 ]);
             }
 
+            $signalTimeframes = $normalizeTimeframes($profile['signal_timeframes'] ?? null)
+                ?? $this->normalizeSignalTimeframes(isset($profile['signal_timeframe']) ? [(string) $profile['signal_timeframe']] : null);
+            $entryTimeframe = in_array(strtolower(trim((string) ($profile['entry_timeframe'] ?? ''))), self::ALLOWED_SIGNAL_TIMEFRAMES, true)
+                ? strtolower(trim((string) ($profile['entry_timeframe'] ?? '')))
+                : null;
+            if (!empty($signalTimeframes) && !in_array($entryTimeframe, $signalTimeframes, true)) {
+                $entryTimeframe = $signalTimeframes[0];
+            }
+
             $profiles[] = [
-                'signal_timeframes' => $normalizeTimeframes($profile['signal_timeframes'] ?? null)
-                    ?? $this->normalizeSignalTimeframes(isset($profile['signal_timeframe']) ? [(string) $profile['signal_timeframe']] : null),
+                'signal_timeframes' => $signalTimeframes,
+                'entry_timeframe' => $entryTimeframe,
                 'strategy' => $this->normalizeStrategy($profile['strategy'] ?? null),
                 'strategy_params' => $this->normalizeStrategyParams($profile['strategy_params'] ?? null),
                 'key' => $key,
@@ -269,12 +278,16 @@ class SettingsController extends Controller
         $normalized = [
             'sma_fast' => isset($raw['sma_fast']) ? (int) $raw['sma_fast'] : null,
             'sma_slow' => isset($raw['sma_slow']) ? (int) $raw['sma_slow'] : null,
+            'sma_confirm_candles' => isset($raw['sma_confirm_candles']) ? (int) $raw['sma_confirm_candles'] : null,
             'ema_fast' => isset($raw['ema_fast']) ? (int) $raw['ema_fast'] : null,
             'ema_slow' => isset($raw['ema_slow']) ? (int) $raw['ema_slow'] : null,
+            'ema_confirm_candles' => isset($raw['ema_confirm_candles']) ? (int) $raw['ema_confirm_candles'] : null,
             'bb_period' => isset($raw['bb_period']) ? (int) $raw['bb_period'] : null,
             'bb_stddev' => isset($raw['bb_stddev']) ? (float) $raw['bb_stddev'] : null,
+            'bb_confirm_candles' => isset($raw['bb_confirm_candles']) ? (int) $raw['bb_confirm_candles'] : null,
             'vwap_period' => isset($raw['vwap_period']) ? (int) $raw['vwap_period'] : null,
             'vwap_min_distance_pips' => isset($raw['vwap_min_distance_pips']) ? (float) $raw['vwap_min_distance_pips'] : null,
+            'vwap_confirm_candles' => isset($raw['vwap_confirm_candles']) ? (int) $raw['vwap_confirm_candles'] : null,
         ];
 
         $normalized = array_filter($normalized, static fn ($value) => $value !== null);

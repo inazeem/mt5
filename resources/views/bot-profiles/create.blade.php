@@ -24,6 +24,13 @@
                         if (!is_array($selectedSignalTimeframes)) {
                             $selectedSignalTimeframes = [];
                         }
+                        $selectedEntryTimeframe = old('entry_timeframe');
+                        if (!is_string($selectedEntryTimeframe) || $selectedEntryTimeframe === '') {
+                            $selectedEntryTimeframe = $selectedSignalTimeframes[0] ?? '';
+                        }
+                        if ($selectedEntryTimeframe !== '' && !in_array($selectedEntryTimeframe, $selectedSignalTimeframes, true)) {
+                            $selectedEntryTimeframe = $selectedSignalTimeframes[0] ?? '';
+                        }
                         $selectedStrategies = old('strategies');
                         if (!is_array($selectedStrategies)) {
                             $selectedStrategies = old('strategy') ? [old('strategy')] : [];
@@ -173,6 +180,20 @@
                                 <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
                             @enderror
                             @error('signal_timeframes.*')
+                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Entry Timeframe (final trigger)</label>
+                            <select name="entry_timeframe" class="mt-1 block w-full rounded border-gray-300">
+                                <option value="">Auto (lowest selected)</option>
+                                @foreach ($selectedSignalTimeframes as $timeframe)
+                                    <option value="{{ $timeframe }}" {{ $selectedEntryTimeframe === $timeframe ? 'selected' : '' }}>{{ strtoupper($timeframe) }}</option>
+                                @endforeach
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">Must be one of selected trend timeframes.</p>
+                            @error('entry_timeframe')
                                 <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
                             @enderror
                         </div>

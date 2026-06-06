@@ -19,6 +19,7 @@ class BollingerReversionStrategy implements TradingStrategyInterface
         $params = is_array($context['strategy_params'] ?? null) ? $context['strategy_params'] : [];
         $period = max(5, min(300, (int) ($params['bb_period'] ?? 20)));
         $multiplier = max(0.5, min(5.0, (float) ($params['bb_stddev'] ?? 2.0)));
+        $confirmCandles = max(0, min(5, (int) ($params['bb_confirm_candles'] ?? 0)));
 
         $candles = is_array($context['candles'] ?? null) ? $context['candles'] : [];
         $pipSize = (float) ($context['pip_size'] ?? 0.0001);
@@ -40,6 +41,9 @@ class BollingerReversionStrategy implements TradingStrategyInterface
         $lower = $middle - ($multiplier * $stdDev);
 
         if ($lastClose < $lower) {
+            if ($confirmCandles > 0 && !$this->holdsBandBreakForCandles($closes, $period, $multiplier, 'buy', $confirmCandles)) {
+                return ['signal' => false, 'status' => 'strategy_rejected', 'message' => 'Bollinger confirmation pending: break has not persisted long enough.'];
+            }
             $strength = $pipSize > 0 ? abs(($lower - $lastClose) / $pipSize) : 0.0;
             return [
                 'signal' => true,
@@ -49,6 +53,7 @@ class BollingerReversionStrategy implements TradingStrategyInterface
                     'strategy' => $this->key(),
                     'bb_period' => $period,
                     'bb_stddev' => $multiplier,
+                    'bb_confirm_candles' => $confirmCandles,
                     'bb_upper' => $upper,
                     'bb_middle' => $middle,
                     'bb_lower' => $lower,
@@ -57,6 +62,9 @@ class BollingerReversionStrategy implements TradingStrategyInterface
         }
 
         if ($lastClose > $upper) {
+            if ($confirmCandles > 0 && !$this->holdsBandBreakForCandles($closes, $period, $multiplier, 'sell', $confirmCandles)) {
+                return ['signal' => false, 'status' => 'strategy_rejected', 'message' => 'Bollinger confirmation pending: break has not persisted long enough.'];
+            }
             $strength = $pipSize > 0 ? abs(($lastClose - $upper) / $pipSize) : 0.0;
             return [
                 'signal' => true,
@@ -66,6 +74,7 @@ class BollingerReversionStrategy implements TradingStrategyInterface
                     'strategy' => $this->key(),
                     'bb_period' => $period,
                     'bb_stddev' => $multiplier,
+                    'bb_confirm_candles' => $confirmCandles,
                     'bb_upper' => $upper,
                     'bb_middle' => $middle,
                     'bb_lower' => $lower,
@@ -89,5 +98,35 @@ class BollingerReversionStrategy implements TradingStrategyInterface
 
             return (float) $candle['close'];
         }, $candles), static fn ($value) => $value !== null));
+    }
+
+    /**
+     * @param array<int, float> $closes
+     */
+    private function holdsBandBreakForCandles(array $closes, int $period, float $multiplier, string $side, int $confirmCandles): bool
+    {
+        for ($offset = 0; $offset <= $confirmCandles; $offset++) {
+            $slice = $offset === 0 ? $closes : array_slice($closes, 0, -$offset);
+            $middle = IndicatorMath::sma($slice, $period);
+            $stdDev = IndicatorMath::stdDev($slice, $period);
+            $close = $slice[array_key_last($slice)] ?? null;
+
+            if ($middle === null || $stdDev === null || $close === null) {
+                return false;
+            }
+
+            $upper = $middle + ($multiplier * $stdDev);
+            $lower = $middle - ($multiplier * $stdDev);
+
+            if ($side === 'buy' && !($close < $lower)) {
+                return false;
+            }
+
+            if ($side === 'sell' && !($close > $upper)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
