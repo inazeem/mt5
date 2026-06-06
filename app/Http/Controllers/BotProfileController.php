@@ -9,6 +9,7 @@ use Illuminate\Validation\ValidationException;
 class BotProfileController extends Controller
 {
     private const ALLOWED_SIGNAL_TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h'];
+    private const ALLOWED_STRATEGIES = ['momentum', 'sma_cross', 'ema_cross', 'bollinger_reversion', 'vwap_reversion'];
 
     public function index()
     {
@@ -54,6 +55,18 @@ class BotProfileController extends Controller
             'preferred_hours_utc'    => ['nullable', 'string'],
             'blocked_hours_utc'      => ['nullable', 'string'],
             'preferred_symbols'      => ['nullable', 'string'],
+            'strategy'               => ['nullable', 'in:momentum,sma_cross,ema_cross,bollinger_reversion,vwap_reversion'],
+            'strategies'             => ['nullable', 'array'],
+            'strategies.*'           => ['required', 'in:momentum,sma_cross,ema_cross,bollinger_reversion,vwap_reversion'],
+            'strategy_params'        => ['nullable', 'array'],
+            'strategy_params.sma_fast' => ['nullable', 'integer', 'min:2', 'max:200'],
+            'strategy_params.sma_slow' => ['nullable', 'integer', 'min:3', 'max:300'],
+            'strategy_params.ema_fast' => ['nullable', 'integer', 'min:2', 'max:200'],
+            'strategy_params.ema_slow' => ['nullable', 'integer', 'min:3', 'max:300'],
+            'strategy_params.bb_period' => ['nullable', 'integer', 'min:5', 'max:300'],
+            'strategy_params.bb_stddev' => ['nullable', 'numeric', 'min:0.5', 'max:5'],
+            'strategy_params.vwap_period' => ['nullable', 'integer', 'min:5', 'max:500'],
+            'strategy_params.vwap_min_distance_pips' => ['nullable', 'numeric', 'min:0.1', 'max:100'],
             'signal_timeframes'      => ['nullable', 'array'],
             'signal_timeframes.*'    => ['required', 'in:5m,15m,30m,1h,4h'],
             'signal_timeframe'       => ['nullable', 'in:5m,15m,30m,1h,4h'],
@@ -76,6 +89,10 @@ class BotProfileController extends Controller
         $signalTimeframes = $this->normalizeSignalTimeframes(
             $validated['signal_timeframes'] ?? (isset($validated['signal_timeframe']) ? [(string) $validated['signal_timeframe']] : null)
         );
+        $strategies = $this->normalizeStrategies($validated['strategies'] ?? null);
+        if ($strategies === null && !empty($validated['strategy'])) {
+            $strategies = [$this->normalizeStrategy($validated['strategy'])];
+        }
 
         $newProfile = [
             'key' => $key,
@@ -106,6 +123,9 @@ class BotProfileController extends Controller
             'preferred_symbols' => !empty($preferredSymbols) ? $preferredSymbols : null,
             'preferred_hours_utc' => !empty($preferredHoursUtc) ? $preferredHoursUtc : null,
             'blocked_hours_utc' => !empty($blockedHoursUtc) ? $blockedHoursUtc : null,
+            'strategies' => $strategies,
+            'strategy' => !empty($strategies) ? $strategies[0] : $this->normalizeStrategy($validated['strategy'] ?? null),
+            'strategy_params' => $this->normalizeStrategyParams($validated['strategy_params'] ?? null),
             'signal_timeframes' => $signalTimeframes,
             'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
         ];
@@ -160,6 +180,18 @@ class BotProfileController extends Controller
             'preferred_hours_utc'    => ['nullable', 'string'],
             'blocked_hours_utc'      => ['nullable', 'string'],
             'preferred_symbols'      => ['nullable', 'string'],
+            'strategy'               => ['nullable', 'in:momentum,sma_cross,ema_cross,bollinger_reversion,vwap_reversion'],
+            'strategies'             => ['nullable', 'array'],
+            'strategies.*'           => ['required', 'in:momentum,sma_cross,ema_cross,bollinger_reversion,vwap_reversion'],
+            'strategy_params'        => ['nullable', 'array'],
+            'strategy_params.sma_fast' => ['nullable', 'integer', 'min:2', 'max:200'],
+            'strategy_params.sma_slow' => ['nullable', 'integer', 'min:3', 'max:300'],
+            'strategy_params.ema_fast' => ['nullable', 'integer', 'min:2', 'max:200'],
+            'strategy_params.ema_slow' => ['nullable', 'integer', 'min:3', 'max:300'],
+            'strategy_params.bb_period' => ['nullable', 'integer', 'min:5', 'max:300'],
+            'strategy_params.bb_stddev' => ['nullable', 'numeric', 'min:0.5', 'max:5'],
+            'strategy_params.vwap_period' => ['nullable', 'integer', 'min:5', 'max:500'],
+            'strategy_params.vwap_min_distance_pips' => ['nullable', 'numeric', 'min:0.1', 'max:100'],
             'signal_timeframes'      => ['nullable', 'array'],
             'signal_timeframes.*'    => ['required', 'in:5m,15m,30m,1h,4h'],
             'signal_timeframe'       => ['nullable', 'in:5m,15m,30m,1h,4h'],
@@ -180,6 +212,10 @@ class BotProfileController extends Controller
         $signalTimeframes = $this->normalizeSignalTimeframes(
             $validated['signal_timeframes'] ?? (isset($validated['signal_timeframe']) ? [(string) $validated['signal_timeframe']] : null)
         );
+        $strategies = $this->normalizeStrategies($validated['strategies'] ?? null);
+        if ($strategies === null && !empty($validated['strategy'])) {
+            $strategies = [$this->normalizeStrategy($validated['strategy'])];
+        }
 
         $profiles[$profileIndex] = array_merge($profiles[$profileIndex], [
             'name' => trim($validated['name']),
@@ -209,6 +245,9 @@ class BotProfileController extends Controller
             'preferred_symbols' => !empty($preferredSymbols) ? $preferredSymbols : null,
             'preferred_hours_utc' => !empty($preferredHoursUtc) ? $preferredHoursUtc : null,
             'blocked_hours_utc' => !empty($blockedHoursUtc) ? $blockedHoursUtc : null,
+            'strategies' => $strategies,
+            'strategy' => !empty($strategies) ? $strategies[0] : $this->normalizeStrategy($validated['strategy'] ?? null),
+            'strategy_params' => $this->normalizeStrategyParams($validated['strategy_params'] ?? null),
             'signal_timeframes' => $signalTimeframes,
             'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
         ]);
@@ -282,6 +321,16 @@ class BotProfileController extends Controller
         return in_array($value, self::ALLOWED_SIGNAL_TIMEFRAMES, true) ? $value : null;
     }
 
+    private function normalizeStrategy(mixed $raw): ?string
+    {
+        $value = strtolower(trim((string) $raw));
+        if ($value === '') {
+            return null;
+        }
+
+        return in_array($value, self::ALLOWED_STRATEGIES, true) ? $value : null;
+    }
+
     private function normalizeSignalTimeframes(?array $raw): ?array
     {
         if (!is_array($raw)) {
@@ -297,5 +346,44 @@ class BotProfileController extends Controller
         usort($timeframes, static fn ($a, $b) => $order[$a] <=> $order[$b]);
 
         return !empty($timeframes) ? $timeframes : null;
+    }
+
+    private function normalizeStrategies(?array $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        $order = array_flip(self::ALLOWED_STRATEGIES);
+        $strategies = array_values(array_unique(array_filter(array_map(
+            static fn ($value) => strtolower(trim((string) $value)),
+            $raw
+        ), static fn ($value) => isset($order[$value]))));
+
+        usort($strategies, static fn ($a, $b) => $order[$a] <=> $order[$b]);
+
+        return !empty($strategies) ? $strategies : null;
+    }
+
+    private function normalizeStrategyParams(mixed $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        $normalized = [
+            'sma_fast' => isset($raw['sma_fast']) ? (int) $raw['sma_fast'] : null,
+            'sma_slow' => isset($raw['sma_slow']) ? (int) $raw['sma_slow'] : null,
+            'ema_fast' => isset($raw['ema_fast']) ? (int) $raw['ema_fast'] : null,
+            'ema_slow' => isset($raw['ema_slow']) ? (int) $raw['ema_slow'] : null,
+            'bb_period' => isset($raw['bb_period']) ? (int) $raw['bb_period'] : null,
+            'bb_stddev' => isset($raw['bb_stddev']) ? (float) $raw['bb_stddev'] : null,
+            'vwap_period' => isset($raw['vwap_period']) ? (int) $raw['vwap_period'] : null,
+            'vwap_min_distance_pips' => isset($raw['vwap_min_distance_pips']) ? (float) $raw['vwap_min_distance_pips'] : null,
+        ];
+
+        $normalized = array_filter($normalized, static fn ($value) => $value !== null);
+
+        return !empty($normalized) ? $normalized : null;
     }
 }

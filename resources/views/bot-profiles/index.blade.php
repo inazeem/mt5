@@ -33,6 +33,7 @@
                                     <th class="py-3 px-4">Key</th>
                                     <th class="py-3 px-4">Name</th>
                                     <th class="py-3 px-4">Status</th>
+                                    <th class="py-3 px-4">Strategy</th>
                                     <th class="py-3 px-4">Timeframe</th>
                                     <th class="py-3 px-4">Lot</th>
                                     <th class="py-3 px-4">TP/SL (pips)</th>
@@ -54,6 +55,21 @@
                                             <span class="inline-flex items-center rounded px-2.5 py-0.5 text-xs font-semibold {{ $statusClass }}">
                                                 {{ $status }}
                                             </span>
+                                        </td>
+                                        <td class="py-3 px-4 text-xs">
+                                            @php
+                                                $profileStrategies = isset($profile['strategies']) && is_array($profile['strategies'])
+                                                    ? array_values($profile['strategies'])
+                                                    : [];
+                                                if (empty($profileStrategies) && !empty($profile['strategy'])) {
+                                                    $profileStrategies = [(string) $profile['strategy']];
+                                                }
+                                            @endphp
+                                            @if (!empty($profileStrategies))
+                                                {{ strtoupper(implode(',', $profileStrategies)) }}
+                                            @else
+                                                <span class="text-gray-400">DEFAULT</span>
+                                            @endif
                                         </td>
                                         <td class="py-3 px-4 text-xs">
                                             @php

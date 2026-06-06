@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 class SettingsController extends Controller
 {
     private const ALLOWED_SIGNAL_TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h'];
+    private const ALLOWED_STRATEGIES = ['momentum', 'sma_cross', 'ema_cross', 'bollinger_reversion', 'vwap_reversion'];
 
     public function edit()
     {
@@ -23,12 +24,6 @@ class SettingsController extends Controller
         $validated = $request->validate([
             'owner_email'         => ['nullable', 'email'],
             'demo_only'           => ['nullable', 'boolean'],
-            'mt5_server'          => ['nullable', 'string', 'max:255'],
-            'mt5_port'            => ['nullable', 'integer', 'min:1', 'max:65535'],
-            'mt5_manager_login'   => ['nullable', 'regex:/^\d+$/', 'max:255'],
-            'mt5_manager_password'=> ['nullable', 'string', 'max:255'],
-            'mt5_account_login'   => ['nullable', 'regex:/^\d+$/', 'max:255'],
-            'mt5_action_deal'     => ['nullable', 'integer', 'min:0', 'max:10'],
             'mt5_volume_multiplier' => ['nullable', 'integer', 'min:1'],
             'ai_provider'         => ['required', 'in:claude,perplexity'],
             'claude_api_key'      => ['nullable', 'string', 'max:255'],
@@ -55,6 +50,8 @@ class SettingsController extends Controller
             'bot_ai_confirm'           => ['nullable', 'boolean'],
             'bot_max_symbols'          => ['nullable', 'integer', 'min:1'],
             'bot_ai_min_confidence'    => ['nullable', 'integer', 'min:0', 'max:100'],
+            'bot_strategies'           => ['nullable', 'array'],
+            'bot_strategies.*'         => ['required', 'in:momentum,sma_cross,ema_cross,bollinger_reversion,vwap_reversion'],
             'bot_signal_timeframes'    => ['nullable', 'array'],
             'bot_signal_timeframes.*'  => ['required', 'in:5m,15m,30m,1h,4h'],
             'bot_profiles'             => ['nullable', 'string'],
@@ -62,10 +59,11 @@ class SettingsController extends Controller
 
         $validated['demo_only'] = $request->boolean('demo_only');
         $validated['bot_ai_confirm'] = $request->boolean('bot_ai_confirm');
+        $validated['bot_strategies'] = $this->normalizeStrategies($validated['bot_strategies'] ?? null) ?? ['momentum'];
         $validated['bot_signal_timeframes'] = $this->normalizeSignalTimeframes($validated['bot_signal_timeframes'] ?? null);
         $validated['bot_profiles'] = $this->normalizeBotProfiles($validated['bot_profiles'] ?? null);
 
-        foreach (['mt5_manager_password', 'claude_api_key', 'perplexity_api_key', 'metaapi_token'] as $secretField) {
+        foreach (['claude_api_key', 'perplexity_api_key', 'metaapi_token'] as $secretField) {
             if (empty($validated[$secretField])) {
                 unset($validated[$secretField]);
             }
@@ -170,6 +168,8 @@ class SettingsController extends Controller
             $profiles[] = [
                 'signal_timeframes' => $normalizeTimeframes($profile['signal_timeframes'] ?? null)
                     ?? $this->normalizeSignalTimeframes(isset($profile['signal_timeframe']) ? [(string) $profile['signal_timeframe']] : null),
+                'strategy' => $this->normalizeStrategy($profile['strategy'] ?? null),
+                'strategy_params' => $this->normalizeStrategyParams($profile['strategy_params'] ?? null),
                 'key' => $key,
                 'name' => $name,
                 'enabled' => (bool) ($profile['enabled'] ?? true),
@@ -231,5 +231,54 @@ class SettingsController extends Controller
         usort($timeframes, static fn ($a, $b) => $order[$a] <=> $order[$b]);
 
         return !empty($timeframes) ? $timeframes : null;
+    }
+
+    private function normalizeStrategy(mixed $raw): ?string
+    {
+        $value = strtolower(trim((string) $raw));
+        if ($value === '') {
+            return null;
+        }
+
+        return in_array($value, self::ALLOWED_STRATEGIES, true) ? $value : null;
+    }
+
+    private function normalizeStrategies(?array $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        $order = array_flip(self::ALLOWED_STRATEGIES);
+        $strategies = array_values(array_unique(array_filter(array_map(
+            static fn ($value) => strtolower(trim((string) $value)),
+            $raw
+        ), static fn ($value) => isset($order[$value]))));
+
+        usort($strategies, static fn ($a, $b) => $order[$a] <=> $order[$b]);
+
+        return !empty($strategies) ? $strategies : null;
+    }
+
+    private function normalizeStrategyParams(mixed $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        $normalized = [
+            'sma_fast' => isset($raw['sma_fast']) ? (int) $raw['sma_fast'] : null,
+            'sma_slow' => isset($raw['sma_slow']) ? (int) $raw['sma_slow'] : null,
+            'ema_fast' => isset($raw['ema_fast']) ? (int) $raw['ema_fast'] : null,
+            'ema_slow' => isset($raw['ema_slow']) ? (int) $raw['ema_slow'] : null,
+            'bb_period' => isset($raw['bb_period']) ? (int) $raw['bb_period'] : null,
+            'bb_stddev' => isset($raw['bb_stddev']) ? (float) $raw['bb_stddev'] : null,
+            'vwap_period' => isset($raw['vwap_period']) ? (int) $raw['vwap_period'] : null,
+            'vwap_min_distance_pips' => isset($raw['vwap_min_distance_pips']) ? (float) $raw['vwap_min_distance_pips'] : null,
+        ];
+
+        $normalized = array_filter($normalized, static fn ($value) => $value !== null);
+
+        return !empty($normalized) ? $normalized : null;
     }
 }

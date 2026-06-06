@@ -5,6 +5,7 @@ use App\Models\BotTradeLog;
 use App\Models\Ticker;
 use App\Services\AiService;
 use App\Services\Mt5Service;
+use App\Services\TradingStrategies\StrategyFactory;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
@@ -36,6 +37,8 @@ Artisan::command('mt5:auto-forex
     {--max-symbols=200 : Max symbols to scan per cycle}
     {--max-open-positions=10 : Maximum concurrent open positions (demo-safe ceiling)}
     {--max-per-cycle=5 : Maximum new trades to open in a single cycle}
+    {--strategy=momentum : Legacy single strategy option (prefer --strategies)}
+    {--strategies= : Comma-separated strategies (momentum,sma_cross,ema_cross,bollinger_reversion,vwap_reversion)}
     {--scalper=1 : 1 enables scalper mode (quick in/out), 0 keeps normal mode}
     {--trend-filter=0 : 1 requires all selected trend timeframes to align with the signal side}
     {--signal-timeframes= : Comma-separated trend timeframes (5m,15m,30m,1h,4h). Example: 5m,15m,1h}
@@ -46,7 +49,7 @@ Artisan::command('mt5:auto-forex
     {--bot= : Run only one bot profile key/name from settings bot_profiles JSON}
     {--test-mode : Bypass ALL filters and AI — trade the first --max-symbols symbols at market for testing only}
     {--once : Run one cycle only}
-', function (Mt5Service $mt5Service, AiService $aiService) {
+', function (Mt5Service $mt5Service, AiService $aiService, StrategyFactory $strategyFactory) {
     $resolveProfiles = function (): array {
         $db = AppSetting::singleton();
         $rawProfiles = is_array($db->bot_profiles) ? $db->bot_profiles : [];
@@ -97,7 +100,7 @@ Artisan::command('mt5:auto-forex
         return array_values(array_filter($profiles, static fn (array $profile): bool => (bool) ($profile['enabled'] ?? true)));
     };
 
-    $runCycle = function (array $botProfile) use ($mt5Service, $aiService) {
+    $runCycle = function (array $botProfile) use ($mt5Service, $aiService, $strategyFactory) {
         $db = AppSetting::singleton();
         $botKey = (string) ($botProfile['key'] ?? 'default');
         $botName = (string) ($botProfile['name'] ?? $botKey);
@@ -202,6 +205,48 @@ Artisan::command('mt5:auto-forex
             return $timeframes;
         };
 
+        $normalizeStrategyList = static function (mixed $raw, array $allowed): array {
+            $order = array_flip($allowed);
+
+            if (is_array($raw)) {
+                $source = $raw;
+            } else {
+                $text = trim((string) $raw);
+                if ($text === '') {
+                    return [];
+                }
+                $source = explode(',', $text);
+            }
+
+            $strategies = array_values(array_unique(array_filter(array_map(
+                static fn ($value) => strtolower(trim((string) $value)),
+                $source
+            ), static fn ($value) => isset($order[$value]))));
+
+            usort($strategies, static fn ($a, $b) => $order[$a] <=> $order[$b]);
+
+            return $strategies;
+        };
+
+        $normalizeStrategyParams = static function (mixed $raw): array {
+            if (!is_array($raw)) {
+                return [];
+            }
+
+            $normalized = [
+                'sma_fast' => isset($raw['sma_fast']) ? (int) $raw['sma_fast'] : null,
+                'sma_slow' => isset($raw['sma_slow']) ? (int) $raw['sma_slow'] : null,
+                'ema_fast' => isset($raw['ema_fast']) ? (int) $raw['ema_fast'] : null,
+                'ema_slow' => isset($raw['ema_slow']) ? (int) $raw['ema_slow'] : null,
+                'bb_period' => isset($raw['bb_period']) ? (int) $raw['bb_period'] : null,
+                'bb_stddev' => isset($raw['bb_stddev']) ? (float) $raw['bb_stddev'] : null,
+                'vwap_period' => isset($raw['vwap_period']) ? (int) $raw['vwap_period'] : null,
+                'vwap_min_distance_pips' => isset($raw['vwap_min_distance_pips']) ? (float) $raw['vwap_min_distance_pips'] : null,
+            ];
+
+            return array_filter($normalized, static fn ($value) => $value !== null);
+        };
+
         $lotSize           = (float) $optionOrProfileOrSetting('lot', $botProfile['lot'] ?? null, $db->bot_lot ?? null, 0.01);
         $tpPips            = (float) $optionOrProfileOrSetting('tp-pips', $botProfile['tp_pips'] ?? null, $db->bot_tp_pips ?? null, 25);
         $slPips            = (float) $optionOrProfileOrSetting('sl-pips', $botProfile['sl_pips'] ?? null, $db->bot_sl_pips ?? null, 15);
@@ -223,6 +268,26 @@ Artisan::command('mt5:auto-forex
         $defaultMinEffectiveVolume = 0.01 * $volumeMultiplier;
         $minEffectiveVolume = (float) $optionOrProfileOrSetting('min-effective-volume', $botProfile['min_effective_volume'] ?? null, null, $defaultMinEffectiveVolume);
         $maxSymbols        = max(1, (int) $optionOrProfileOrSetting('max-symbols', $botProfile['max_symbols'] ?? null, $db->bot_max_symbols ?? null, 200));
+        $supportedStrategies = $strategyFactory->supportedKeys();
+        $strategySource = $optionOrProfileOrSetting(
+            'strategies',
+            $botProfile['strategies'] ?? ($botProfile['strategy'] ?? null),
+            $db->bot_strategies ?? ($db->bot_strategy ?? null),
+            ['momentum']
+        );
+
+        if ($optionProvided('strategy') && !$optionProvided('strategies')) {
+            $strategySource = [(string) $this->option('strategy')];
+        }
+
+        $selectedStrategyKeys = $normalizeStrategyList($strategySource, $supportedStrategies);
+        if (empty($selectedStrategyKeys)) {
+            $selectedStrategyKeys = ['momentum'];
+        }
+        $strategies = array_map(static fn (string $key) => $strategyFactory->make($key), $selectedStrategyKeys);
+        $globalStrategyParams = $normalizeStrategyParams($db->bot_strategy_params ?? null);
+        $profileStrategyParams = $normalizeStrategyParams($botProfile['strategy_params'] ?? null);
+        $strategyParams = array_merge($globalStrategyParams, $profileStrategyParams);
         $scalperSetting = $optionOrProfileOrSetting('scalper', $botProfile['scalper'] ?? null, null, 1);
         $scalperMode = (string) $scalperSetting !== '0' && (bool) $scalperSetting;
         $trendFilterSetting = $optionOrProfileOrSetting('trend-filter', $botProfile['trend_filter'] ?? null, null, 0);
@@ -296,6 +361,7 @@ Artisan::command('mt5:auto-forex
         }
 
         $this->line('Volume settings  multiplier='.$volumeMultiplier.'  minEffectiveVolume='.$minEffectiveVolume);
+        $this->line('Strategies '.strtoupper(implode(',', $selectedStrategyKeys)).' on '.strtoupper($trendTimeframes[0] ?? '15m'));
 
         // Force UTC timezone to ensure correct time comparison
         date_default_timezone_set('UTC');
@@ -321,6 +387,8 @@ Artisan::command('mt5:auto-forex
                     'preferred_symbols' => $preferredSymbols,
                     'test_mode' => $testMode,
                     'scalper_mode' => $scalperMode,
+                    'strategies' => $selectedStrategyKeys,
+                    'strategy_params' => $strategyParams,
                     'trend_filter' => $useTrendFilter,
                     'trend_timeframes' => $trendTimeframes,
                     'ai_confirm' => $useAiConfirm,
@@ -635,44 +703,110 @@ Artisan::command('mt5:auto-forex
             $base = substr($symbol, 0, 6);
             $pipSize = $dbTickers->get($symbol)?->pip_size
                 ?? (str_ends_with($base, 'JPY') ? 0.01 : 0.0001);
-            $minMove = $minMovePips * $pipSize;
 
             $cacheKey = 'auto_bot_last_bid_'.preg_replace('/[^a-z0-9_]/', '_', strtolower($botKey)).'_'.preg_replace('/[^A-Z0-9_]/', '_', $symbol);
             $lastBid = Cache::get($cacheKey);
             Cache::put($cacheKey, $bid, now()->addHours(6));
+            $spreadPips = ($ask - $bid) / $pipSize;
 
-            if (!$testMode) {
-                if (!is_numeric($lastBid)) {
+            $candlesForStrategy = [];
+            $primaryTimeframe = $trendTimeframes[0] ?? '15m';
+            $requiredCandleCount = max(array_map(static fn ($s) => $s->requiredCandles(), $strategies));
+            if ($requiredCandleCount > 0) {
+                try {
+                    $candlesForStrategy = $mt5Service->getCandles($symbol, $primaryTimeframe, $requiredCandleCount);
+                } catch (\Throwable $e) {
                     $skippedNoMove++;
                     $logSignal([
-                        'status' => 'no_move_rejected',
+                        'status' => 'strategy_data_error',
                         'symbol' => $symbol,
-                        'message' => 'Signal skipped because no prior tick was available yet.',
-                    ]);
-                    continue;
-                }
-
-                $delta = $bid - (float) $lastBid;
-                if (abs($delta) < $minMove) {
-                    $skippedNoMove++;
-                    $signalDeltaPips = $pipSize > 0 ? ($delta / $pipSize) : null;
-                    $spreadPips = $pipSize > 0 ? (($ask - $bid) / $pipSize) : null;
-                    $logSignal([
-                        'status' => 'no_move_rejected',
-                        'symbol' => $symbol,
-                        'side' => $delta >= 0 ? 'buy' : 'sell',
-                        'signal_delta_pips' => $signalDeltaPips,
                         'spread_pips' => $spreadPips,
-                        'message' => 'Signal rejected because price move is below minimum threshold.',
+                        'message' => 'Signal skipped because strategy data could not be loaded.',
+                        'error_message' => $e->getMessage(),
+                        'meta_payload' => [
+                            'strategies' => $selectedStrategyKeys,
+                            'strategy_timeframe' => $primaryTimeframe,
+                            'strategy_params' => $strategyParams,
+                        ],
                     ]);
                     continue;
                 }
             }
 
-            $delta = isset($lastBid) && is_numeric($lastBid) ? ($bid - (float) $lastBid) : 0;
-            $side = $delta >= 0 ? 'buy' : 'sell';
-            $signalDeltaPips = $pipSize > 0 ? ($delta / $pipSize) : 0;
-            $spreadPips = ($ask - $bid) / $pipSize;
+            if ($testMode) {
+                $delta = isset($lastBid) && is_numeric($lastBid) ? ($bid - (float) $lastBid) : 0.0;
+                $side = $delta >= 0 ? 'buy' : 'sell';
+                $signalDeltaPips = $pipSize > 0 ? abs($delta / $pipSize) : 0.0;
+            } else {
+                $strategyResults = [];
+                $strategySides = [];
+                $strategySignalStrengths = [];
+
+                foreach ($strategies as $strategy) {
+                    $result = $strategy->evaluate([
+                        'symbol' => $symbol,
+                        'bid' => $bid,
+                        'ask' => $ask,
+                        'last_bid' => $lastBid,
+                        'pip_size' => $pipSize,
+                        'min_move_pips' => $minMovePips,
+                        'strategy_params' => $strategyParams,
+                        'candles' => $candlesForStrategy,
+                        'timeframe' => $primaryTimeframe,
+                    ]);
+
+                    $strategyResults[$strategy->key()] = $result;
+
+                    if (!(bool) ($result['signal'] ?? false)) {
+                        $skippedNoMove++;
+                        $logSignal([
+                            'status' => (string) ($result['status'] ?? 'strategy_rejected'),
+                            'symbol' => $symbol,
+                            'spread_pips' => $spreadPips,
+                            'signal_delta_pips' => isset($result['signal_delta_pips']) ? (float) $result['signal_delta_pips'] : null,
+                            'message' => (string) ($result['message'] ?? 'Signal rejected by strategy conditions.'),
+                            'meta_payload' => [
+                                'strategies' => $selectedStrategyKeys,
+                                'strategy_timeframe' => $primaryTimeframe,
+                                'strategy_params' => $strategyParams,
+                                'strategy_results' => $strategyResults,
+                            ],
+                        ]);
+                        continue 2;
+                    }
+
+                    $resultSide = (string) ($result['side'] ?? '');
+                    if (!in_array($resultSide, ['buy', 'sell'], true)) {
+                        $skippedNoMove++;
+                        continue 2;
+                    }
+
+                    $strategySides[] = $resultSide;
+                    $strategySignalStrengths[] = abs((float) ($result['signal_delta_pips'] ?? 0));
+                }
+
+                if (count(array_unique($strategySides)) !== 1) {
+                    $skippedNoMove++;
+                    $logSignal([
+                        'status' => 'strategy_conflict_rejected',
+                        'symbol' => $symbol,
+                        'spread_pips' => $spreadPips,
+                        'message' => 'Signal rejected because selected strategies disagree on direction.',
+                        'meta_payload' => [
+                            'strategies' => $selectedStrategyKeys,
+                            'strategy_timeframe' => $primaryTimeframe,
+                            'strategy_params' => $strategyParams,
+                            'strategy_results' => $strategyResults,
+                        ],
+                    ]);
+                    continue;
+                }
+
+                $side = $strategySides[0];
+                $signalDeltaPips = !empty($strategySignalStrengths)
+                    ? (float) (array_sum($strategySignalStrengths) / count($strategySignalStrengths))
+                    : 0.0;
+            }
             $effectiveVolume = $lotSize * $volumeMultiplier;
             $botScore = $calculateBotScore($signalDeltaPips, $spreadPips, $effectiveVolume, $minEffectiveVolume);
 
@@ -1073,6 +1207,8 @@ Artisan::command('mt5:auto-forex
                 'in_session' => $inSession,
                 'test_mode' => $testMode,
                 'scalper_mode' => $scalperMode,
+                'strategies' => $selectedStrategyKeys,
+                'strategy_params' => $strategyParams,
                 'trend_filter' => $useTrendFilter,
                 'trend_timeframes' => $trendTimeframes,
                 'ai_confirm' => $useAiConfirm,

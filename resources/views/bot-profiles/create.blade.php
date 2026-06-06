@@ -24,6 +24,11 @@
                         if (!is_array($selectedSignalTimeframes)) {
                             $selectedSignalTimeframes = [];
                         }
+                        $selectedStrategies = old('strategies');
+                        if (!is_array($selectedStrategies)) {
+                            $selectedStrategies = old('strategy') ? [old('strategy')] : [];
+                        }
+                        $strategyParams = old('strategy_params', []);
                     @endphp
 
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -130,6 +135,27 @@
                                    class="mt-1 block w-full rounded border-gray-300" />
                         </div>
 
+                        <div class="sm:col-span-3">
+                            <label class="block text-sm font-medium text-gray-700">Strategies Override (optional, must all align)</label>
+                            <div class="mt-2 flex flex-wrap gap-4">
+                                @foreach (['momentum' => 'Momentum', 'sma_cross' => 'SMA Cross', 'ema_cross' => 'EMA Cross', 'bollinger_reversion' => 'Bollinger Reversion', 'vwap_reversion' => 'VWAP Reversion'] as $strategyValue => $strategyLabel)
+                                    <label class="inline-flex items-center gap-2">
+                                        <input type="checkbox" name="strategies[]" value="{{ $strategyValue }}"
+                                               {{ in_array($strategyValue, $selectedStrategies, true) ? 'checked' : '' }}
+                                               class="rounded border-gray-300" />
+                                        <span class="text-sm text-gray-700">{{ $strategyLabel }}</span>
+                                    </label>
+                                @endforeach
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1">Leave all unchecked to use global strategy mix.</p>
+                            @error('strategies')
+                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                            @enderror
+                            @error('strategies.*')
+                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                            @enderror
+                        </div>
+
                         <div class="sm:col-span-2">
                             <label class="block text-sm font-medium text-gray-700">Trend Timeframes (must all align)</label>
                             <div class="mt-2 flex flex-wrap gap-4">
@@ -231,6 +257,21 @@
                             <input type="checkbox" id="scalper" name="scalper" value="1" {{ old('scalper') ? 'checked' : '' }} class="rounded border-gray-300" />
                             <span class="text-sm text-gray-700">Enable scalper mode</span>
                         </label>
+                    </div>
+
+                    <div class="rounded border border-gray-200 p-4">
+                        <h4 class="text-sm font-semibold text-gray-800">Strategy Parameters (Profile Override)</h4>
+                        <p class="text-xs text-gray-500 mt-1">Leave blank to use global strategy parameters.</p>
+                        <div class="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-3">
+                            <div><label class="block text-xs font-medium text-gray-700">SMA Fast</label><input name="strategy_params[sma_fast]" type="number" min="2" max="200" value="{{ $strategyParams['sma_fast'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
+                            <div><label class="block text-xs font-medium text-gray-700">SMA Slow</label><input name="strategy_params[sma_slow]" type="number" min="3" max="300" value="{{ $strategyParams['sma_slow'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
+                            <div><label class="block text-xs font-medium text-gray-700">EMA Fast</label><input name="strategy_params[ema_fast]" type="number" min="2" max="200" value="{{ $strategyParams['ema_fast'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
+                            <div><label class="block text-xs font-medium text-gray-700">EMA Slow</label><input name="strategy_params[ema_slow]" type="number" min="3" max="300" value="{{ $strategyParams['ema_slow'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
+                            <div><label class="block text-xs font-medium text-gray-700">Bollinger Period</label><input name="strategy_params[bb_period]" type="number" min="5" max="300" value="{{ $strategyParams['bb_period'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
+                            <div><label class="block text-xs font-medium text-gray-700">Bollinger StdDev</label><input name="strategy_params[bb_stddev]" type="number" step="0.1" min="0.5" max="5" value="{{ $strategyParams['bb_stddev'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
+                            <div><label class="block text-xs font-medium text-gray-700">VWAP Period</label><input name="strategy_params[vwap_period]" type="number" min="5" max="500" value="{{ $strategyParams['vwap_period'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
+                            <div><label class="block text-xs font-medium text-gray-700">VWAP Min Distance (pips)</label><input name="strategy_params[vwap_min_distance_pips]" type="number" step="0.1" min="0.1" max="100" value="{{ $strategyParams['vwap_min_distance_pips'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
+                        </div>
                     </div>
 
                     <div>

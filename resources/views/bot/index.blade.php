@@ -25,6 +25,129 @@
                 Demo-only is currently <strong>{{ $settings->demo_only ? 'ON' : 'OFF' }}</strong>.
             </div>
 
+            @php
+                $selectedSignalTimeframes = old('bot_signal_timeframes', $settings->bot_signal_timeframes ?? ['15m']);
+                if (!is_array($selectedSignalTimeframes) || empty($selectedSignalTimeframes)) {
+                    $selectedSignalTimeframes = ['15m'];
+                }
+                $selectedStrategies = old('bot_strategies', $settings->bot_strategies ?? ['momentum']);
+                if (!is_array($selectedStrategies) || empty($selectedStrategies)) {
+                    $selectedStrategies = ['momentum'];
+                }
+            @endphp
+
+            <form method="POST" action="{{ route('bot.auto-settings') }}" class="bg-white p-6 rounded-lg shadow space-y-4">
+                @csrf
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-semibold text-gray-900">Auto-Bot Settings</h3>
+                    <a href="{{ route('strategies.edit') }}" class="text-xs text-indigo-600 hover:underline">Edit strategy parameters</a>
+                </div>
+                <p class="text-xs text-gray-500">These are the defaults used by <code>mt5:auto-forex</code>.</p>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Lot Size</label>
+                        <input name="bot_lot" type="number" step="0.001" min="0.001" value="{{ old('bot_lot', $settings->bot_lot ?? 0.01) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Volume Multiplier</label>
+                        <input name="mt5_volume_multiplier" type="number" min="1" value="{{ old('mt5_volume_multiplier', $settings->mt5_volume_multiplier ?? 1) }}" class="mt-1 block w-full rounded border-gray-300" />
+                        <p class="mt-1 text-xs text-gray-500">Scales final order volume used by auto-bot. 1 is safest.</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">TP Pips</label>
+                        <input name="bot_tp_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_tp_pips', $settings->bot_tp_pips ?? 25) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">SL Pips</label>
+                        <input name="bot_sl_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_sl_pips', $settings->bot_sl_pips ?? 15) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Trail Start Pips</label>
+                        <input name="bot_trail_start_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_trail_start_pips', $settings->bot_trail_start_pips ?? 10) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Trail Pips</label>
+                        <input name="bot_trail_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_trail_pips', $settings->bot_trail_pips ?? 8) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Trail TP Multiplier</label>
+                        <input name="bot_trail_tp_multiplier" type="number" step="0.1" min="1" max="10" value="{{ old('bot_trail_tp_multiplier', $settings->bot_trail_tp_multiplier ?? 2) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Min Move Pips</label>
+                        <input name="bot_min_move_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_min_move_pips', $settings->bot_min_move_pips ?? 3) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Max Spread Pips</label>
+                        <input name="bot_max_spread_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_max_spread_pips', $settings->bot_max_spread_pips ?? 2.5) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Cooldown (minutes)</label>
+                        <input name="bot_cooldown_minutes" type="number" min="0" value="{{ old('bot_cooldown_minutes', $settings->bot_cooldown_minutes ?? 30) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Max Trades / Day</label>
+                        <input name="bot_max_trades_per_day" type="number" min="1" value="{{ old('bot_max_trades_per_day', $settings->bot_max_trades_per_day ?? 20) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Max Daily Loss %</label>
+                        <input name="bot_max_daily_loss_percent" type="number" step="0.1" min="0.1" value="{{ old('bot_max_daily_loss_percent', $settings->bot_max_daily_loss_percent ?? 2) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Max Symbols / Cycle</label>
+                        <input name="bot_max_symbols" type="number" min="1" value="{{ old('bot_max_symbols', $settings->bot_max_symbols ?? 200) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Session Start (UTC)</label>
+                        <input name="bot_session_start_utc" type="number" min="0" max="23" value="{{ old('bot_session_start_utc', $settings->bot_session_start_utc ?? 6) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Session End (UTC)</label>
+                        <input name="bot_session_end_utc" type="number" min="0" max="23" value="{{ old('bot_session_end_utc', $settings->bot_session_end_utc ?? 20) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">AI Min Confidence %</label>
+                        <input name="bot_ai_min_confidence" type="number" min="0" max="100" value="{{ old('bot_ai_min_confidence', $settings->bot_ai_min_confidence ?? 70) }}" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+
+                    <div class="md:col-span-3">
+                        <label class="block text-sm font-medium text-gray-700">Strategies (must all align)</label>
+                        <div class="mt-2 flex flex-wrap gap-4">
+                            @foreach (['momentum' => 'Momentum', 'sma_cross' => 'SMA Cross', 'ema_cross' => 'EMA Cross', 'bollinger_reversion' => 'Bollinger Reversion', 'vwap_reversion' => 'VWAP Reversion'] as $strategyValue => $strategyLabel)
+                                <label class="inline-flex items-center gap-2">
+                                    <input type="checkbox" name="bot_strategies[]" value="{{ $strategyValue }}" {{ in_array($strategyValue, $selectedStrategies, true) ? 'checked' : '' }} class="rounded border-gray-300" />
+                                    <span class="text-sm text-gray-700">{{ $strategyLabel }}</span>
+                                </label>
+                            @endforeach
+                        </div>
+                    </div>
+
+                    <div class="md:col-span-3">
+                        <label class="block text-sm font-medium text-gray-700">Trend Timeframes (must all align)</label>
+                        <div class="mt-2 flex flex-wrap gap-4">
+                            @foreach (['5m', '15m', '30m', '1h', '4h'] as $timeframe)
+                                <label class="inline-flex items-center gap-2">
+                                    <input type="checkbox" name="bot_signal_timeframes[]" value="{{ $timeframe }}" {{ in_array($timeframe, $selectedSignalTimeframes, true) ? 'checked' : '' }} class="rounded border-gray-300" />
+                                    <span class="text-sm text-gray-700">{{ strtoupper($timeframe) }}</span>
+                                </label>
+                            @endforeach
+                        </div>
+                    </div>
+
+                    <div class="md:col-span-3">
+                        <label class="inline-flex items-center gap-2">
+                            <input type="checkbox" name="bot_ai_confirm" value="1" {{ old('bot_ai_confirm', $settings->bot_ai_confirm ?? true) ? 'checked' : '' }} class="rounded border-gray-300" />
+                            <span class="text-sm text-gray-700">Require AI confirmation before each trade</span>
+                        </label>
+                    </div>
+                </div>
+
+                <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-indigo-700">
+                    Save Auto-Bot Settings
+                </button>
+            </form>
+
             <form method="POST" action="{{ route('bot.trade') }}" class="bg-white p-6 rounded-lg shadow space-y-4">
                 @csrf
 

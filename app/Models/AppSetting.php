@@ -9,12 +9,6 @@ class AppSetting extends Model
     protected $fillable = [
         'owner_email',
         'demo_only',
-        'mt5_server',
-        'mt5_port',
-        'mt5_manager_login',
-        'mt5_manager_password',
-        'mt5_account_login',
-        'mt5_action_deal',
         'mt5_volume_multiplier',
         'ai_provider',
         'claude_api_key',
@@ -40,6 +34,9 @@ class AppSetting extends Model
         'bot_ai_confirm',
         'bot_max_symbols',
         'bot_ai_min_confidence',
+        'bot_strategies',
+        'bot_strategy',
+        'bot_strategy_params',
         'bot_signal_timeframes',
         'bot_profiles',
     ];
@@ -48,10 +45,7 @@ class AppSetting extends Model
     {
         return [
             'demo_only' => 'boolean',
-            'mt5_port' => 'integer',
-            'mt5_action_deal' => 'integer',
             'mt5_volume_multiplier' => 'integer',
-            'mt5_manager_password' => 'encrypted',
             'claude_api_key' => 'encrypted',
             'perplexity_api_key' => 'encrypted',
             'metaapi_token' => 'encrypted',
@@ -71,6 +65,8 @@ class AppSetting extends Model
             'bot_ai_confirm' => 'boolean',
             'bot_max_symbols' => 'integer',
             'bot_ai_min_confidence' => 'integer',
+            'bot_strategies' => 'array',
+            'bot_strategy_params' => 'array',
             'bot_signal_timeframes' => 'array',
             'bot_profiles' => 'array',
         ];
@@ -92,8 +88,6 @@ class AppSetting extends Model
         return static::query()->create([
             'owner_email' => (string) env('APP_OWNER_EMAIL', ''),
             'demo_only' => true,
-            'mt5_port' => 443,
-            'mt5_action_deal' => 1,
             'mt5_volume_multiplier' => 1,
             'bot_trail_tp_multiplier' => 2,
             'ai_provider' => 'claude',

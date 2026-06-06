@@ -39,57 +39,6 @@
                 </section>
 
                 <section class="space-y-4">
-                    <h3 class="text-lg font-semibold text-gray-900">MT5 Connection</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">MT5 Server</label>
-                            <input name="mt5_server" type="text" value="{{ old('mt5_server', $settings->mt5_server) }}" class="mt-1 block w-full rounded border-gray-300" placeholder="mt5.yourbroker.com" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">MT5 Port</label>
-                            <input name="mt5_port" type="number" value="{{ old('mt5_port', $settings->mt5_port) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Manager Login</label>
-                            <input name="mt5_manager_login" type="text" value="{{ old('mt5_manager_login', $settings->mt5_manager_login) }}" class="mt-1 block w-full rounded border-gray-300" />
-                            <p class="text-xs text-gray-500 mt-1">Use MT5 Manager/Web API numeric login, not client trading login.</p>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Manager Password</label>
-                            <div class="mt-1 flex items-center gap-2">
-                                <input id="mt5_manager_password" name="mt5_manager_password" type="password" value="{{ old('mt5_manager_password', $settings->mt5_manager_password) }}" placeholder="Leave blank to keep existing password" class="block w-full rounded border-gray-300" />
-                                <button type="button" data-toggle-password="mt5_manager_password" class="inline-flex items-center justify-center rounded border border-gray-300 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50" aria-label="Toggle manager password visibility" title="Show/Hide">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                        <path d="M10 4C5 4 1.73 7.11.46 9.02a1.75 1.75 0 0 0 0 1.96C1.73 12.89 5 16 10 16s8.27-3.11 9.54-5.02a1.75 1.75 0 0 0 0-1.96C18.27 7.11 15 4 10 4Zm0 9a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" />
-                                    </svg>
-                                </button>
-                            </div>
-                            <p class="text-xs text-gray-500 mt-1">
-                                @if(!empty($settings->mt5_manager_password))
-                                    Password is saved (hidden). Leave blank to keep it unchanged.
-                                @else
-                                    No password saved yet.
-                                @endif
-                            </p>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Trading Account Login</label>
-                            <input name="mt5_account_login" type="text" value="{{ old('mt5_account_login', $settings->mt5_account_login) }}" class="mt-1 block w-full rounded border-gray-300" placeholder="e.g. 62120569" />
-                            <p class="text-xs text-gray-500 mt-1">Must be numeric MT5 account id.</p>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Action (deal)</label>
-                            <input name="mt5_action_deal" type="number" value="{{ old('mt5_action_deal', $settings->mt5_action_deal) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Volume Multiplier</label>
-                            <input name="mt5_volume_multiplier" type="number" value="{{ old('mt5_volume_multiplier', $settings->mt5_volume_multiplier) }}" class="mt-1 block w-full rounded border-gray-300" />
-                            <p class="text-xs text-gray-500 mt-1">Used to convert lot size into MT5 volume units. Safer default is 1; higher values increase risk quickly.</p>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="space-y-4">
                     <h3 class="text-lg font-semibold text-gray-900">AI</h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
@@ -189,112 +138,6 @@
                     </div>
                 </section>
 
-                {{-- Auto-Bot Section --}}
-                <section class="space-y-4">
-                    <h3 class="text-lg font-semibold text-gray-900">Auto-Bot Parameters</h3>
-                    <p class="text-sm text-gray-500">These values are used as defaults when the <code>mt5:auto-forex</code> command runs without explicit flags.</p>
-                    @php
-                        $selectedSignalTimeframes = old('bot_signal_timeframes', $settings->bot_signal_timeframes ?? ['15m']);
-                        if (!is_array($selectedSignalTimeframes) || empty($selectedSignalTimeframes)) {
-                            $selectedSignalTimeframes = ['15m'];
-                        }
-                    @endphp
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Lot Size</label>
-                            <input name="bot_lot" type="number" step="0.001" min="0.001" value="{{ old('bot_lot', $settings->bot_lot ?? 0.01) }}" class="mt-1 block w-full rounded border-gray-300" />
-                            <p class="text-xs text-gray-500 mt-1">e.g. 0.01 for micro lots.</p>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">TP Pips</label>
-                            <input name="bot_tp_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_tp_pips', $settings->bot_tp_pips ?? 25) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">SL Pips</label>
-                            <input name="bot_sl_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_sl_pips', $settings->bot_sl_pips ?? 15) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Trail Start Pips</label>
-                            <input name="bot_trail_start_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_trail_start_pips', $settings->bot_trail_start_pips ?? 10) }}" class="mt-1 block w-full rounded border-gray-300" />
-                            <p class="text-xs text-gray-500 mt-1">Profit required before trailing activates.</p>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Trail Pips</label>
-                            <input name="bot_trail_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_trail_pips', $settings->bot_trail_pips ?? 8) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Trail TP Multiplier</label>
-                            <input name="bot_trail_tp_multiplier" type="number" step="0.1" min="1" max="10" value="{{ old('bot_trail_tp_multiplier', $settings->bot_trail_tp_multiplier ?? 2) }}" class="mt-1 block w-full rounded border-gray-300" />
-                            <p class="text-xs text-gray-500 mt-1">When trailing first applies, TP is multiplied by this value (for example 2 = double TP).</p>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Min Move Pips</label>
-                            <input name="bot_min_move_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_min_move_pips', $settings->bot_min_move_pips ?? 3) }}" class="mt-1 block w-full rounded border-gray-300" />
-                            <p class="text-xs text-gray-500 mt-1">Minimum tick move to trigger signal.</p>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Max Spread Pips</label>
-                            <input name="bot_max_spread_pips" type="number" step="0.1" min="0.1" value="{{ old('bot_max_spread_pips', $settings->bot_max_spread_pips ?? 2.5) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Cooldown (minutes)</label>
-                            <input name="bot_cooldown_minutes" type="number" min="0" value="{{ old('bot_cooldown_minutes', $settings->bot_cooldown_minutes ?? 30) }}" class="mt-1 block w-full rounded border-gray-300" />
-                            <p class="text-xs text-gray-500 mt-1">Wait after a successful entry on the same symbol.</p>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Max Trades / Day</label>
-                            <input name="bot_max_trades_per_day" type="number" min="1" value="{{ old('bot_max_trades_per_day', $settings->bot_max_trades_per_day ?? 20) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Max Daily Loss %</label>
-                            <input name="bot_max_daily_loss_percent" type="number" step="0.1" min="0.1" value="{{ old('bot_max_daily_loss_percent', $settings->bot_max_daily_loss_percent ?? 2) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Session Start (UTC hour)</label>
-                            <input name="bot_session_start_utc" type="number" min="0" max="23" value="{{ old('bot_session_start_utc', $settings->bot_session_start_utc ?? 6) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Session End (UTC hour)</label>
-                            <input name="bot_session_end_utc" type="number" min="0" max="23" value="{{ old('bot_session_end_utc', $settings->bot_session_end_utc ?? 20) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Max Symbols / Cycle</label>
-                            <input name="bot_max_symbols" type="number" min="1" value="{{ old('bot_max_symbols', $settings->bot_max_symbols ?? 200) }}" class="mt-1 block w-full rounded border-gray-300" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">AI Min Confidence %</label>
-                            <input name="bot_ai_min_confidence" type="number" min="0" max="100" value="{{ old('bot_ai_min_confidence', $settings->bot_ai_min_confidence ?? 70) }}" class="mt-1 block w-full rounded border-gray-300" />
-                            <p class="text-xs text-gray-500 mt-1">AI must express ≥ this confidence to approve. 0 = any APPROVE accepted.</p>
-                        </div>
-                        <div class="md:col-span-2">
-                            <label class="block text-sm font-medium text-gray-700">Trend Timeframes (must all align)</label>
-                            <div class="mt-2 flex flex-wrap gap-4">
-                                @foreach (['5m', '15m', '30m', '1h', '4h'] as $timeframe)
-                                    <label class="inline-flex items-center gap-2">
-                                        <input type="checkbox" name="bot_signal_timeframes[]" value="{{ $timeframe }}"
-                                               {{ in_array($timeframe, $selectedSignalTimeframes, true) ? 'checked' : '' }}
-                                               class="rounded border-gray-300" />
-                                        <span class="text-sm text-gray-700">{{ strtoupper($timeframe) }}</span>
-                                    </label>
-                                @endforeach
-                            </div>
-                            <p class="text-xs text-gray-500 mt-1">If you select 2, both must align. If you select 3, all 3 must align before trade entry.</p>
-                            @error('bot_signal_timeframes')
-                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
-                            @enderror
-                            @error('bot_signal_timeframes.*')
-                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
-                            @enderror
-                        </div>
-                        <div class="flex items-center">
-                            <label class="inline-flex items-center gap-2 mt-5">
-                                <input type="checkbox" name="bot_ai_confirm" value="1" {{ old('bot_ai_confirm', $settings->bot_ai_confirm ?? true) ? 'checked' : '' }} class="rounded border-gray-300" />
-                                <span class="text-sm text-gray-700">Require AI confirmation before each trade</span>
-                            </label>
-                        </div>
-                    </div>
-                </section>
-
                 @php
                     $botProfilesText = old('bot_profiles');
                     if ($botProfilesText === null) {
@@ -309,11 +152,11 @@
 
                 <section class="space-y-3">
                     <h3 class="text-lg font-semibold text-gray-900">Multi-Bot Profiles (Optional)</h3>
-                    <p class="text-sm text-gray-500">Provide a JSON array of bot configs. If empty, the single Auto-Bot Parameters above are used as the default bot.</p>
+                    <p class="text-sm text-gray-500">Provide a JSON array of bot configs. If empty, defaults from the Bot page Auto-Bot Settings are used.</p>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Bot Profiles JSON</label>
                         <textarea name="bot_profiles" rows="12" class="mt-1 block w-full rounded border-gray-300 font-mono text-xs" placeholder='[{"key":"scalp-1","name":"Scalper 1","enabled":true,"lot":0.01,"tp_pips":20,"sl_pips":8,"symbols":["EURUSD","GBPUSD"]}]'>{{ $botProfilesText }}</textarea>
-                        <p class="text-xs text-gray-500 mt-1">Supported keys: key, name, enabled, lot, tp_pips, sl_pips, trail_start_pips, trail_pips, trail_tp_multiplier, min_move_pips, max_spread_pips, cooldown_minutes, session_start_utc, session_end_utc, max_trades_per_day, max_daily_loss_percent, ai_confirm, ai_min_confidence, max_symbols, max_open_positions, max_per_cycle, min_bot_score, min_effective_volume, scalper, symbols, signal_timeframe, signal_timeframes.</p>
+                        <p class="text-xs text-gray-500 mt-1">Supported keys: key, name, enabled, lot, tp_pips, sl_pips, trail_start_pips, trail_pips, trail_tp_multiplier, min_move_pips, max_spread_pips, cooldown_minutes, session_start_utc, session_end_utc, max_trades_per_day, max_daily_loss_percent, ai_confirm, ai_min_confidence, max_symbols, max_open_positions, max_per_cycle, min_bot_score, min_effective_volume, scalper, strategy, strategy_params, symbols, signal_timeframe, signal_timeframes.</p>
                     </div>
                 </section>
 

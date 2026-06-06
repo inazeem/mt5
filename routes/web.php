@@ -5,6 +5,7 @@ use App\Http\Controllers\BotController;
 use App\Http\Controllers\BotProfileController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\StrategyController;
 use App\Http\Controllers\TickerController;
 use Illuminate\Support\Facades\Route;
 
@@ -23,6 +24,8 @@ Route::middleware(['auth', 'owner'])->group(function () {
 
     Route::get('/settings', [SettingsController::class, 'edit'])->name('settings.edit');
     Route::put('/settings', [SettingsController::class, 'update'])->name('settings.update');
+    Route::get('/strategies', [StrategyController::class, 'edit'])->name('strategies.edit');
+    Route::put('/strategies', [StrategyController::class, 'update'])->name('strategies.update');
 
     Route::get('/bot', [BotController::class, 'index'])->name('bot.index');
     Route::get('/bot/analytics', [BotController::class, 'analytics'])->name('bot.analytics');
@@ -32,6 +35,7 @@ Route::middleware(['auth', 'owner'])->group(function () {
     Route::post('/bot/alerts/clear', [BotController::class, 'clearAlerts'])->name('bot.alerts.clear');
     Route::get('/bot/analytics/export', [BotController::class, 'exportCsv'])->name('bot.analytics.export');
     Route::get('/bot/alerts/export', [BotController::class, 'exportCsv'])->name('bot.alerts.export');
+    Route::post('/bot/auto-settings', [BotController::class, 'updateAutoSettings'])->name('bot.auto-settings');
     Route::post('/bot/trade', [BotController::class, 'store'])->name('bot.trade');
     Route::post('/bot/close-position', [BotController::class, 'closePosition'])->name('bot.close-position');
     Route::get('/bot/price', [BotController::class, 'price'])->name('bot.price');

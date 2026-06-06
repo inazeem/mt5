@@ -12,6 +12,9 @@ use Throwable;
 
 class BotController extends Controller
 {
+    private const ALLOWED_SIGNAL_TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h'];
+    private const ALLOWED_STRATEGIES = ['momentum', 'sma_cross', 'ema_cross', 'bollinger_reversion', 'vwap_reversion'];
+
     public function index(Mt5Service $mt5Service)
     {
         $settings = AppSetting::singleton();
@@ -65,6 +68,44 @@ class BotController extends Controller
                 'error' => $e->getMessage(),
             ], 422);
         }
+    }
+
+    public function updateAutoSettings(Request $request)
+    {
+        $validated = $request->validate([
+            'mt5_volume_multiplier' => ['nullable', 'integer', 'min:1'],
+            'bot_lot' => ['nullable', 'numeric', 'min:0.001', 'max:1000'],
+            'bot_tp_pips' => ['nullable', 'numeric', 'min:0.1'],
+            'bot_sl_pips' => ['nullable', 'numeric', 'min:0.1'],
+            'bot_trail_start_pips' => ['nullable', 'numeric', 'min:0.1'],
+            'bot_trail_pips' => ['nullable', 'numeric', 'min:0.1'],
+            'bot_trail_tp_multiplier' => ['nullable', 'numeric', 'min:1', 'max:10'],
+            'bot_min_move_pips' => ['nullable', 'numeric', 'min:0.1'],
+            'bot_max_spread_pips' => ['nullable', 'numeric', 'min:0.1'],
+            'bot_cooldown_minutes' => ['nullable', 'integer', 'min:0'],
+            'bot_session_start_utc' => ['nullable', 'integer', 'min:0', 'max:23'],
+            'bot_session_end_utc' => ['nullable', 'integer', 'min:0', 'max:23'],
+            'bot_max_trades_per_day' => ['nullable', 'integer', 'min:1'],
+            'bot_max_daily_loss_percent' => ['nullable', 'numeric', 'min:0.1'],
+            'bot_ai_confirm' => ['nullable', 'boolean'],
+            'bot_max_symbols' => ['nullable', 'integer', 'min:1'],
+            'bot_ai_min_confidence' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'bot_strategies' => ['nullable', 'array'],
+            'bot_strategies.*' => ['required', 'in:momentum,sma_cross,ema_cross,bollinger_reversion,vwap_reversion'],
+            'bot_signal_timeframes' => ['nullable', 'array'],
+            'bot_signal_timeframes.*' => ['required', 'in:5m,15m,30m,1h,4h'],
+        ]);
+
+        $validated['bot_ai_confirm'] = $request->boolean('bot_ai_confirm');
+        $validated['bot_strategies'] = $this->normalizeStrategies($validated['bot_strategies'] ?? null) ?? ['momentum'];
+        $validated['bot_signal_timeframes'] = $this->normalizeSignalTimeframes($validated['bot_signal_timeframes'] ?? null) ?? ['15m'];
+        $validated['bot_strategy'] = $validated['bot_strategies'][0] ?? 'momentum';
+
+        $settings = AppSetting::singleton();
+        $settings->fill($validated);
+        $settings->save();
+
+        return redirect()->route('bot.index')->with('status', 'Auto-bot settings saved.');
     }
 
     public function store(Request $request, Mt5Service $mt5Service)
@@ -205,6 +246,17 @@ class BotController extends Controller
         $runtime = [
             'bot_key' => (string) ($botProfile['key'] ?? 'default'),
             'bot_name' => (string) ($botProfile['name'] ?? ($botProfile['key'] ?? 'Default')),
+            'strategies' => isset($botProfile['strategies']) && is_array($botProfile['strategies'])
+                ? $botProfile['strategies']
+                : (isset($botProfile['strategy']) && (string) $botProfile['strategy'] !== ''
+                    ? [(string) $botProfile['strategy']]
+                    : (is_array($settings->bot_strategies ?? null) && !empty($settings->bot_strategies)
+                        ? $settings->bot_strategies
+                        : [(string) ($settings->bot_strategy ?? 'momentum')])),
+            'strategy_params' => array_merge(
+                is_array($settings->bot_strategy_params ?? null) ? $settings->bot_strategy_params : [],
+                is_array($botProfile['strategy_params'] ?? null) ? $botProfile['strategy_params'] : []
+            ),
             'session_start_utc' => $sessionStartUtc,
             'session_end_utc' => $sessionEndUtc,
             'current_hour_utc' => $currentHourUtc,
@@ -887,5 +939,39 @@ class BotController extends Controller
         }
 
         return $profiles[0] ?? [];
+    }
+
+    private function normalizeSignalTimeframes(?array $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        $order = array_flip(self::ALLOWED_SIGNAL_TIMEFRAMES);
+        $timeframes = array_values(array_unique(array_filter(array_map(
+            static fn ($value) => strtolower(trim((string) $value)),
+            $raw
+        ), static fn ($value) => isset($order[$value]))));
+
+        usort($timeframes, static fn ($a, $b) => $order[$a] <=> $order[$b]);
+
+        return !empty($timeframes) ? $timeframes : null;
+    }
+
+    private function normalizeStrategies(?array $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        $order = array_flip(self::ALLOWED_STRATEGIES);
+        $strategies = array_values(array_unique(array_filter(array_map(
+            static fn ($value) => strtolower(trim((string) $value)),
+            $raw
+        ), static fn ($value) => isset($order[$value]))));
+
+        usort($strategies, static fn ($a, $b) => $order[$a] <=> $order[$b]);
+
+        return !empty($strategies) ? $strategies : null;
     }
 }
