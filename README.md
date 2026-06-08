@@ -56,3 +56,34 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
+## MT5 Ticker Spread Defaults
+
+The auto bot now supports category-level spread defaults with ticker-level override.
+
+Spread resolution order:
+1. Ticker `max_spread_pips` (if set)
+2. Category spread map value
+3. Category map `default`
+4. Global `max_spread_pips`
+
+Default category spread values (when no category map is provided):
+- Forex: global `max_spread_pips`
+- Stock: `max(global max_spread_pips, 25)`
+- Commodity: `max(global max_spread_pips, 15)`
+- Other: `max(global max_spread_pips, 10)`
+- Default: global `max_spread_pips`
+
+Available ticker categories:
+- Forex
+- Stock
+- Commodity
+- Index
+- Crypto
+- Other
+
+Command example for custom category map:
+
+```bash
+php artisan mt5:auto-forex --max-spread-pips-by-category="forex:2.5,stock:25,commodity:15,other:10,default:2.5"
+```

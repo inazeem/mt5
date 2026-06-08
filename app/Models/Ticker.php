@@ -12,6 +12,7 @@ class Ticker extends Model
         'category',
         'is_active',
         'pip_size',
+        'max_spread_pips',
         'notes',
     ];
 
@@ -20,6 +21,7 @@ class Ticker extends Model
         return [
             'is_active' => 'boolean',
             'pip_size'  => 'float',
+            'max_spread_pips' => 'float',
         ];
     }
 

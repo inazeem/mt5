@@ -26,10 +26,17 @@
                            class="border border-gray-300 rounded px-2 py-1 text-sm w-48 focus:outline-none focus:ring focus:ring-indigo-200">
                 </div>
                 <div>
-                    <label class="block text-xs text-gray-500 mb-1">Category</label>
+                    <div class="flex items-center gap-2 mb-1">
+                        <label class="block text-xs text-gray-500">Category</label>
+                        <button type="button"
+                                class="inline-flex items-center justify-center w-4 h-4 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold"
+                                title="Spread defaults by category: Forex=global max spread, Stock=max(global,25), Commodity=max(global,15), Other=max(global,10). Ticker max_spread_pips overrides category defaults.">
+                            i
+                        </button>
+                    </div>
                     <select name="category" class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-indigo-200">
                         <option value="">All</option>
-                        @foreach ($categories as $cat)
+                        @foreach ($filterCategories as $cat)
                             <option value="{{ $cat }}" {{ ($validated['category'] ?? '') === $cat ? 'selected' : '' }}>{{ $cat }}</option>
                         @endforeach
                     </select>
@@ -83,6 +90,7 @@
                             <th class="py-3 px-4">Symbol</th>
                             <th class="py-3 px-4">Description</th>
                             <th class="py-3 px-4">Category</th>
+                            <th class="py-3 px-4">Max Spread</th>
                             <th class="py-3 px-4 text-center">Active</th>
                             <th class="py-3 px-4">Notes</th>
                             <th class="py-3 px-4 text-right">Actions</th>
@@ -98,6 +106,7 @@
                                 <td class="py-2 px-4 font-mono font-semibold">{{ $ticker->symbol }}</td>
                                 <td class="py-2 px-4 text-gray-700">{{ $ticker->description ?? '-' }}</td>
                                 <td class="py-2 px-4 text-gray-500">{{ $ticker->category ?? '-' }}</td>
+                                <td class="py-2 px-4 text-gray-500">{{ $ticker->max_spread_pips !== null ? number_format((float) $ticker->max_spread_pips, 3) : '-' }}</td>
                                 <td class="py-2 px-4 text-center">
                                     <form method="POST" action="{{ route('tickers.toggle-active', ['ticker' => $ticker] + request()->query()) }}" class="inline">
                                         @csrf
@@ -128,7 +137,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="7" class="py-8 text-center text-gray-400">No tickers found. <a href="{{ route('tickers.create') }}" class="text-indigo-600 underline">Add one.</a></td>
+                                <td colspan="8" class="py-8 text-center text-gray-400">No tickers found. <a href="{{ route('tickers.create') }}" class="text-indigo-600 underline">Add one.</a></td>
                             </tr>
                         @endforelse
                     </tbody>

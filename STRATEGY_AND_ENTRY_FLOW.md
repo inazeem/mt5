@@ -24,6 +24,11 @@ Example:
 - If profile has `tp_pips=20`, and global has `tp_pips=25`, profile wins.
 - If CLI runs with `--tp-pips=30`, CLI wins.
 
+Important for timeframe-driven entry:
+- `entry_timeframe` follows the same priority chain.
+- CLI can override with `--entry-timeframe=...`.
+- If entry timeframe is missing or invalid, bot falls back to the lowest selected signal timeframe.
+
 ## 3. Multi-Bot Profiles
 
 If multiple bot profiles are enabled:
@@ -60,7 +65,7 @@ Signal strength for mixed strategies:
 
 ### Step C: Risk and guardrail checks
 - Effective volume check (`lot * volume_multiplier` must be above minimum).
-- Max spread check.
+- Max spread check (category-aware: forex/stock/commodity/other).
 - Existing open position on same symbol check.
 - Cooldown check (with optional override ratio).
 - Session hours check.
@@ -70,7 +75,10 @@ Signal strength for mixed strategies:
 - Open positions cap and per-cycle cap.
 
 ### Step D: Trend filter (optional)
-- If enabled, all selected trend timeframes must align with candidate side.
+- If enabled, selected trend timeframes form the direction context.
+- When multiple timeframes are selected, bot checks higher-timeframe context first.
+- Bot then waits for the configured `entry_timeframe` trigger to align before entry.
+- If context aligns but entry timeframe is not ready yet, signal is logged as waiting (`entry_timeframe_wait`).
 
 ### Step E: AI confirmation (optional)
 - If enabled, AI must approve and pass min confidence threshold.
@@ -118,9 +126,10 @@ Examples:
 Common reasons:
 - One strategy in the mix did not confirm.
 - Strategies conflicted on side.
-- Spread too high.
+- Spread too high for that symbol category (for example stock spread can use a different limit than forex).
 - Symbol in cooldown.
 - Trend filter not aligned across selected timeframes.
+- Trend context aligned, but entry timeframe has not triggered yet.
 - AI rejected or confidence too low.
 - Daily loss / trade-count guardrail reached.
 - Max open positions / max per cycle reached.
@@ -128,8 +137,9 @@ Common reasons:
 ## 9. Where to Manage What
 
 - Bot runtime defaults and strategy checkboxes: Bot page (`/bot`)
+- Entry timeframe default (final trigger timeframe): Bot page (`/bot`)
 - Strategy parameters (SMA/EMA/BB/VWAP): Strategies page (`/strategies`)
-- Per-profile overrides: Bot Profiles pages
+- Per-profile overrides (including entry timeframe): Bot Profiles pages
 - Operational diagnostics: Bot Alerts (`/bot/alerts`) and Bot Health (`/bot/health`)
 
 ## 10. Practical Starter Setup
@@ -137,9 +147,10 @@ Common reasons:
 If you want a balanced start:
 1. Select 2 strategies (for example `ema_cross` + `vwap_reversion`).
 2. Keep trend filter on with `15m,30m`.
-3. Keep AI confirmation on and confidence around `70`.
-4. Keep volume multiplier at `1` until stable results.
-5. Review Bot Alerts reasoning and only then tighten/loosen thresholds.
+3. Set entry timeframe to `15m` (or `5m` if you want earlier but noisier triggers).
+4. Keep AI confirmation on and confidence around `70`.
+5. Keep volume multiplier at `1` until stable results.
+6. Review Bot Alerts reasoning and only then tighten/loosen thresholds.
 
 ## 11. Quick Mental Model
 
@@ -148,6 +159,50 @@ It is "consensus plus guardrails".
 
 In short:
 - Consensus from selected strategies
-- Alignment from selected trend timeframes
+- Direction context from selected trend timeframes
+- Trigger from configured entry timeframe
 - Approval from risk limits and (optionally) AI
 - Then trade
+
+## 12. Category-Level Spread Limits
+
+You can now set spread limits by category in one command/profile value.
+
+CLI option:
+- `--max-spread-pips-by-category="forex:2.5,stock:25,commodity:15,other:10,default:2.5"`
+
+How category is resolved:
+- Uses ticker `category` first (from `tickers` table).
+- Falls back to symbol heuristic when category is missing.
+
+Supported keys:
+- `forex`, `stock`, `commodity`, `other`, `default`
+
+If not set, defaults are automatically applied:
+- `forex` = existing `max_spread_pips`
+- `stock` = max(existing, 25)
+- `commodity` = max(existing, 15)
+- `other` = max(existing, 10)
+- `default` = existing `max_spread_pips`
+
+## 13. Ticker-Level Spread Override
+
+Ticker settings now support a per-symbol spread cap.
+
+Resolution order for max spread used by bot:
+1. Ticker `max_spread_pips` (if set on that symbol)
+2. Category map from `--max-spread-pips-by-category`
+3. `default` from category map
+4. Global `max_spread_pips`
+
+Ticker category input is now a dropdown with these values:
+- `Forex`
+- `Stock`
+- `Commodity`
+- `Index`
+- `Crypto`
+- `Other`
+
+Practical example:
+- Set category `Forex` and leave ticker spread blank to use forex default spread.
+- Set category `Forex` and set ticker spread to `3.2` to override only that symbol.

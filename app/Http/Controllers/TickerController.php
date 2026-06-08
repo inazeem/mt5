@@ -7,6 +7,15 @@ use Illuminate\Http\Request;
 
 class TickerController extends Controller
 {
+    private const CATEGORY_OPTIONS = [
+        'Forex',
+        'Stock',
+        'Commodity',
+        'Index',
+        'Crypto',
+        'Other',
+    ];
+
     public function index(Request $request)
     {
         $validated = $request->validate([
@@ -43,7 +52,13 @@ class TickerController extends Controller
             ->orderBy('category')
             ->pluck('category');
 
-        return view('tickers.index', compact('tickers', 'categories', 'validated', 'perPage'));
+        $categoryOptions = self::CATEGORY_OPTIONS;
+        $filterCategories = collect(array_merge($categoryOptions, $categories->all()))
+            ->filter(static fn ($value) => is_string($value) && trim($value) !== '')
+            ->unique()
+            ->values();
+
+        return view('tickers.index', compact('tickers', 'categories', 'categoryOptions', 'filterCategories', 'validated', 'perPage'));
     }
 
     public function create()
@@ -54,7 +69,9 @@ class TickerController extends Controller
             ->orderBy('category')
             ->pluck('category');
 
-        return view('tickers.create', compact('categories'));
+        $categoryOptions = self::CATEGORY_OPTIONS;
+
+        return view('tickers.create', compact('categories', 'categoryOptions'));
     }
 
     public function store(Request $request)
@@ -62,15 +79,17 @@ class TickerController extends Controller
         $validated = $request->validate([
             'symbol'      => ['required', 'string', 'max:20', 'unique:tickers,symbol', 'regex:/^[A-Za-z0-9._\-\/]+$/'],
             'description' => ['nullable', 'string', 'max:255'],
-            'category'    => ['nullable', 'string', 'max:50'],
+            'category'    => ['nullable', 'string', 'in:'.implode(',', self::CATEGORY_OPTIONS)],
             'is_active'   => ['nullable', 'boolean'],
             'pip_size'    => ['nullable', 'numeric', 'min:0.00000001', 'max:1000'],
+            'max_spread_pips' => ['nullable', 'numeric', 'min:0.001', 'max:100000'],
             'notes'       => ['nullable', 'string', 'max:2000'],
         ]);
 
         $validated['symbol'] = strtoupper($validated['symbol']);
         $validated['is_active'] = $request->boolean('is_active');
         $validated['pip_size'] = isset($validated['pip_size']) && $validated['pip_size'] !== '' ? (float) $validated['pip_size'] : null;
+        $validated['max_spread_pips'] = isset($validated['max_spread_pips']) && $validated['max_spread_pips'] !== '' ? (float) $validated['max_spread_pips'] : null;
 
         Ticker::create($validated);
 
@@ -86,7 +105,9 @@ class TickerController extends Controller
             ->orderBy('category')
             ->pluck('category');
 
-        return view('tickers.edit', compact('ticker', 'categories'));
+        $categoryOptions = self::CATEGORY_OPTIONS;
+
+        return view('tickers.edit', compact('ticker', 'categories', 'categoryOptions'));
     }
 
     public function update(Request $request, Ticker $ticker)
@@ -94,15 +115,17 @@ class TickerController extends Controller
         $validated = $request->validate([
             'symbol'      => ['required', 'string', 'max:20', 'regex:/^[A-Za-z0-9._\-\/]+$/', "unique:tickers,symbol,{$ticker->id}"],
             'description' => ['nullable', 'string', 'max:255'],
-            'category'    => ['nullable', 'string', 'max:50'],
+            'category'    => ['nullable', 'string', 'in:'.implode(',', self::CATEGORY_OPTIONS)],
             'is_active'   => ['nullable', 'boolean'],
             'pip_size'    => ['nullable', 'numeric', 'min:0.00000001', 'max:1000'],
+            'max_spread_pips' => ['nullable', 'numeric', 'min:0.001', 'max:100000'],
             'notes'       => ['nullable', 'string', 'max:2000'],
         ]);
 
         $validated['symbol'] = strtoupper($validated['symbol']);
         $validated['is_active'] = $request->boolean('is_active');
         $validated['pip_size'] = isset($validated['pip_size']) && $validated['pip_size'] !== '' ? (float) $validated['pip_size'] : null;
+        $validated['max_spread_pips'] = isset($validated['max_spread_pips']) && $validated['max_spread_pips'] !== '' ? (float) $validated['max_spread_pips'] : null;
 
         $ticker->update($validated);
 

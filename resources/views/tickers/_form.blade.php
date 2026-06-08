@@ -18,17 +18,21 @@
     </div>
 
     <div>
-        <x-input-label for="category" value="Category" />
-        {{-- Allow typing a new category or picking an existing one --}}
-        <input id="category" name="category" type="text" list="category-list"
-               value="{{ old('category', $ticker->category ?? '') }}" maxlength="50"
-               placeholder="e.g. Forex, Crypto, Indices"
-               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring focus:ring-indigo-200 focus:border-indigo-400 text-sm">
-        <datalist id="category-list">
-            @foreach ($categories as $cat)
-                <option value="{{ $cat }}">
+        <div class="flex items-center gap-2">
+            <x-input-label for="category" value="Category" />
+            <button type="button"
+                    class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-bold"
+                    title="Defaults when no ticker override: Forex=global max spread, Stock=max(global,25), Commodity=max(global,15), Other=max(global,10). Category options: Forex, Stock, Commodity, Index, Crypto, Other.">
+                i
+            </button>
+        </div>
+        <select id="category" name="category"
+                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring focus:ring-indigo-200 focus:border-indigo-400 text-sm">
+            <option value="">Select category</option>
+            @foreach ($categoryOptions as $option)
+                <option value="{{ $option }}" {{ old('category', $ticker->category ?? '') === $option ? 'selected' : '' }}>{{ $option }}</option>
             @endforeach
-        </datalist>
+        </select>
         <x-input-error :messages="$errors->get('category')" class="mt-1" />
     </div>
 
@@ -46,6 +50,15 @@
                       placeholder="Leave blank for auto" />
         <p class="mt-1 text-xs text-gray-400">Forex auto-detected (0.0001 / 0.01 JPY). Stocks: 0.1 · Indices: 1.0 · Crypto: 0.01</p>
         <x-input-error :messages="$errors->get('pip_size')" class="mt-1" />
+    </div>
+
+    <div>
+        <x-input-label for="max_spread_pips" value="Max Spread (pips) Override" />
+        <x-text-input id="max_spread_pips" name="max_spread_pips" type="number" step="0.001" min="0" class="mt-1 block w-48"
+                      value="{{ old('max_spread_pips', $ticker->max_spread_pips ?? '') }}"
+                      placeholder="Leave blank for category default" />
+        <p class="mt-1 text-xs text-gray-400">If set, bot uses this ticker-level spread cap. If blank, bot uses category/default spread caps.</p>
+        <x-input-error :messages="$errors->get('max_spread_pips')" class="mt-1" />
     </div>
 
     <div>

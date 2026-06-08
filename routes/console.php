@@ -25,6 +25,7 @@ Artisan::command('mt5:auto-forex
     {--trail-tp-multiplier= : Multiplier applied to TP when trailing first activates (default from settings, fallback 2)}
     {--min-move-pips=3 : Minimum move from previous tick to trigger entry}
     {--max-spread-pips=2.5 : Maximum spread allowed for entries}
+    {--max-spread-pips-by-category= : Category spread overrides, e.g. "forex:2.5,stock:25,commodity:15,default:2.5"}
     {--cooldown-minutes=30 : Cooldown per symbol after successful entry}
     {--session-start-utc : Start trading hour (UTC) - uses database setting if not specified}
     {--session-end-utc : End trading hour (UTC) - uses database setting if not specified}
@@ -248,6 +249,96 @@ Artisan::command('mt5:auto-forex
             return array_filter($normalized, static fn ($value) => $value !== null);
         };
 
+        $normalizeSpreadCategoryMap = static function (mixed $raw): array {
+            $result = [];
+
+            if (is_array($raw)) {
+                foreach ($raw as $key => $value) {
+                    $category = strtolower(trim((string) $key));
+                    if ($category === '' || !is_numeric($value)) {
+                        continue;
+                    }
+
+                    $spread = (float) $value;
+                    if ($spread <= 0) {
+                        continue;
+                    }
+
+                    $result[$category] = $spread;
+                }
+
+                return $result;
+            }
+
+            $text = trim((string) $raw);
+            if ($text === '') {
+                return [];
+            }
+
+            foreach (explode(',', $text) as $token) {
+                $pair = explode(':', (string) $token, 2);
+                if (count($pair) !== 2) {
+                    continue;
+                }
+
+                $category = strtolower(trim((string) $pair[0]));
+                $value = trim((string) $pair[1]);
+                if ($category === '' || !is_numeric($value)) {
+                    continue;
+                }
+
+                $spread = (float) $value;
+                if ($spread <= 0) {
+                    continue;
+                }
+
+                $result[$category] = $spread;
+            }
+
+            return $result;
+        };
+
+        $classifySpreadCategory = static function (string $symbol, mixed $tickerCategory): string {
+            $rawCategory = strtolower(trim((string) $tickerCategory));
+            if ($rawCategory !== '') {
+                if (str_contains($rawCategory, 'stock') || str_contains($rawCategory, 'equity') || str_contains($rawCategory, 'share')) {
+                    return 'stock';
+                }
+                if (
+                    str_contains($rawCategory, 'commodity') ||
+                    str_contains($rawCategory, 'metal') ||
+                    str_contains($rawCategory, 'energy') ||
+                    str_contains($rawCategory, 'oil') ||
+                    str_contains($rawCategory, 'gold') ||
+                    str_contains($rawCategory, 'silver')
+                ) {
+                    return 'commodity';
+                }
+                if (
+                    str_contains($rawCategory, 'index') ||
+                    str_contains($rawCategory, 'indice') ||
+                    str_contains($rawCategory, 'crypto')
+                ) {
+                    return 'other';
+                }
+                if (
+                    str_contains($rawCategory, 'major') ||
+                    str_contains($rawCategory, 'minor') ||
+                    str_contains($rawCategory, 'forex') ||
+                    str_contains($rawCategory, 'fx')
+                ) {
+                    return 'forex';
+                }
+            }
+
+            $lettersOnly = preg_replace('/[^A-Z]/', '', strtoupper($symbol)) ?? '';
+            if (strlen($lettersOnly) >= 6 && preg_match('/^[A-Z]{6}/', $lettersOnly) === 1) {
+                return 'forex';
+            }
+
+            return 'other';
+        };
+
         $lotSize           = (float) $optionOrProfileOrSetting('lot', $botProfile['lot'] ?? null, $db->bot_lot ?? null, 0.01);
         $tpPips            = (float) $optionOrProfileOrSetting('tp-pips', $botProfile['tp_pips'] ?? null, $db->bot_tp_pips ?? null, 25);
         $slPips            = (float) $optionOrProfileOrSetting('sl-pips', $botProfile['sl_pips'] ?? null, $db->bot_sl_pips ?? null, 15);
@@ -256,6 +347,29 @@ Artisan::command('mt5:auto-forex
         $trailTpMultiplier = (float) $optionOrProfileOrSetting('trail-tp-multiplier', $botProfile['trail_tp_multiplier'] ?? null, $db->bot_trail_tp_multiplier ?? null, 2);
         $minMovePips       = (float) $optionOrProfileOrSetting('min-move-pips', $botProfile['min_move_pips'] ?? null, $db->bot_min_move_pips ?? null, 3);
         $maxSpreadPips     = (float) $optionOrProfileOrSetting('max-spread-pips', $botProfile['max_spread_pips'] ?? null, $db->bot_max_spread_pips ?? null, 2.5);
+        $maxSpreadByCategory = $normalizeSpreadCategoryMap($optionOrProfileOrSetting(
+            'max-spread-pips-by-category',
+            $botProfile['max_spread_pips_by_category'] ?? null,
+            null,
+            []
+        ));
+
+        if (empty($maxSpreadByCategory)) {
+            $maxSpreadByCategory = [
+                'forex' => $maxSpreadPips,
+                'stock' => max($maxSpreadPips, 25.0),
+                'commodity' => max($maxSpreadPips, 15.0),
+                'other' => max($maxSpreadPips, 10.0),
+                'default' => $maxSpreadPips,
+            ];
+        } else {
+            if (!isset($maxSpreadByCategory['default'])) {
+                $maxSpreadByCategory['default'] = $maxSpreadPips;
+            }
+            if (!isset($maxSpreadByCategory['forex'])) {
+                $maxSpreadByCategory['forex'] = $maxSpreadPips;
+            }
+        }
         $cooldownMinutes   = max(0, (int) $optionOrProfileOrSetting('cooldown-minutes', $botProfile['cooldown_minutes'] ?? null, $db->bot_cooldown_minutes ?? null, 30));
         $sessionStartUtc   = (int) $optionOrProfileOrSetting('session-start-utc', $botProfile['session_start_utc'] ?? null, $db->bot_session_start_utc ?? null, 6);
         $sessionEndUtc     = (int) $optionOrProfileOrSetting('session-end-utc', $botProfile['session_end_utc'] ?? null, $db->bot_session_end_utc ?? null, 20);
@@ -339,6 +453,9 @@ Artisan::command('mt5:auto-forex
             $trailPips = min($trailPips, 8.0);
             $minMovePips = min($minMovePips, 1.5);
             $maxSpreadPips = min($maxSpreadPips, 5.0);
+            foreach ($maxSpreadByCategory as $category => $spreadLimit) {
+                $maxSpreadByCategory[$category] = min((float) $spreadLimit, 50.0);
+            }
             $cooldownMinutes = min($cooldownMinutes, 5);
         }
 
@@ -371,6 +488,8 @@ Artisan::command('mt5:auto-forex
         if ($scalperMode) {
             $this->line('Scalper mode ON  TP='.$tpPips.'pip  SL='.$slPips.'pip  maxSpread='.$maxSpreadPips.'pip  cooldown='.$cooldownMinutes.'min');
         }
+
+        $this->line('Spread limits by category: '.json_encode($maxSpreadByCategory));
 
         if ($useTrendFilter) {
             $this->line('Trend filter ON  context='.strtoupper(implode(',', $trendContextTimeframes)).'  entry='.strtoupper($entryTimeframe));
@@ -737,6 +856,15 @@ Artisan::command('mt5:auto-forex
             $lastBid = Cache::get($cacheKey);
             Cache::put($cacheKey, $bid, now()->addHours(6));
             $spreadPips = ($ask - $bid) / $pipSize;
+            $tickerCategory = $dbTickers->get($symbol)?->category;
+            $tickerSpreadOverride = $dbTickers->get($symbol)?->max_spread_pips;
+            $spreadCategory = $classifySpreadCategory($symbol, $tickerCategory);
+            $maxSpreadForSymbol = (float) (
+                (is_numeric($tickerSpreadOverride) ? (float) $tickerSpreadOverride : null)
+                ?? $maxSpreadByCategory[$spreadCategory]
+                ?? $maxSpreadByCategory['default']
+                ?? $maxSpreadPips
+            );
 
             $candlesForStrategy = [];
             $primaryTimeframe = $entryTimeframe;
@@ -889,8 +1017,8 @@ Artisan::command('mt5:auto-forex
                 continue;
             }
 
-            if (!$testMode && $spreadPips > $maxSpreadPips) {
-                $this->line("  {$symbol}: SPREAD {$spreadPips}pip > max {$maxSpreadPips}pip — skipped");
+            if (!$testMode && $spreadPips > $maxSpreadForSymbol) {
+                $this->line("  {$symbol}: SPREAD {$spreadPips}pip > max {$maxSpreadForSymbol}pip ({$spreadCategory}) — skipped");
                 $skippedSpread++;
                 $logSignal([
                     'status' => 'spread_rejected',
@@ -898,6 +1026,13 @@ Artisan::command('mt5:auto-forex
                     'side' => $side,
                     'spread_pips' => $spreadPips,
                     'signal_delta_pips' => $signalDeltaPips,
+                    'meta_payload' => [
+                        'ticker_category' => $tickerCategory,
+                        'ticker_spread_override' => is_numeric($tickerSpreadOverride) ? (float) $tickerSpreadOverride : null,
+                        'spread_category' => $spreadCategory,
+                        'max_spread_pips_for_symbol' => $maxSpreadForSymbol,
+                        'max_spread_pips_by_category' => $maxSpreadByCategory,
+                    ],
                     'message' => 'Signal rejected due to spread filter.',
                 ]);
                 continue;
