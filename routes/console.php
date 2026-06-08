@@ -23,9 +23,13 @@ Artisan::command('mt5:auto-forex
     {--sl-pips=15 : Stop loss distance in pips}
     {--sl-pips-by-category= : Category SL overrides, e.g. "forex:15,stock:60,commodity:40,default:15"}
     {--trail-start-pips=10 : Profit pips required before trailing activates}
+    {--trail-start-pips-by-category= : Category trail-start overrides, e.g. "forex:10,stock:50,commodity:30,default:10"}
     {--trail-pips=8 : Trailing stop distance in pips}
+    {--trail-pips-by-category= : Category trail distance overrides, e.g. "forex:8,stock:25,commodity:15,default:8"}
     {--trail-tp-multiplier= : Multiplier applied to TP when trailing first activates (default from settings, fallback 2)}
+    {--trail-tp-multiplier-by-category= : Category trail TP multiplier overrides, e.g. "forex:2,stock:3,commodity:2.5,default:2"}
     {--min-move-pips=3 : Minimum move from previous tick to trigger entry}
+    {--min-move-pips-by-category= : Category min-move overrides, e.g. "forex:3,stock:25,commodity:12,default:3"}
     {--max-spread-pips=2.5 : Maximum spread allowed for entries}
     {--max-spread-pips-by-category= : Category spread overrides, e.g. "forex:2.5,stock:25,commodity:15,default:2.5"}
     {--cooldown-minutes=30 : Cooldown per symbol after successful entry}
@@ -357,9 +361,33 @@ Artisan::command('mt5:auto-forex
             []
         ));
         $trailStartPips    = (float) $optionOrProfileOrSetting('trail-start-pips', $botProfile['trail_start_pips'] ?? null, $db->bot_trail_start_pips ?? null, 10);
+        $trailStartPipsByCategory = $normalizeCategoryNumericMap($optionOrProfileOrSetting(
+            'trail-start-pips-by-category',
+            $botProfile['trail_start_pips_by_category'] ?? null,
+            null,
+            []
+        ));
         $trailPips         = (float) $optionOrProfileOrSetting('trail-pips', $botProfile['trail_pips'] ?? null, $db->bot_trail_pips ?? null, 8);
+        $trailPipsByCategory = $normalizeCategoryNumericMap($optionOrProfileOrSetting(
+            'trail-pips-by-category',
+            $botProfile['trail_pips_by_category'] ?? null,
+            null,
+            []
+        ));
         $trailTpMultiplier = (float) $optionOrProfileOrSetting('trail-tp-multiplier', $botProfile['trail_tp_multiplier'] ?? null, $db->bot_trail_tp_multiplier ?? null, 2);
+        $trailTpMultiplierByCategory = $normalizeCategoryNumericMap($optionOrProfileOrSetting(
+            'trail-tp-multiplier-by-category',
+            $botProfile['trail_tp_multiplier_by_category'] ?? null,
+            null,
+            []
+        ));
         $minMovePips       = (float) $optionOrProfileOrSetting('min-move-pips', $botProfile['min_move_pips'] ?? null, $db->bot_min_move_pips ?? null, 3);
+        $minMovePipsByCategory = $normalizeCategoryNumericMap($optionOrProfileOrSetting(
+            'min-move-pips-by-category',
+            $botProfile['min_move_pips_by_category'] ?? null,
+            null,
+            []
+        ));
         $maxSpreadPips     = (float) $optionOrProfileOrSetting('max-spread-pips', $botProfile['max_spread_pips'] ?? null, $db->bot_max_spread_pips ?? null, 2.5);
         $maxSpreadByCategory = $normalizeCategoryNumericMap($optionOrProfileOrSetting(
             'max-spread-pips-by-category',
@@ -418,6 +446,78 @@ Artisan::command('mt5:auto-forex
                 $maxSpreadByCategory['forex'] = $maxSpreadPips;
             }
         }
+
+        if (empty($trailStartPipsByCategory)) {
+            $trailStartPipsByCategory = [
+                'forex' => $trailStartPips,
+                'stock' => max($trailStartPips, 50.0),
+                'commodity' => max($trailStartPips, 30.0),
+                'other' => max($trailStartPips, 20.0),
+                'default' => $trailStartPips,
+            ];
+        } else {
+            if (!isset($trailStartPipsByCategory['default'])) {
+                $trailStartPipsByCategory['default'] = $trailStartPips;
+            }
+            if (!isset($trailStartPipsByCategory['forex'])) {
+                $trailStartPipsByCategory['forex'] = $trailStartPips;
+            }
+        }
+
+        if (empty($trailPipsByCategory)) {
+            $trailPipsByCategory = [
+                'forex' => $trailPips,
+                'stock' => max($trailPips, 25.0),
+                'commodity' => max($trailPips, 15.0),
+                'other' => max($trailPips, 10.0),
+                'default' => $trailPips,
+            ];
+        } else {
+            if (!isset($trailPipsByCategory['default'])) {
+                $trailPipsByCategory['default'] = $trailPips;
+            }
+            if (!isset($trailPipsByCategory['forex'])) {
+                $trailPipsByCategory['forex'] = $trailPips;
+            }
+        }
+
+        if (empty($trailTpMultiplierByCategory)) {
+            $trailTpMultiplierByCategory = [
+                'forex' => $trailTpMultiplier,
+                'stock' => max($trailTpMultiplier, 3.0),
+                'commodity' => max($trailTpMultiplier, 2.5),
+                'other' => max($trailTpMultiplier, 2.2),
+                'default' => $trailTpMultiplier,
+            ];
+        } else {
+            if (!isset($trailTpMultiplierByCategory['default'])) {
+                $trailTpMultiplierByCategory['default'] = $trailTpMultiplier;
+            }
+            if (!isset($trailTpMultiplierByCategory['forex'])) {
+                $trailTpMultiplierByCategory['forex'] = $trailTpMultiplier;
+            }
+        }
+
+        if (empty($minMovePipsByCategory)) {
+            $minMovePipsByCategory = [
+                'forex' => $minMovePips,
+                'stock' => max($minMovePips, 25.0),
+                'commodity' => max($minMovePips, 12.0),
+                'other' => max($minMovePips, 8.0),
+                'default' => $minMovePips,
+            ];
+        } else {
+            if (!isset($minMovePipsByCategory['default'])) {
+                $minMovePipsByCategory['default'] = $minMovePips;
+            }
+            if (!isset($minMovePipsByCategory['forex'])) {
+                $minMovePipsByCategory['forex'] = $minMovePips;
+            }
+        }
+
+        $categoryValueOrDefault = static function (array $map, string $category, float $fallback): float {
+            return (float) ($map[$category] ?? $map['default'] ?? $fallback);
+        };
         $cooldownMinutes   = max(0, (int) $optionOrProfileOrSetting('cooldown-minutes', $botProfile['cooldown_minutes'] ?? null, $db->bot_cooldown_minutes ?? null, 30));
         $sessionStartUtc   = (int) $optionOrProfileOrSetting('session-start-utc', $botProfile['session_start_utc'] ?? null, $db->bot_session_start_utc ?? null, 6);
         $sessionEndUtc     = (int) $optionOrProfileOrSetting('session-end-utc', $botProfile['session_end_utc'] ?? null, $db->bot_session_end_utc ?? null, 20);
@@ -510,6 +610,18 @@ Artisan::command('mt5:auto-forex
             foreach ($slPipsByCategory as $category => $slLimit) {
                 $slPipsByCategory[$category] = min((float) $slLimit, 150.0);
             }
+            foreach ($trailStartPipsByCategory as $category => $trailStartLimit) {
+                $trailStartPipsByCategory[$category] = min((float) $trailStartLimit, 400.0);
+            }
+            foreach ($trailPipsByCategory as $category => $trailLimit) {
+                $trailPipsByCategory[$category] = min((float) $trailLimit, 200.0);
+            }
+            foreach ($trailTpMultiplierByCategory as $category => $multiplierLimit) {
+                $trailTpMultiplierByCategory[$category] = min((float) $multiplierLimit, 10.0);
+            }
+            foreach ($minMovePipsByCategory as $category => $minMoveLimit) {
+                $minMovePipsByCategory[$category] = min((float) $minMoveLimit, 200.0);
+            }
             $cooldownMinutes = min($cooldownMinutes, 5);
         }
 
@@ -545,6 +657,10 @@ Artisan::command('mt5:auto-forex
 
         $this->line('TP limits by category: '.json_encode($tpPipsByCategory));
         $this->line('SL limits by category: '.json_encode($slPipsByCategory));
+        $this->line('Trail-start limits by category: '.json_encode($trailStartPipsByCategory));
+        $this->line('Trail limits by category: '.json_encode($trailPipsByCategory));
+        $this->line('Trail TP multiplier by category: '.json_encode($trailTpMultiplierByCategory));
+        $this->line('Min-move limits by category: '.json_encode($minMovePipsByCategory));
         $this->line('Spread limits by category: '.json_encode($maxSpreadByCategory));
 
         if ($useTrendFilter) {
@@ -679,8 +795,35 @@ Artisan::command('mt5:auto-forex
             $this->warn('Account info unavailable, skipping daily loss guard: '.$e->getMessage());
         }
 
+        $tickerCategoryMapForTrailing = Ticker::query()
+            ->select(['symbol', 'category'])
+            ->get()
+            ->mapWithKeys(static fn ($ticker) => [strtoupper((string) $ticker->symbol) => $ticker->category])
+            ->all();
+
+        $resolveTrailingParamsForSymbol = static function (string $symbol) use (
+            $tickerCategoryMapForTrailing,
+            $classifySpreadCategory,
+            $categoryValueOrDefault,
+            $trailStartPipsByCategory,
+            $trailPipsByCategory,
+            $trailTpMultiplierByCategory,
+            $trailStartPips,
+            $trailPips,
+            $trailTpMultiplier
+        ): array {
+            $normalizedSymbol = strtoupper((string) $symbol);
+            $category = $classifySpreadCategory($normalizedSymbol, $tickerCategoryMapForTrailing[$normalizedSymbol] ?? null);
+
+            return [
+                'start_pips' => $categoryValueOrDefault($trailStartPipsByCategory, $category, $trailStartPips),
+                'trail_pips' => $categoryValueOrDefault($trailPipsByCategory, $category, $trailPips),
+                'tp_multiplier' => $categoryValueOrDefault($trailTpMultiplierByCategory, $category, $trailTpMultiplier),
+            ];
+        };
+
         $this->info('Running trailing stop updates...');
-        $trailResult = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier);
+        $trailResult = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier, $resolveTrailingParamsForSymbol);
         $this->line('Trailing updated: '.$trailResult['updated'].', skipped: '.$trailResult['skipped']);
         if ($trailResult['updated'] > 0) {
             BotTradeLog::query()->create(array_merge($botLogDefaults, [
@@ -733,6 +876,9 @@ Artisan::command('mt5:auto-forex
         $profileSymbols = isset($botProfile['symbols']) && is_array($botProfile['symbols'])
             ? array_values(array_filter(array_map(static fn ($s) => strtoupper(trim((string) $s)), $botProfile['symbols']), static fn ($s) => $s !== ''))
             : [];
+        $profileTickerCategories = isset($botProfile['ticker_categories']) && is_array($botProfile['ticker_categories'])
+            ? array_values(array_unique(array_filter(array_map(static fn ($value) => strtolower(trim((string) $value)), $botProfile['ticker_categories']), static fn ($value) => $value !== '')))
+            : [];
 
         if (!empty($profileSymbols)) {
             $symbols = array_slice($profileSymbols, 0, $maxSymbols);
@@ -751,6 +897,16 @@ Artisan::command('mt5:auto-forex
             $this->line('Applied preferred symbol filter: '.count($symbols).' symbol(s) remain.');
         }
 
+        if (!empty($profileTickerCategories)) {
+            $symbols = array_values(array_filter($symbols, function (string $symbol) use ($dbTickers, $classifySpreadCategory, $profileTickerCategories): bool {
+                $tickerCategory = $dbTickers->get($symbol)?->category;
+                $resolvedCategory = $classifySpreadCategory($symbol, $tickerCategory);
+                return in_array($resolvedCategory, $profileTickerCategories, true);
+            }));
+
+            $this->line('Applied profile ticker category filter ('.implode(',', $profileTickerCategories).'): '.count($symbols).' symbol(s) remain.');
+        }
+
         if (!$testMode && empty($symbols)) {
             $msg = 'Skipped cycle: no symbols available after preferred symbol filter.';
             $this->warn($msg);
@@ -760,6 +916,7 @@ Artisan::command('mt5:auto-forex
                 'message' => $msg,
                 'meta_payload' => [
                     'preferred_symbols' => $preferredSymbols,
+                    'profile_ticker_categories' => $profileTickerCategories,
                 ],
             ]));
 
@@ -937,6 +1094,7 @@ Artisan::command('mt5:auto-forex
                 ?? $slPipsByCategory['default']
                 ?? $slPips
             );
+            $minMovePipsForSymbol = $categoryValueOrDefault($minMovePipsByCategory, $spreadCategory, $minMovePips);
 
             $candlesForStrategy = [];
             $primaryTimeframe = $entryTimeframe;
@@ -978,7 +1136,7 @@ Artisan::command('mt5:auto-forex
                         'ask' => $ask,
                         'last_bid' => $lastBid,
                         'pip_size' => $pipSize,
-                        'min_move_pips' => $minMovePips,
+                        'min_move_pips' => $minMovePipsForSymbol,
                         'strategy_params' => $strategyParams,
                         'candles' => $candlesForStrategy,
                         'timeframe' => $primaryTimeframe,
@@ -1406,7 +1564,7 @@ Artisan::command('mt5:auto-forex
 
                 // Run one immediate trailing pass so new trades do not wait for the next cycle.
                 try {
-                    $postOpenTrail = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier);
+                    $postOpenTrail = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier, $resolveTrailingParamsForSymbol);
                     if (($postOpenTrail['updated'] ?? 0) > 0) {
                         $this->line('Post-open trailing updated: '.$postOpenTrail['updated']);
                     }
@@ -1489,7 +1647,11 @@ Artisan::command('mt5:auto-forex
                 'max_per_cycle' => $maxPerCycle,
                 'max_open_positions' => $maxOpenPositions,
                 'min_move_pips' => $minMovePips,
+                'min_move_pips_by_category' => $minMovePipsByCategory,
                 'max_spread_pips' => $maxSpreadPips,
+                'trail_start_pips_by_category' => $trailStartPipsByCategory,
+                'trail_pips_by_category' => $trailPipsByCategory,
+                'trail_tp_multiplier_by_category' => $trailTpMultiplierByCategory,
                 'preferred_hours_utc' => $preferredHoursUtc,
                 'blocked_hours_utc' => $blockedHoursUtc,
                 'preferred_symbols' => $preferredSymbols,

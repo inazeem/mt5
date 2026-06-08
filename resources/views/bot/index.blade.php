@@ -47,6 +47,9 @@
                     <a href="{{ route('strategies.edit') }}" class="text-xs text-indigo-600 hover:underline">Edit strategy parameters</a>
                 </div>
                 <p class="text-xs text-gray-500">These are the defaults used by <code>mt5:auto-forex</code>.</p>
+                <p class="text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-2 py-1">
+                    Category-aware runtime is enabled. These values act as Forex baseline, while Stock/Commodity/Other get higher defaults for TP, SL, trail start, trail distance, trail TP multiplier, and min move.
+                </p>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>

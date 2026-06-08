@@ -487,7 +487,7 @@ class Mt5Service
      * @return array<string, mixed>
      * @throws RuntimeException
      */
-    public function applyTrailingStops(float $startPips, float $trailPips, float $tpMultiplier = 2.0): array
+    public function applyTrailingStops(float $startPips, float $trailPips, float $tpMultiplier = 2.0, ?callable $parameterResolver = null): array
     {
         if ($startPips <= 0 || $trailPips <= 0 || $tpMultiplier < 1) {
             throw new RuntimeException('Trailing parameters are invalid. startPips/trailPips must be > 0 and tpMultiplier must be >= 1.');
@@ -518,8 +518,28 @@ class Mt5Service
             }
 
             $pipSize = $this->pipSize($symbol);
-            $trailDistance = $trailPips * $pipSize;
-            $startDistance = $startPips * $pipSize;
+
+            $resolvedStartPips = $startPips;
+            $resolvedTrailPips = $trailPips;
+            $resolvedTpMultiplier = $tpMultiplier;
+
+            if ($parameterResolver !== null) {
+                $resolved = $parameterResolver($symbol, $position);
+                if (is_array($resolved)) {
+                    if (isset($resolved['start_pips']) && is_numeric($resolved['start_pips']) && (float) $resolved['start_pips'] > 0) {
+                        $resolvedStartPips = (float) $resolved['start_pips'];
+                    }
+                    if (isset($resolved['trail_pips']) && is_numeric($resolved['trail_pips']) && (float) $resolved['trail_pips'] > 0) {
+                        $resolvedTrailPips = (float) $resolved['trail_pips'];
+                    }
+                    if (isset($resolved['tp_multiplier']) && is_numeric($resolved['tp_multiplier']) && (float) $resolved['tp_multiplier'] >= 1) {
+                        $resolvedTpMultiplier = (float) $resolved['tp_multiplier'];
+                    }
+                }
+            }
+
+            $trailDistance = $resolvedTrailPips * $pipSize;
+            $startDistance = $resolvedStartPips * $pipSize;
 
             $isBuy = str_contains($type, 'BUY');
             $isSell = str_contains($type, 'SELL');
@@ -558,16 +578,16 @@ class Mt5Service
             $tpAdjustedCacheKey = 'mt5_tp_adjusted_'.$positionId;
 
             // Apply TP multiplier once when trailing first modifies this position.
-            if ($currentTp !== null && !Cache::has($tpAdjustedCacheKey) && $tpMultiplier > 1) {
+            if ($currentTp !== null && !Cache::has($tpAdjustedCacheKey) && $resolvedTpMultiplier > 1) {
                 if ($isBuy) {
                     $tpDistance = $currentTp - $openPrice;
                     if ($tpDistance > 0) {
-                        $newTp = round($openPrice + ($tpDistance * $tpMultiplier), 5);
+                        $newTp = round($openPrice + ($tpDistance * $resolvedTpMultiplier), 5);
                     }
                 } else {
                     $tpDistance = $openPrice - $currentTp;
                     if ($tpDistance > 0) {
-                        $newTp = round($openPrice - ($tpDistance * $tpMultiplier), 5);
+                        $newTp = round($openPrice - ($tpDistance * $resolvedTpMultiplier), 5);
                     }
                 }
             }

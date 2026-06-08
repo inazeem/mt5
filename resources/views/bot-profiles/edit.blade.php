@@ -4,7 +4,7 @@
     </x-slot>
 
     <div class="py-8">
-        <div class="max-w-4xl mx-auto sm:px-6 lg:px-8">
+        <div class="max-w-6xl mx-auto sm:px-6 lg:px-8">
             <div class="bg-white p-6 rounded-lg shadow">
                 @if ($errors->any())
                     <div class="mb-4 p-4 bg-rose-50 border border-rose-200 rounded">
@@ -46,9 +46,17 @@
                         $strategyParams = old('strategy_params', isset($profile['strategy_params']) && is_array($profile['strategy_params']) ? $profile['strategy_params'] : []);
                     @endphp
 
-                    <div class="p-3 bg-gray-50 rounded text-xs text-gray-600 font-mono">
+                    <div class="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3">
+                        <p class="text-sm font-semibold text-indigo-900">Edit profile behavior safely</p>
+                        <p class="text-xs text-indigo-700 mt-1">Only non-empty fields override global defaults. Keep fields blank to inherit shared bot settings.</p>
+                    </div>
+
+                    <div class="p-3 bg-gray-50 rounded text-xs text-gray-600 font-mono border border-gray-200">
                         Bot Key: <strong>{{ $profile['key'] }}</strong>
                     </div>
+
+                    <div class="rounded-lg border border-gray-200 p-4 space-y-4">
+                        <h3 class="text-sm font-semibold text-gray-900">Profile Identity</h3>
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Bot Name</label>
@@ -65,8 +73,10 @@
                         <label for="enabled" class="text-sm text-gray-700">Enabled</label>
                         <p class="text-xs text-gray-500">Disabled profiles are skipped during auto-forex runs.</p>
                     </div>
+                    </div>
 
-                    <hr class="border-gray-200" />
+                    <div class="rounded-lg border border-gray-200 p-4">
+                        <h3 class="text-sm font-semibold text-gray-900 mb-4">Execution, Strategy, and Risk</h3>
 
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                         <div>
@@ -141,62 +151,6 @@
                                    class="mt-1 block w-full rounded border-gray-300" />
                         </div>
 
-                        <div class="sm:col-span-3">
-                            <label class="block text-sm font-medium text-gray-700">Strategies Override (optional, must all align)</label>
-                            <div class="mt-2 flex flex-wrap gap-4">
-                                @foreach (['momentum' => 'Momentum', 'sma_cross' => 'SMA Cross', 'ema_cross' => 'EMA Cross', 'bollinger_reversion' => 'Bollinger Reversion', 'vwap_reversion' => 'VWAP Reversion'] as $strategyValue => $strategyLabel)
-                                    <label class="inline-flex items-center gap-2">
-                                        <input type="checkbox" name="strategies[]" value="{{ $strategyValue }}"
-                                               {{ in_array($strategyValue, $selectedStrategies, true) ? 'checked' : '' }}
-                                               class="rounded border-gray-300" />
-                                        <span class="text-sm text-gray-700">{{ $strategyLabel }}</span>
-                                    </label>
-                                @endforeach
-                            </div>
-                            <p class="text-xs text-gray-500 mt-1">Leave all unchecked to use global strategy mix.</p>
-                            @error('strategies')
-                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
-                            @enderror
-                            @error('strategies.*')
-                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
-                            @enderror
-                        </div>
-
-                        <div class="sm:col-span-2">
-                            <label class="block text-sm font-medium text-gray-700">Trend Timeframes (must all align)</label>
-                            <div class="mt-2 flex flex-wrap gap-4">
-                                @foreach (['5m', '15m', '30m', '1h', '4h'] as $timeframe)
-                                    <label class="inline-flex items-center gap-2">
-                                        <input type="checkbox" name="signal_timeframes[]" value="{{ $timeframe }}"
-                                               {{ in_array($timeframe, $selectedSignalTimeframes, true) ? 'checked' : '' }}
-                                               class="rounded border-gray-300" />
-                                        <span class="text-sm text-gray-700">{{ strtoupper($timeframe) }}</span>
-                                    </label>
-                                @endforeach
-                            </div>
-                            <p class="text-xs text-gray-500 mt-1">Leave all unchecked to use global Auto-Bot timeframe defaults.</p>
-                            @error('signal_timeframes')
-                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
-                            @enderror
-                            @error('signal_timeframes.*')
-                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
-                            @enderror
-                        </div>
-
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Entry Timeframe (final trigger)</label>
-                            <select name="entry_timeframe" class="mt-1 block w-full rounded border-gray-300">
-                                <option value="">Auto (lowest selected)</option>
-                                @foreach ($selectedSignalTimeframes as $timeframe)
-                                    <option value="{{ $timeframe }}" {{ $selectedEntryTimeframe === $timeframe ? 'selected' : '' }}>{{ strtoupper($timeframe) }}</option>
-                                @endforeach
-                            </select>
-                            <p class="text-xs text-gray-500 mt-1">Must be one of selected trend timeframes.</p>
-                            @error('entry_timeframe')
-                                <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
-                            @enderror
-                        </div>
-
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Session Start (UTC)</label>
                             <input type="number" name="session_start_utc" min="0" max="23"
@@ -267,6 +221,7 @@
                                    class="mt-1 block w-full rounded border-gray-300" />
                         </div>
                     </div>
+                    </div>
 
                     <div class="space-y-2">
                         <label class="flex items-center gap-2">
@@ -282,7 +237,7 @@
                     <div class="rounded border border-gray-200 p-4">
                         <h4 class="text-sm font-semibold text-gray-800">Strategy Parameters (Profile Override)</h4>
                         <p class="text-xs text-gray-500 mt-1">Leave blank to use global strategy parameters.</p>
-                        <div class="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
                             <div><label class="block text-xs font-medium text-gray-700">SMA Fast</label><input name="strategy_params[sma_fast]" type="number" min="2" max="200" value="{{ $strategyParams['sma_fast'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
                             <div><label class="block text-xs font-medium text-gray-700">SMA Slow</label><input name="strategy_params[sma_slow]" type="number" min="3" max="300" value="{{ $strategyParams['sma_slow'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
                             <div><label class="block text-xs font-medium text-gray-700">EMA Fast</label><input name="strategy_params[ema_fast]" type="number" min="2" max="200" value="{{ $strategyParams['ema_fast'] ?? '' }}" class="mt-1 block w-full rounded border-gray-300" /></div>
@@ -354,12 +309,98 @@
                         </div>
                     </div>
 
-                    <div class="flex gap-3">
-                        <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700">
+                    @php
+                        $selectedTickerCategories = old('ticker_categories');
+                        if (!is_array($selectedTickerCategories)) {
+                            $selectedTickerCategories = isset($profile['ticker_categories']) && is_array($profile['ticker_categories'])
+                                ? $profile['ticker_categories']
+                                : [];
+                        }
+                    @endphp
+
+                    <div class="rounded-lg border border-indigo-200 bg-indigo-50 p-4 space-y-4">
+                        <h3 class="text-sm font-semibold text-indigo-900">Category and Signal Filters</h3>
+
+                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                            <div class="sm:col-span-3">
+                                <label class="block text-sm font-medium text-indigo-900">Ticker Categories (optional)</label>
+                                <p class="text-xs text-indigo-700 mt-1">If selected, this bot will scan only tickers in these categories.</p>
+                                <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                                    @foreach (['Forex', 'Stock', 'Commodity', 'Index', 'Crypto', 'Other'] as $tickerCategory)
+                                        <label class="inline-flex items-center gap-2 rounded border border-indigo-100 bg-white px-3 py-2">
+                                            <input type="checkbox" name="ticker_categories[]" value="{{ $tickerCategory }}"
+                                                   {{ in_array($tickerCategory, $selectedTickerCategories, true) ? 'checked' : '' }}
+                                                   class="rounded border-gray-300" />
+                                            <span class="text-sm text-gray-700">{{ $tickerCategory }}</span>
+                                        </label>
+                                    @endforeach
+                                </div>
+                            </div>
+
+                            <div class="sm:col-span-3">
+                                <label class="block text-sm font-medium text-indigo-900">Strategies Override (optional, must all align)</label>
+                                <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                    @foreach (['momentum' => 'Momentum', 'sma_cross' => 'SMA Cross', 'ema_cross' => 'EMA Cross', 'bollinger_reversion' => 'Bollinger Reversion', 'vwap_reversion' => 'VWAP Reversion'] as $strategyValue => $strategyLabel)
+                                        <label class="inline-flex items-center gap-2 rounded border border-indigo-100 bg-white px-3 py-2">
+                                            <input type="checkbox" name="strategies[]" value="{{ $strategyValue }}"
+                                                   {{ in_array($strategyValue, $selectedStrategies, true) ? 'checked' : '' }}
+                                                   class="rounded border-gray-300" />
+                                            <span class="text-sm text-gray-700">{{ $strategyLabel }}</span>
+                                        </label>
+                                    @endforeach
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">Leave all unchecked to use global strategy mix.</p>
+                                @error('strategies')
+                                    <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                                @enderror
+                                @error('strategies.*')
+                                    <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                                @enderror
+                            </div>
+
+                            <div class="sm:col-span-2">
+                                <label class="block text-sm font-medium text-indigo-900">Trend Timeframes (must all align)</label>
+                                <div class="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                                    @foreach (['5m', '15m', '30m', '1h', '4h'] as $timeframe)
+                                        <label class="inline-flex items-center gap-2 rounded border border-indigo-100 bg-white px-3 py-2">
+                                            <input type="checkbox" name="signal_timeframes[]" value="{{ $timeframe }}"
+                                                   {{ in_array($timeframe, $selectedSignalTimeframes, true) ? 'checked' : '' }}
+                                                   class="rounded border-gray-300" />
+                                            <span class="text-sm text-gray-700">{{ strtoupper($timeframe) }}</span>
+                                        </label>
+                                    @endforeach
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">Leave all unchecked to use global Auto-Bot timeframe defaults.</p>
+                                @error('signal_timeframes')
+                                    <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                                @enderror
+                                @error('signal_timeframes.*')
+                                    <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                                @enderror
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-indigo-900">Entry Timeframe (final trigger)</label>
+                                <select name="entry_timeframe" class="mt-1 block w-full rounded border-gray-300">
+                                    <option value="">Auto (lowest selected)</option>
+                                    @foreach ($selectedSignalTimeframes as $timeframe)
+                                        <option value="{{ $timeframe }}" {{ $selectedEntryTimeframe === $timeframe ? 'selected' : '' }}>{{ strtoupper($timeframe) }}</option>
+                                    @endforeach
+                                </select>
+                                <p class="text-xs text-gray-500 mt-1">Must be one of selected trend timeframes.</p>
+                                @error('entry_timeframe')
+                                    <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
+                                @enderror
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-3 border-t border-gray-200 pt-4">
+                        <button type="submit" class="inline-flex items-center px-5 py-2.5 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700 shadow-sm">
                             Save Changes
                         </button>
                         <a href="{{ route('bot-profiles.index') }}"
-                           class="inline-flex items-center px-4 py-2 bg-gray-200 text-gray-700 text-xs font-semibold rounded hover:bg-gray-300">
+                           class="inline-flex items-center px-5 py-2.5 bg-gray-100 text-gray-700 text-xs font-semibold rounded hover:bg-gray-200 border border-gray-300">
                             Cancel
                         </a>
                     </div>

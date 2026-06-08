@@ -73,6 +73,11 @@ TP/SL resolution order:
 3. Category map `default`
 4. Global `tp_pips` / `sl_pips`
 
+Trailing and min-move resolution order:
+1. Category map value
+2. Category map `default`
+3. Global `trail_start_pips`, `trail_pips`, `trail_tp_multiplier`, `min_move_pips`
+
 Default category spread values (when no category map is provided):
 - Forex: global `max_spread_pips`
 - Stock: `max(global max_spread_pips, 25)`
@@ -94,6 +99,18 @@ Default category SL values (when no SL category map is provided):
 - Other: `max(global sl_pips, 30)`
 - Default: global `sl_pips`
 
+Default category trailing values (when no category maps are provided):
+- Trail Start: Forex=global, Stock=max(global,50), Commodity=max(global,30), Other=max(global,20), Default=global
+- Trail Pips: Forex=global, Stock=max(global,25), Commodity=max(global,15), Other=max(global,10), Default=global
+- Trail TP Multiplier: Forex=global, Stock=max(global,3.0), Commodity=max(global,2.5), Other=max(global,2.2), Default=global
+
+Default category min-move values:
+- Forex=global `min_move_pips`
+- Stock=`max(global min_move_pips, 25)`
+- Commodity=`max(global min_move_pips, 12)`
+- Other=`max(global min_move_pips, 8)`
+- Default=global `min_move_pips`
+
 Available ticker categories:
 - Forex
 - Stock
@@ -110,4 +127,12 @@ php artisan mt5:auto-forex --max-spread-pips-by-category="forex:2.5,stock:25,com
 php artisan mt5:auto-forex --tp-pips-by-category="forex:25,stock:120,commodity:80,other:60,default:25"
 
 php artisan mt5:auto-forex --sl-pips-by-category="forex:15,stock:60,commodity:40,other:30,default:15"
+
+php artisan mt5:auto-forex --trail-start-pips-by-category="forex:10,stock:50,commodity:30,other:20,default:10"
+
+php artisan mt5:auto-forex --trail-pips-by-category="forex:8,stock:25,commodity:15,other:10,default:8"
+
+php artisan mt5:auto-forex --trail-tp-multiplier-by-category="forex:2,stock:3,commodity:2.5,other:2.2,default:2"
+
+php artisan mt5:auto-forex --min-move-pips-by-category="forex:3,stock:25,commodity:12,other:8,default:3"
 ```

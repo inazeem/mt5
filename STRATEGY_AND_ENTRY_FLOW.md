@@ -172,6 +172,10 @@ CLI option:
 - `--max-spread-pips-by-category="forex:2.5,stock:25,commodity:15,other:10,default:2.5"`
 - `--tp-pips-by-category="forex:25,stock:120,commodity:80,other:60,default:25"`
 - `--sl-pips-by-category="forex:15,stock:60,commodity:40,other:30,default:15"`
+- `--trail-start-pips-by-category="forex:10,stock:50,commodity:30,other:20,default:10"`
+- `--trail-pips-by-category="forex:8,stock:25,commodity:15,other:10,default:8"`
+- `--trail-tp-multiplier-by-category="forex:2,stock:3,commodity:2.5,other:2.2,default:2"`
+- `--min-move-pips-by-category="forex:3,stock:25,commodity:12,other:8,default:3"`
 
 How category is resolved:
 - Uses ticker `category` first (from `tickers` table).
@@ -200,6 +204,32 @@ TP/SL now follow category defaults too (not forex-only):
 	- `commodity` = max(existing, 40)
 	- `other` = max(existing, 30)
 	- `default` = existing `sl_pips`
+
+Trailing and momentum threshold also follow category defaults:
+- Trail Start defaults:
+	- `forex` = existing `trail_start_pips`
+	- `stock` = max(existing, 50)
+	- `commodity` = max(existing, 30)
+	- `other` = max(existing, 20)
+	- `default` = existing `trail_start_pips`
+- Trail Pips defaults:
+	- `forex` = existing `trail_pips`
+	- `stock` = max(existing, 25)
+	- `commodity` = max(existing, 15)
+	- `other` = max(existing, 10)
+	- `default` = existing `trail_pips`
+- Trail TP Multiplier defaults:
+	- `forex` = existing `trail_tp_multiplier`
+	- `stock` = max(existing, 3.0)
+	- `commodity` = max(existing, 2.5)
+	- `other` = max(existing, 2.2)
+	- `default` = existing `trail_tp_multiplier`
+- Min Move defaults:
+	- `forex` = existing `min_move_pips`
+	- `stock` = max(existing, 25)
+	- `commodity` = max(existing, 12)
+	- `other` = max(existing, 8)
+	- `default` = existing `min_move_pips`
 
 ## 13. Ticker-Level Spread Override
 

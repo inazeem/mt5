@@ -10,6 +10,7 @@ class BotProfileController extends Controller
 {
     private const ALLOWED_SIGNAL_TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h'];
     private const ALLOWED_STRATEGIES = ['momentum', 'sma_cross', 'ema_cross', 'bollinger_reversion', 'vwap_reversion'];
+    private const ALLOWED_TICKER_CATEGORIES = ['Forex', 'Stock', 'Commodity', 'Index', 'Crypto', 'Other'];
 
     public function index()
     {
@@ -38,6 +39,8 @@ class BotProfileController extends Controller
             'trail_tp_multiplier'    => ['nullable', 'numeric', 'min:1', 'max:10'],
             'min_move_pips'          => ['nullable', 'numeric', 'min:0.1'],
             'max_spread_pips'        => ['nullable', 'numeric', 'min:0.1'],
+            'ticker_categories'      => ['nullable', 'array'],
+            'ticker_categories.*'    => ['required', 'in:Forex,Stock,Commodity,Index,Crypto,Other'],
             'cooldown_minutes'       => ['nullable', 'integer', 'min:0'],
             'session_start_utc'      => ['nullable', 'integer', 'min:0', 'max:23'],
             'session_end_utc'        => ['nullable', 'integer', 'min:0', 'max:23'],
@@ -91,6 +94,7 @@ class BotProfileController extends Controller
         $preferredSymbols = $this->parseSymbolsCsv($validated['preferred_symbols'] ?? null);
         $preferredHoursUtc = $this->parseHoursCsv($validated['preferred_hours_utc'] ?? null);
         $blockedHoursUtc = $this->parseHoursCsv($validated['blocked_hours_utc'] ?? null);
+        $tickerCategories = $this->normalizeTickerCategories($validated['ticker_categories'] ?? null);
         $signalTimeframes = $this->normalizeSignalTimeframes(
             $validated['signal_timeframes'] ?? (isset($validated['signal_timeframe']) ? [(string) $validated['signal_timeframe']] : null)
         );
@@ -123,6 +127,7 @@ class BotProfileController extends Controller
             'trail_tp_multiplier' => isset($validated['trail_tp_multiplier']) ? (float) $validated['trail_tp_multiplier'] : null,
             'min_move_pips' => isset($validated['min_move_pips']) ? (float) $validated['min_move_pips'] : null,
             'max_spread_pips' => isset($validated['max_spread_pips']) ? (float) $validated['max_spread_pips'] : null,
+            'ticker_categories' => !empty($tickerCategories) ? $tickerCategories : null,
             'cooldown_minutes' => isset($validated['cooldown_minutes']) ? (int) $validated['cooldown_minutes'] : null,
             'session_start_utc' => isset($validated['session_start_utc']) ? (int) $validated['session_start_utc'] : null,
             'session_end_utc' => isset($validated['session_end_utc']) ? (int) $validated['session_end_utc'] : null,
@@ -181,6 +186,8 @@ class BotProfileController extends Controller
             'trail_tp_multiplier'    => ['nullable', 'numeric', 'min:1', 'max:10'],
             'min_move_pips'          => ['nullable', 'numeric', 'min:0.1'],
             'max_spread_pips'        => ['nullable', 'numeric', 'min:0.1'],
+            'ticker_categories'      => ['nullable', 'array'],
+            'ticker_categories.*'    => ['required', 'in:Forex,Stock,Commodity,Index,Crypto,Other'],
             'cooldown_minutes'       => ['nullable', 'integer', 'min:0'],
             'session_start_utc'      => ['nullable', 'integer', 'min:0', 'max:23'],
             'session_end_utc'        => ['nullable', 'integer', 'min:0', 'max:23'],
@@ -232,6 +239,7 @@ class BotProfileController extends Controller
         $preferredSymbols = $this->parseSymbolsCsv($validated['preferred_symbols'] ?? null);
         $preferredHoursUtc = $this->parseHoursCsv($validated['preferred_hours_utc'] ?? null);
         $blockedHoursUtc = $this->parseHoursCsv($validated['blocked_hours_utc'] ?? null);
+        $tickerCategories = $this->normalizeTickerCategories($validated['ticker_categories'] ?? null);
         $signalTimeframes = $this->normalizeSignalTimeframes(
             $validated['signal_timeframes'] ?? (isset($validated['signal_timeframe']) ? [(string) $validated['signal_timeframe']] : null)
         );
@@ -263,6 +271,7 @@ class BotProfileController extends Controller
             'trail_tp_multiplier' => isset($validated['trail_tp_multiplier']) ? (float) $validated['trail_tp_multiplier'] : null,
             'min_move_pips' => isset($validated['min_move_pips']) ? (float) $validated['min_move_pips'] : null,
             'max_spread_pips' => isset($validated['max_spread_pips']) ? (float) $validated['max_spread_pips'] : null,
+            'ticker_categories' => !empty($tickerCategories) ? $tickerCategories : null,
             'cooldown_minutes' => isset($validated['cooldown_minutes']) ? (int) $validated['cooldown_minutes'] : null,
             'session_start_utc' => isset($validated['session_start_utc']) ? (int) $validated['session_start_utc'] : null,
             'session_end_utc' => isset($validated['session_end_utc']) ? (int) $validated['session_end_utc'] : null,
@@ -345,6 +354,25 @@ class BotProfileController extends Controller
         sort($hours);
 
         return $hours;
+    }
+
+    private function normalizeTickerCategories(?array $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($raw as $value) {
+            $category = trim((string) $value);
+            if (!in_array($category, self::ALLOWED_TICKER_CATEGORIES, true)) {
+                continue;
+            }
+
+            $normalized[] = $category;
+        }
+
+        return array_values(array_unique($normalized));
     }
 
     private function normalizeSignalTimeframe(?string $raw): ?string
