@@ -83,6 +83,8 @@ class TickerController extends Controller
             'is_active'   => ['nullable', 'boolean'],
             'pip_size'    => ['nullable', 'numeric', 'min:0.00000001', 'max:1000'],
             'max_spread_pips' => ['nullable', 'numeric', 'min:0.001', 'max:100000'],
+            'max_tp_pips' => ['nullable', 'numeric', 'min:0.001', 'max:100000'],
+            'max_sl_pips' => ['nullable', 'numeric', 'min:0.001', 'max:100000'],
             'notes'       => ['nullable', 'string', 'max:2000'],
         ]);
 
@@ -90,6 +92,8 @@ class TickerController extends Controller
         $validated['is_active'] = $request->boolean('is_active');
         $validated['pip_size'] = isset($validated['pip_size']) && $validated['pip_size'] !== '' ? (float) $validated['pip_size'] : null;
         $validated['max_spread_pips'] = isset($validated['max_spread_pips']) && $validated['max_spread_pips'] !== '' ? (float) $validated['max_spread_pips'] : null;
+        $validated['max_tp_pips'] = isset($validated['max_tp_pips']) && $validated['max_tp_pips'] !== '' ? (float) $validated['max_tp_pips'] : null;
+        $validated['max_sl_pips'] = isset($validated['max_sl_pips']) && $validated['max_sl_pips'] !== '' ? (float) $validated['max_sl_pips'] : null;
 
         Ticker::create($validated);
 
@@ -119,6 +123,8 @@ class TickerController extends Controller
             'is_active'   => ['nullable', 'boolean'],
             'pip_size'    => ['nullable', 'numeric', 'min:0.00000001', 'max:1000'],
             'max_spread_pips' => ['nullable', 'numeric', 'min:0.001', 'max:100000'],
+            'max_tp_pips' => ['nullable', 'numeric', 'min:0.001', 'max:100000'],
+            'max_sl_pips' => ['nullable', 'numeric', 'min:0.001', 'max:100000'],
             'notes'       => ['nullable', 'string', 'max:2000'],
         ]);
 
@@ -126,6 +132,8 @@ class TickerController extends Controller
         $validated['is_active'] = $request->boolean('is_active');
         $validated['pip_size'] = isset($validated['pip_size']) && $validated['pip_size'] !== '' ? (float) $validated['pip_size'] : null;
         $validated['max_spread_pips'] = isset($validated['max_spread_pips']) && $validated['max_spread_pips'] !== '' ? (float) $validated['max_spread_pips'] : null;
+        $validated['max_tp_pips'] = isset($validated['max_tp_pips']) && $validated['max_tp_pips'] !== '' ? (float) $validated['max_tp_pips'] : null;
+        $validated['max_sl_pips'] = isset($validated['max_sl_pips']) && $validated['max_sl_pips'] !== '' ? (float) $validated['max_sl_pips'] : null;
 
         $ticker->update($validated);
 

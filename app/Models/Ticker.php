@@ -13,6 +13,8 @@ class Ticker extends Model
         'is_active',
         'pip_size',
         'max_spread_pips',
+        'max_tp_pips',
+        'max_sl_pips',
         'notes',
     ];
 
@@ -22,6 +24,8 @@ class Ticker extends Model
             'is_active' => 'boolean',
             'pip_size'  => 'float',
             'max_spread_pips' => 'float',
+            'max_tp_pips' => 'float',
+            'max_sl_pips' => 'float',
         ];
     }
 

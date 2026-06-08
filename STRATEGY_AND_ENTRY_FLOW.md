@@ -170,6 +170,8 @@ You can now set spread limits by category in one command/profile value.
 
 CLI option:
 - `--max-spread-pips-by-category="forex:2.5,stock:25,commodity:15,other:10,default:2.5"`
+- `--tp-pips-by-category="forex:25,stock:120,commodity:80,other:60,default:25"`
+- `--sl-pips-by-category="forex:15,stock:60,commodity:40,other:30,default:15"`
 
 How category is resolved:
 - Uses ticker `category` first (from `tickers` table).
@@ -185,6 +187,20 @@ If not set, defaults are automatically applied:
 - `other` = max(existing, 10)
 - `default` = existing `max_spread_pips`
 
+TP/SL now follow category defaults too (not forex-only):
+- TP defaults:
+	- `forex` = existing `tp_pips`
+	- `stock` = max(existing, 120)
+	- `commodity` = max(existing, 80)
+	- `other` = max(existing, 60)
+	- `default` = existing `tp_pips`
+- SL defaults:
+	- `forex` = existing `sl_pips`
+	- `stock` = max(existing, 60)
+	- `commodity` = max(existing, 40)
+	- `other` = max(existing, 30)
+	- `default` = existing `sl_pips`
+
 ## 13. Ticker-Level Spread Override
 
 Ticker settings now support a per-symbol spread cap.
@@ -194,6 +210,16 @@ Resolution order for max spread used by bot:
 2. Category map from `--max-spread-pips-by-category`
 3. `default` from category map
 4. Global `max_spread_pips`
+
+Ticker settings also support TP/SL overrides:
+- `max_tp_pips`
+- `max_sl_pips`
+
+Resolution order for TP/SL used by bot:
+1. Ticker `max_tp_pips` / `max_sl_pips` (if set on symbol)
+2. Category maps (`--tp-pips-by-category`, `--sl-pips-by-category`)
+3. Category map `default`
+4. Global `tp_pips` / `sl_pips`
 
 Ticker category input is now a dropdown with these values:
 - `Forex`

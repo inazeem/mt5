@@ -29,8 +29,10 @@
                     <div class="flex items-center gap-2 mb-1">
                         <label class="block text-xs text-gray-500">Category</label>
                         <button type="button"
+                                id="category-info-open-index"
                                 class="inline-flex items-center justify-center w-4 h-4 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold"
-                                title="Spread defaults by category: Forex=global max spread, Stock=max(global,25), Commodity=max(global,15), Other=max(global,10). Ticker max_spread_pips overrides category defaults.">
+                                aria-haspopup="dialog"
+                                aria-controls="category-info-modal-index">
                             i
                         </button>
                     </div>
@@ -64,6 +66,25 @@
                 <div class="ml-auto text-xs text-gray-400 self-end">{{ $tickers->total() }} ticker(s)</div>
             </form>
 
+            <div id="category-info-modal-index" class="hidden fixed inset-0 z-50">
+                <div id="category-info-backdrop-index" class="absolute inset-0 bg-black/40"></div>
+                <div class="relative z-10 flex min-h-full items-center justify-center p-4">
+                    <div class="w-full max-w-lg rounded-lg bg-white shadow-xl border border-gray-200">
+                        <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+                            <h3 class="text-sm font-semibold text-gray-800">Category Defaults</h3>
+                            <button type="button" id="category-info-close-index" class="text-gray-500 hover:text-gray-700 text-sm">Close</button>
+                        </div>
+                        <div class="p-4 text-sm text-gray-700 space-y-2">
+                            <p><span class="font-semibold">Spread:</span> Forex=global, Stock=max(global,25), Commodity=max(global,15), Other=max(global,10)</p>
+                            <p><span class="font-semibold">TP:</span> Forex=global, Stock=max(global,120), Commodity=max(global,80), Other=max(global,60)</p>
+                            <p><span class="font-semibold">SL:</span> Forex=global, Stock=max(global,60), Commodity=max(global,40), Other=max(global,30)</p>
+                            <p><span class="font-semibold">Category options:</span> Forex, Stock, Commodity, Index, Crypto, Other</p>
+                            <p class="text-xs text-gray-500">Ticker-level overrides (`max_spread_pips`, `max_tp_pips`, `max_sl_pips`) take priority when set.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             {{-- Bulk actions --}}
             <div class="bg-white p-3 rounded-lg shadow flex items-center gap-3">
                 <form id="bulk-delete-form" method="POST" action="{{ route('tickers.bulk-delete', request()->query()) }}" class="flex items-center gap-2">
@@ -91,6 +112,8 @@
                             <th class="py-3 px-4">Description</th>
                             <th class="py-3 px-4">Category</th>
                             <th class="py-3 px-4">Max Spread</th>
+                            <th class="py-3 px-4">TP Override</th>
+                            <th class="py-3 px-4">SL Override</th>
                             <th class="py-3 px-4 text-center">Active</th>
                             <th class="py-3 px-4">Notes</th>
                             <th class="py-3 px-4 text-right">Actions</th>
@@ -107,6 +130,8 @@
                                 <td class="py-2 px-4 text-gray-700">{{ $ticker->description ?? '-' }}</td>
                                 <td class="py-2 px-4 text-gray-500">{{ $ticker->category ?? '-' }}</td>
                                 <td class="py-2 px-4 text-gray-500">{{ $ticker->max_spread_pips !== null ? number_format((float) $ticker->max_spread_pips, 3) : '-' }}</td>
+                                <td class="py-2 px-4 text-gray-500">{{ $ticker->max_tp_pips !== null ? number_format((float) $ticker->max_tp_pips, 3) : '-' }}</td>
+                                <td class="py-2 px-4 text-gray-500">{{ $ticker->max_sl_pips !== null ? number_format((float) $ticker->max_sl_pips, 3) : '-' }}</td>
                                 <td class="py-2 px-4 text-center">
                                     <form method="POST" action="{{ route('tickers.toggle-active', ['ticker' => $ticker] + request()->query()) }}" class="inline">
                                         @csrf
@@ -137,7 +162,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="8" class="py-8 text-center text-gray-400">No tickers found. <a href="{{ route('tickers.create') }}" class="text-indigo-600 underline">Add one.</a></td>
+                                <td colspan="10" class="py-8 text-center text-gray-400">No tickers found. <a href="{{ route('tickers.create') }}" class="text-indigo-600 underline">Add one.</a></td>
                             </tr>
                         @endforelse
                     </tbody>
@@ -163,6 +188,10 @@
             const bulkIdsContainer = document.getElementById('bulk-delete-ids');
             const bulkDeleteBtn = document.getElementById('bulk-delete-btn');
             const bulkSelectedHelp = document.getElementById('bulk-selected-help');
+            const categoryInfoOpen = document.getElementById('category-info-open-index');
+            const categoryInfoClose = document.getElementById('category-info-close-index');
+            const categoryInfoModal = document.getElementById('category-info-modal-index');
+            const categoryInfoBackdrop = document.getElementById('category-info-backdrop-index');
 
             const selectedCount = () => rowCheckboxes.filter((cb) => cb.checked).length;
 
@@ -224,6 +253,21 @@
                         hiddenInput.value = id;
                         bulkIdsContainer.appendChild(hiddenInput);
                     });
+                });
+            }
+
+            if (categoryInfoOpen && categoryInfoClose && categoryInfoModal && categoryInfoBackdrop) {
+                const openCategoryModal = () => categoryInfoModal.classList.remove('hidden');
+                const closeCategoryModal = () => categoryInfoModal.classList.add('hidden');
+
+                categoryInfoOpen.addEventListener('click', openCategoryModal);
+                categoryInfoClose.addEventListener('click', closeCategoryModal);
+                categoryInfoBackdrop.addEventListener('click', closeCategoryModal);
+
+                document.addEventListener('keydown', (event) => {
+                    if (event.key === 'Escape' && !categoryInfoModal.classList.contains('hidden')) {
+                        closeCategoryModal();
+                    }
                 });
             }
 

@@ -59,7 +59,7 @@ The Laravel framework is open-sourced software licensed under the [MIT license](
 
 ## MT5 Ticker Spread Defaults
 
-The auto bot now supports category-level spread defaults with ticker-level override.
+The auto bot now supports category-level spread/TP/SL defaults with ticker-level spread override.
 
 Spread resolution order:
 1. Ticker `max_spread_pips` (if set)
@@ -67,12 +67,32 @@ Spread resolution order:
 3. Category map `default`
 4. Global `max_spread_pips`
 
+TP/SL resolution order:
+1. Ticker `max_tp_pips` / `max_sl_pips` (if set)
+2. Category TP/SL map value
+3. Category map `default`
+4. Global `tp_pips` / `sl_pips`
+
 Default category spread values (when no category map is provided):
 - Forex: global `max_spread_pips`
 - Stock: `max(global max_spread_pips, 25)`
 - Commodity: `max(global max_spread_pips, 15)`
 - Other: `max(global max_spread_pips, 10)`
 - Default: global `max_spread_pips`
+
+Default category TP values (when no TP category map is provided):
+- Forex: global `tp_pips`
+- Stock: `max(global tp_pips, 120)`
+- Commodity: `max(global tp_pips, 80)`
+- Other: `max(global tp_pips, 60)`
+- Default: global `tp_pips`
+
+Default category SL values (when no SL category map is provided):
+- Forex: global `sl_pips`
+- Stock: `max(global sl_pips, 60)`
+- Commodity: `max(global sl_pips, 40)`
+- Other: `max(global sl_pips, 30)`
+- Default: global `sl_pips`
 
 Available ticker categories:
 - Forex
@@ -86,4 +106,8 @@ Command example for custom category map:
 
 ```bash
 php artisan mt5:auto-forex --max-spread-pips-by-category="forex:2.5,stock:25,commodity:15,other:10,default:2.5"
+
+php artisan mt5:auto-forex --tp-pips-by-category="forex:25,stock:120,commodity:80,other:60,default:25"
+
+php artisan mt5:auto-forex --sl-pips-by-category="forex:15,stock:60,commodity:40,other:30,default:15"
 ```

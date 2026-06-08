@@ -19,7 +19,9 @@ Artisan::command('inspire', function () {
 Artisan::command('mt5:auto-forex
     {--lot=0.01 : Base lot size for each trade}
     {--tp-pips=25 : Take profit distance in pips}
+    {--tp-pips-by-category= : Category TP overrides, e.g. "forex:25,stock:120,commodity:80,default:25"}
     {--sl-pips=15 : Stop loss distance in pips}
+    {--sl-pips-by-category= : Category SL overrides, e.g. "forex:15,stock:60,commodity:40,default:15"}
     {--trail-start-pips=10 : Profit pips required before trailing activates}
     {--trail-pips=8 : Trailing stop distance in pips}
     {--trail-tp-multiplier= : Multiplier applied to TP when trailing first activates (default from settings, fallback 2)}
@@ -249,7 +251,7 @@ Artisan::command('mt5:auto-forex
             return array_filter($normalized, static fn ($value) => $value !== null);
         };
 
-        $normalizeSpreadCategoryMap = static function (mixed $raw): array {
+        $normalizeCategoryNumericMap = static function (mixed $raw): array {
             $result = [];
 
             if (is_array($raw)) {
@@ -259,12 +261,12 @@ Artisan::command('mt5:auto-forex
                         continue;
                     }
 
-                    $spread = (float) $value;
-                    if ($spread <= 0) {
+                    $numericValue = (float) $value;
+                    if ($numericValue <= 0) {
                         continue;
                     }
 
-                    $result[$category] = $spread;
+                    $result[$category] = $numericValue;
                 }
 
                 return $result;
@@ -287,12 +289,12 @@ Artisan::command('mt5:auto-forex
                     continue;
                 }
 
-                $spread = (float) $value;
-                if ($spread <= 0) {
+                $numericValue = (float) $value;
+                if ($numericValue <= 0) {
                     continue;
                 }
 
-                $result[$category] = $spread;
+                $result[$category] = $numericValue;
             }
 
             return $result;
@@ -341,18 +343,64 @@ Artisan::command('mt5:auto-forex
 
         $lotSize           = (float) $optionOrProfileOrSetting('lot', $botProfile['lot'] ?? null, $db->bot_lot ?? null, 0.01);
         $tpPips            = (float) $optionOrProfileOrSetting('tp-pips', $botProfile['tp_pips'] ?? null, $db->bot_tp_pips ?? null, 25);
+        $tpPipsByCategory  = $normalizeCategoryNumericMap($optionOrProfileOrSetting(
+            'tp-pips-by-category',
+            $botProfile['tp_pips_by_category'] ?? null,
+            null,
+            []
+        ));
         $slPips            = (float) $optionOrProfileOrSetting('sl-pips', $botProfile['sl_pips'] ?? null, $db->bot_sl_pips ?? null, 15);
+        $slPipsByCategory  = $normalizeCategoryNumericMap($optionOrProfileOrSetting(
+            'sl-pips-by-category',
+            $botProfile['sl_pips_by_category'] ?? null,
+            null,
+            []
+        ));
         $trailStartPips    = (float) $optionOrProfileOrSetting('trail-start-pips', $botProfile['trail_start_pips'] ?? null, $db->bot_trail_start_pips ?? null, 10);
         $trailPips         = (float) $optionOrProfileOrSetting('trail-pips', $botProfile['trail_pips'] ?? null, $db->bot_trail_pips ?? null, 8);
         $trailTpMultiplier = (float) $optionOrProfileOrSetting('trail-tp-multiplier', $botProfile['trail_tp_multiplier'] ?? null, $db->bot_trail_tp_multiplier ?? null, 2);
         $minMovePips       = (float) $optionOrProfileOrSetting('min-move-pips', $botProfile['min_move_pips'] ?? null, $db->bot_min_move_pips ?? null, 3);
         $maxSpreadPips     = (float) $optionOrProfileOrSetting('max-spread-pips', $botProfile['max_spread_pips'] ?? null, $db->bot_max_spread_pips ?? null, 2.5);
-        $maxSpreadByCategory = $normalizeSpreadCategoryMap($optionOrProfileOrSetting(
+        $maxSpreadByCategory = $normalizeCategoryNumericMap($optionOrProfileOrSetting(
             'max-spread-pips-by-category',
             $botProfile['max_spread_pips_by_category'] ?? null,
             null,
             []
         ));
+
+        if (empty($tpPipsByCategory)) {
+            $tpPipsByCategory = [
+                'forex' => $tpPips,
+                'stock' => max($tpPips, 120.0),
+                'commodity' => max($tpPips, 80.0),
+                'other' => max($tpPips, 60.0),
+                'default' => $tpPips,
+            ];
+        } else {
+            if (!isset($tpPipsByCategory['default'])) {
+                $tpPipsByCategory['default'] = $tpPips;
+            }
+            if (!isset($tpPipsByCategory['forex'])) {
+                $tpPipsByCategory['forex'] = $tpPips;
+            }
+        }
+
+        if (empty($slPipsByCategory)) {
+            $slPipsByCategory = [
+                'forex' => $slPips,
+                'stock' => max($slPips, 60.0),
+                'commodity' => max($slPips, 40.0),
+                'other' => max($slPips, 30.0),
+                'default' => $slPips,
+            ];
+        } else {
+            if (!isset($slPipsByCategory['default'])) {
+                $slPipsByCategory['default'] = $slPips;
+            }
+            if (!isset($slPipsByCategory['forex'])) {
+                $slPipsByCategory['forex'] = $slPips;
+            }
+        }
 
         if (empty($maxSpreadByCategory)) {
             $maxSpreadByCategory = [
@@ -456,6 +504,12 @@ Artisan::command('mt5:auto-forex
             foreach ($maxSpreadByCategory as $category => $spreadLimit) {
                 $maxSpreadByCategory[$category] = min((float) $spreadLimit, 50.0);
             }
+            foreach ($tpPipsByCategory as $category => $tpLimit) {
+                $tpPipsByCategory[$category] = min((float) $tpLimit, 300.0);
+            }
+            foreach ($slPipsByCategory as $category => $slLimit) {
+                $slPipsByCategory[$category] = min((float) $slLimit, 150.0);
+            }
             $cooldownMinutes = min($cooldownMinutes, 5);
         }
 
@@ -489,6 +543,8 @@ Artisan::command('mt5:auto-forex
             $this->line('Scalper mode ON  TP='.$tpPips.'pip  SL='.$slPips.'pip  maxSpread='.$maxSpreadPips.'pip  cooldown='.$cooldownMinutes.'min');
         }
 
+        $this->line('TP limits by category: '.json_encode($tpPipsByCategory));
+        $this->line('SL limits by category: '.json_encode($slPipsByCategory));
         $this->line('Spread limits by category: '.json_encode($maxSpreadByCategory));
 
         if ($useTrendFilter) {
@@ -858,12 +914,28 @@ Artisan::command('mt5:auto-forex
             $spreadPips = ($ask - $bid) / $pipSize;
             $tickerCategory = $dbTickers->get($symbol)?->category;
             $tickerSpreadOverride = $dbTickers->get($symbol)?->max_spread_pips;
+            $tickerTpOverride = $dbTickers->get($symbol)?->max_tp_pips;
+            $tickerSlOverride = $dbTickers->get($symbol)?->max_sl_pips;
             $spreadCategory = $classifySpreadCategory($symbol, $tickerCategory);
             $maxSpreadForSymbol = (float) (
                 (is_numeric($tickerSpreadOverride) ? (float) $tickerSpreadOverride : null)
                 ?? $maxSpreadByCategory[$spreadCategory]
                 ?? $maxSpreadByCategory['default']
                 ?? $maxSpreadPips
+            );
+            $tpPipsForSymbol = (float) (
+                (is_numeric($tickerTpOverride) ? (float) $tickerTpOverride : null)
+                ??
+                $tpPipsByCategory[$spreadCategory]
+                ?? $tpPipsByCategory['default']
+                ?? $tpPips
+            );
+            $slPipsForSymbol = (float) (
+                (is_numeric($tickerSlOverride) ? (float) $tickerSlOverride : null)
+                ??
+                $slPipsByCategory[$spreadCategory]
+                ?? $slPipsByCategory['default']
+                ?? $slPips
             );
 
             $candlesForStrategy = [];
@@ -1029,6 +1101,8 @@ Artisan::command('mt5:auto-forex
                     'meta_payload' => [
                         'ticker_category' => $tickerCategory,
                         'ticker_spread_override' => is_numeric($tickerSpreadOverride) ? (float) $tickerSpreadOverride : null,
+                        'ticker_tp_override' => is_numeric($tickerTpOverride) ? (float) $tickerTpOverride : null,
+                        'ticker_sl_override' => is_numeric($tickerSlOverride) ? (float) $tickerSlOverride : null,
                         'spread_category' => $spreadCategory,
                         'max_spread_pips_for_symbol' => $maxSpreadForSymbol,
                         'max_spread_pips_by_category' => $maxSpreadByCategory,
@@ -1155,12 +1229,12 @@ Artisan::command('mt5:auto-forex
 
             if ($side === 'buy') {
                 $entry = $ask;
-                $takeProfit = round($entry + ($tpPips * $pipSize), 5);
-                $stopLoss = round($entry - ($slPips * $pipSize), 5);
+                $takeProfit = round($entry + ($tpPipsForSymbol * $pipSize), 5);
+                $stopLoss = round($entry - ($slPipsForSymbol * $pipSize), 5);
             } else {
                 $entry = $bid;
-                $takeProfit = round($entry - ($tpPips * $pipSize), 5);
-                $stopLoss = round($entry + ($slPips * $pipSize), 5);
+                $takeProfit = round($entry - ($tpPipsForSymbol * $pipSize), 5);
+                $stopLoss = round($entry + ($slPipsForSymbol * $pipSize), 5);
             }
 
             $aiProvider = null;
@@ -1211,7 +1285,8 @@ Artisan::command('mt5:auto-forex
                         ."Include a confidence percentage like 'Confidence: 85%' in your reply. "
                         .$strategyLine.' '
                         ."Symbol: {$symbol}. Side: {$side}. Entry: {$entry}. TP: {$takeProfit}. SL: {$stopLoss}. "
-                        ."Spread pips: ".number_format($spreadPips, 2).". Signal move pips: ".number_format($signalDeltaPips, 2)."."
+                        ."Spread pips: ".number_format($spreadPips, 2).". Signal move pips: ".number_format($signalDeltaPips, 2).". "
+                        ."TP pips: ".number_format($tpPipsForSymbol, 2).". SL pips: ".number_format($slPipsForSymbol, 2)."."
                         .$candleContext;
                     $aiResult = $aiService->ask($prompt);
                     $aiProvider = $aiResult['provider'] ?? null;
@@ -1257,6 +1332,9 @@ Artisan::command('mt5:auto-forex
                         'volume_multiplier' => $volumeMultiplier,
                         'effective_volume' => $effectiveVolume,
                         'min_effective_volume' => $minEffectiveVolume,
+                        'ticker_category' => $tickerCategory,
+                        'tp_pips_for_symbol' => $tpPipsForSymbol,
+                        'sl_pips_for_symbol' => $slPipsForSymbol,
                     ],
                     'message' => 'Signal rejected by AI confirmation.',
                 ]);
@@ -1283,6 +1361,9 @@ Artisan::command('mt5:auto-forex
                     'volume_multiplier' => $volumeMultiplier,
                     'effective_volume' => $effectiveVolume,
                     'min_effective_volume' => $minEffectiveVolume,
+                    'ticker_category' => $tickerCategory,
+                    'tp_pips_for_symbol' => $tpPipsForSymbol,
+                    'sl_pips_for_symbol' => $slPipsForSymbol,
                 ],
                 'message' => 'Signal passed all filters and AI confirmation.',
             ]);
