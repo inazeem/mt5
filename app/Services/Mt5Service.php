@@ -296,7 +296,8 @@ class Mt5Service
                 }
             }
 
-            if (!$this->subscribeQuoteSymbol($client, $accountId, $candidateSymbol)) {
+            if (!$this->shouldWarmQuoteSubscription($lastError)
+                || !$this->subscribeQuoteSymbol($client, $accountId, $candidateSymbol)) {
                 continue;
             }
 
@@ -377,6 +378,22 @@ class Mt5Service
         } catch (\Throwable) {
             return false;
         }
+    }
+
+    /**
+     * Detect symbol-price misses that can be recovered by warming a subscription.
+     */
+    private function shouldWarmQuoteSubscription(?string $message): bool
+    {
+        if (!is_string($message) || trim($message) === '') {
+            return false;
+        }
+
+        $upper = strtoupper($message);
+
+        return str_contains($upper, 'SPECIFIED SYMBOL PRICE NOT FOUND')
+            || str_contains($upper, 'NOTFOUNDERROR')
+            || str_contains($upper, '404 NOT FOUND');
     }
 
     /**
