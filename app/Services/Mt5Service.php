@@ -508,6 +508,24 @@ class Mt5Service
         }
 
         $limit = max(1, min(1000, $limit));
+        $normalizedTimeframe = strtolower($timeframe);
+        $bucket = $this->candleCacheBucket($normalizedTimeframe);
+        $cacheKey = sprintf(
+            'mt5_candles:%s:%s:%s:%d:%d',
+            $accountId,
+            $requested,
+            $normalizedTimeframe,
+            $limit,
+            $bucket
+        );
+
+        if (Cache::has($cacheKey)) {
+            $cached = Cache::get($cacheKey, []);
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+
         $encodedTimeframe = rawurlencode($timeframe);
         $marketDataClient = $this->marketDataClient($metaApiToken, (string) ($settings->metaapi_region ?? 'new-york'));
         $candidateSymbols = $this->buildCandleSymbolCandidates($client, $accountId, $requested);
@@ -525,6 +543,7 @@ class Mt5Service
                 $decoded = json_decode((string) $response->getBody(), true);
 
                 if (is_array($decoded)) {
+                    Cache::put($cacheKey, $decoded, now()->addDays(2));
                     return $decoded;
                 }
             } catch (\Throwable $e) {
@@ -536,6 +555,36 @@ class Mt5Service
         throw new RuntimeException(
             'Unable to fetch candles for symbol '.$requested.' timeframe '.$timeframe.'. Tried: '.implode(', ', $candidateSymbols).'.'.$detail
         );
+    }
+
+    /**
+     * Resolve cache bucket index so candle cache rotates automatically when a
+     * new timeframe candle starts.
+     */
+    private function candleCacheBucket(string $timeframe): int
+    {
+        $seconds = $this->candleTimeframeSeconds($timeframe);
+
+        return (int) floor(time() / max(1, $seconds));
+    }
+
+    /**
+     * Convert MetaApi timeframe code to seconds for cache bucket rotation.
+     */
+    private function candleTimeframeSeconds(string $timeframe): int
+    {
+        return match (strtolower($timeframe)) {
+            '1m' => 60,
+            '5m' => 300,
+            '15m' => 900,
+            '30m' => 1800,
+            '1h' => 3600,
+            '4h' => 14400,
+            '1d' => 86400,
+            '1w' => 604800,
+            '1mn' => 2592000,
+            default => 60,
+        };
     }
 
     /**
