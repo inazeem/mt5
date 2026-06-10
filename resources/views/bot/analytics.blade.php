@@ -5,7 +5,16 @@
 
     <div class="py-8">
         <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
-            <div class="text-xs text-gray-500" id="analytics-last-updated">Last updated: {{ now()->format('Y-m-d H:i:s') }}</div>
+            <div class="flex items-center justify-between gap-3">
+                <div class="text-xs text-gray-500" id="analytics-last-updated">Last updated: {{ now()->format('Y-m-d H:i:s') }}</div>
+                <button
+                    id="analytics-refresh-btn"
+                    type="button"
+                    class="inline-flex items-center px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700"
+                >
+                    Refresh Now
+                </button>
+            </div>
             <div class="grid grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
                 <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
                     <div class="text-xs uppercase text-gray-500">Active Positions</div>
@@ -192,8 +201,9 @@
     <script>
         (function () {
             const liveUrl = @json(route('bot.analytics.live'));
-            const fastIntervalMs = 20000;
-            const maxIntervalMs = 120000;
+            const fastIntervalMs = 60000;
+            const maxIntervalMs = 300000;
+            const refreshBtn = document.getElementById('analytics-refresh-btn');
             let currentInterval = fastIntervalMs;
             let timer = null;
             let inFlight = false;
@@ -415,6 +425,13 @@
                     timer = null;
                 }
             });
+
+            if (refreshBtn) {
+                refreshBtn.addEventListener('click', () => {
+                    currentInterval = fastIntervalMs;
+                    fetchLive();
+                });
+            }
 
             scheduleNext();
         })();
