@@ -41,7 +41,8 @@ Artisan::command('mt5:auto-forex
     {--ai-min-confidence=70 : Minimum AI confidence percentage (0-100) required to approve a trade}
     {--min-bot-score=70 : Minimum bot score (0-100) required to log/execute a signal}
     {--min-effective-volume= : Minimum effective volume required to place a trade (default: 0.01 x volume multiplier)}
-    {--max-symbols=200 : Max symbols to scan per cycle}
+    {--max-symbols=200 : Max symbols to scan per cycle (round-robin when total symbols exceed this value)}
+    {--scan-delay-ms=0 : Milliseconds to wait between symbol scans to reduce API burst rate}
     {--max-open-positions=10 : Maximum concurrent open positions (demo-safe ceiling)}
     {--max-per-cycle=5 : Maximum new trades to open in a single cycle}
     {--strategy=momentum : Legacy single strategy option (prefer --strategies)}
@@ -531,6 +532,7 @@ Artisan::command('mt5:auto-forex
         $defaultMinEffectiveVolume = 0.01 * $volumeMultiplier;
         $minEffectiveVolume = (float) $optionOrProfileOrSetting('min-effective-volume', $botProfile['min_effective_volume'] ?? null, null, $defaultMinEffectiveVolume);
         $maxSymbols        = max(1, (int) $optionOrProfileOrSetting('max-symbols', $botProfile['max_symbols'] ?? null, $db->bot_max_symbols ?? null, 200));
+        $scanDelayMs       = max(0, (int) $optionOrProfileOrSetting('scan-delay-ms', $botProfile['scan_delay_ms'] ?? null, null, 0));
         $supportedStrategies = $strategyFactory->supportedKeys();
         $strategySource = $optionOrProfileOrSetting(
             'strategies',
@@ -881,13 +883,13 @@ Artisan::command('mt5:auto-forex
             : [];
 
         if (!empty($profileSymbols)) {
-            $symbols = array_slice($profileSymbols, 0, $maxSymbols);
+            $symbols = $profileSymbols;
             $this->line('Using '.count($symbols).' symbol(s) from bot profile list.');
         } elseif ($dbTickers->isNotEmpty()) {
-            $symbols = array_slice($dbTickers->keys()->all(), 0, $maxSymbols);
+            $symbols = $dbTickers->keys()->all();
             $this->line('Using '.count($symbols).' symbol(s) from tickers table.');
         } else {
-            $symbols = array_slice($mt5Service->getForexSymbols(), 0, $maxSymbols);
+            $symbols = $mt5Service->getForexSymbols();
             $dbTickers = collect();
             $this->line('No tickers in DB — discovered '.count($symbols).' symbol(s) from MetaAPI.');
         }
@@ -905,6 +907,25 @@ Artisan::command('mt5:auto-forex
             }));
 
             $this->line('Applied profile ticker category filter ('.implode(',', $profileTickerCategories).'): '.count($symbols).' symbol(s) remain.');
+        }
+
+        $totalSymbols = count($symbols);
+        if (!$testMode && $totalSymbols > $maxSymbols) {
+            $cursorKey = 'auto_bot_symbol_cursor_'.preg_replace('/[^a-z0-9_]/', '_', strtolower($botKey));
+            $start = ((int) Cache::get($cursorKey, 0)) % $totalSymbols;
+            $window = [];
+            for ($i = 0; $i < $maxSymbols; $i++) {
+                $window[] = $symbols[($start + $i) % $totalSymbols];
+            }
+
+            $nextStart = ($start + $maxSymbols) % $totalSymbols;
+            Cache::put($cursorKey, $nextStart, now()->addDays(7));
+
+            $symbols = array_values(array_unique($window));
+            $this->line('Applied round-robin symbol window: start='.$start.', size='.count($symbols).' of '.$totalSymbols.' (next='.$nextStart.').');
+        } elseif ($testMode && $totalSymbols > $maxSymbols) {
+            $symbols = array_slice($symbols, 0, $maxSymbols);
+            $this->line('TEST MODE symbol cap applied: '.count($symbols).' of '.$totalSymbols.' symbol(s).');
         }
 
         if (!$testMode && empty($symbols)) {
@@ -1033,6 +1054,10 @@ Artisan::command('mt5:auto-forex
         };
 
         foreach ($symbols as $symbol) {
+            if ($scanDelayMs > 0 && $scanned > 0) {
+                usleep($scanDelayMs * 1000);
+            }
+
             $symbol = strtoupper((string) $symbol);
             $quoteSymbol = preg_match('/^[A-Z]{6}$/', $symbol) === 1
                 ? $symbol.'_SB'
