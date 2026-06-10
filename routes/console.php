@@ -43,6 +43,7 @@ Artisan::command('mt5:auto-forex
     {--min-effective-volume= : Minimum effective volume required to place a trade (default: 0.01 x volume multiplier)}
     {--max-symbols=200 : Max symbols to scan per cycle (round-robin when total symbols exceed this value)}
     {--scan-delay-ms=0 : Milliseconds to wait between symbol scans to reduce API burst rate}
+    {--max-cycle-credits=900 : Estimated MetaApi CPU credits budget per cycle (0 disables budget guard)}
     {--max-open-positions=10 : Maximum concurrent open positions (demo-safe ceiling)}
     {--max-per-cycle=5 : Maximum new trades to open in a single cycle}
     {--strategy=momentum : Legacy single strategy option (prefer --strategies)}
@@ -533,6 +534,7 @@ Artisan::command('mt5:auto-forex
         $minEffectiveVolume = (float) $optionOrProfileOrSetting('min-effective-volume', $botProfile['min_effective_volume'] ?? null, null, $defaultMinEffectiveVolume);
         $maxSymbols        = max(1, (int) $optionOrProfileOrSetting('max-symbols', $botProfile['max_symbols'] ?? null, $db->bot_max_symbols ?? null, 200));
         $scanDelayMs       = max(0, (int) $optionOrProfileOrSetting('scan-delay-ms', $botProfile['scan_delay_ms'] ?? null, null, 0));
+        $maxCycleCredits   = max(0, (int) $optionOrProfileOrSetting('max-cycle-credits', $botProfile['max_cycle_credits'] ?? null, $db->bot_max_cycle_credits ?? null, 900));
         $supportedStrategies = $strategyFactory->supportedKeys();
         $strategySource = $optionOrProfileOrSetting(
             'strategies',
@@ -674,6 +676,7 @@ Artisan::command('mt5:auto-forex
         }
 
         $this->line('Volume settings  multiplier='.$volumeMultiplier.'  minEffectiveVolume='.$minEffectiveVolume);
+        $this->line('Cycle credit budget '.($maxCycleCredits > 0 ? $maxCycleCredits : 'OFF'));
         $this->line('Strategies '.strtoupper(implode(',', $selectedStrategyKeys)).' on '.strtoupper($entryTimeframe));
 
         // Force UTC timezone to ensure correct time comparison
@@ -955,6 +958,10 @@ Artisan::command('mt5:auto-forex
         $skippedLowScore = 0;
         $skippedLowVolume = 0;
         $stoppedByRateLimit = false;
+        $stoppedByCreditBudget = false;
+        $cycleCreditsUsed = 0;
+        $creditCostQuote = 50;
+        $creditCostCandle = 50;
 
         $calculateBotScore = static function (float $signalDeltaPips, float $spreadPips, float $effectiveVolume, float $minEffectiveVolume): int {
             $signalStrengthScore = min(100.0, (abs($signalDeltaPips) / 10.0) * 100.0);
@@ -1055,6 +1062,39 @@ Artisan::command('mt5:auto-forex
             ], $data));
         };
 
+        $reserveCycleCredits = function (int $cost, string $phase, string $symbol) use (&$cycleCreditsUsed, $maxCycleCredits, &$stoppedByCreditBudget, $botLogDefaults): bool {
+            if ($maxCycleCredits <= 0) {
+                $cycleCreditsUsed += $cost;
+
+                return true;
+            }
+
+            if (($cycleCreditsUsed + $cost) > $maxCycleCredits) {
+                $stoppedByCreditBudget = true;
+                $message = 'Cycle credit budget reached; stopping remaining symbol scans.';
+                $this->warn('  '.$message.' used='.$cycleCreditsUsed.' required='.$cost.' budget='.$maxCycleCredits.' phase='.$phase.' symbol='.$symbol);
+
+                BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                    'event_type' => 'guardrail',
+                    'status' => 'credit_budget_stop',
+                    'symbol' => $symbol,
+                    'message' => $message,
+                    'meta_payload' => [
+                        'phase' => $phase,
+                        'credit_cost' => $cost,
+                        'cycle_credits_used' => $cycleCreditsUsed,
+                        'max_cycle_credits' => $maxCycleCredits,
+                    ],
+                ]));
+
+                return false;
+            }
+
+            $cycleCreditsUsed += $cost;
+
+            return true;
+        };
+
         foreach ($symbols as $symbol) {
             if ($scanDelayMs > 0 && $scanned > 0) {
                 usleep($scanDelayMs * 1000);
@@ -1065,6 +1105,11 @@ Artisan::command('mt5:auto-forex
                 ? $symbol.'_SB'
                 : $symbol;
             $scanned++;
+            $this->line("  SCANNED: {$quoteSymbol}");
+
+            if (!$reserveCycleCredits($creditCostQuote, 'quote', $quoteSymbol)) {
+                break;
+            }
 
             try {
                 $quote = $mt5Service->getTickerPrice($quoteSymbol);
@@ -1139,6 +1184,10 @@ Artisan::command('mt5:auto-forex
             $primaryTimeframe = $entryTimeframe;
             $requiredCandleCount = max(array_map(static fn ($s) => $s->requiredCandles(), $strategies));
             if ($requiredCandleCount > 0) {
+                if (!$reserveCycleCredits($creditCostCandle, 'strategy_candles', $symbol)) {
+                    break;
+                }
+
                 try {
                     $candlesForStrategy = $mt5Service->getCandles($symbol, $primaryTimeframe, $requiredCandleCount);
                 } catch (\Throwable $e) {
@@ -1355,6 +1404,10 @@ Artisan::command('mt5:auto-forex
                 try {
                     $trendByTimeframe = [];
                     foreach ($trendContextTimeframes as $timeframe) {
+                        if (!$reserveCycleCredits($creditCostCandle, 'trend_context_'.$timeframe, $symbol)) {
+                            break 2;
+                        }
+
                         $candles = $mt5Service->getCandles($symbol, $timeframe, 1);
                         $trendByTimeframe[$timeframe] = $resolveTrendSide($candles);
                     }
@@ -1377,6 +1430,10 @@ Artisan::command('mt5:auto-forex
                             'message' => 'Signal rejected because higher timeframe trend context is not aligned with the signal side.',
                         ]);
                         continue;
+                    }
+
+                    if (!$reserveCycleCredits($creditCostCandle, 'entry_timeframe_'.$entryTimeframe, $symbol)) {
+                        break;
                     }
 
                     $entryCandles = $mt5Service->getCandles($symbol, $entryTimeframe, 1);
@@ -1463,6 +1520,10 @@ Artisan::command('mt5:auto-forex
 
                         foreach ($trendTimeframes as $index => $timeframe) {
                             $limit = $index === 0 ? 20 : 10;
+                            if (!$reserveCycleCredits($creditCostCandle, 'ai_context_'.$timeframe, $symbol)) {
+                                break 2;
+                            }
+
                             $candles = $mt5Service->getCandles($symbol, $timeframe, $limit);
                             if (!empty($candles)) {
                                 $candleContext .= "\n\nLast ".count($candles)." x ".strtoupper($timeframe)." candles (oldest first):\n".$formatCandles($candles);
@@ -1655,6 +1716,9 @@ Artisan::command('mt5:auto-forex
             .' cooldown='.$skippedCooldown
             .' hasOpen='.$skippedOpen
             .' rateLimitStop='.(int) $stoppedByRateLimit
+            .' creditStop='.(int) $stoppedByCreditBudget
+            .' creditUsed='.$cycleCreditsUsed
+            .' creditBudget='.($maxCycleCredits > 0 ? $maxCycleCredits : 'off')
         );
 
         BotTradeLog::query()->create(array_merge($botLogDefaults, [
@@ -1671,6 +1735,9 @@ Artisan::command('mt5:auto-forex
                 'skipped_cooldown' => $skippedCooldown,
                 'skipped_open_position' => $skippedOpen,
                 'stopped_by_rate_limit' => $stoppedByRateLimit,
+                'stopped_by_credit_budget' => $stoppedByCreditBudget,
+                'cycle_credits_used' => $cycleCreditsUsed,
+                'max_cycle_credits' => $maxCycleCredits,
                 'session_start_utc' => $sessionStartUtc,
                 'session_end_utc' => $sessionEndUtc,
                 'current_hour_utc' => $currentHourUtc,
@@ -2129,4 +2196,7 @@ Artisan::command('mt5:learn-policy
     return 0;
 })->purpose('Learn bot policy recommendations from recent resolved trades.');
 
-Schedule::command('mt5:auto-forex --once')->everyMinute()->withoutOverlapping();
+Schedule::command('mt5:auto-forex --once')
+    ->name('mt5-auto-forex-once')
+    ->everyMinute()
+    ->withoutOverlapping(120);

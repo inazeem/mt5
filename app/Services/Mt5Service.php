@@ -30,6 +30,9 @@ class Mt5Service
     private const HISTORY_DEALS_BACKOFF_BASE_MS = 400;
     private const QUOTE_MAX_RETRIES = 2;
     private const QUOTE_BACKOFF_BASE_MS = 300;
+    private const ACCOUNT_INFO_CACHE_SECONDS = 20;
+    private const ACCOUNT_INFO_MAX_RETRIES = 2;
+    private const ACCOUNT_INFO_BACKOFF_BASE_MS = 400;
 
     /**
      * Place a new market order, optionally split into multiple exit legs.
@@ -245,11 +248,15 @@ class Mt5Service
     {
         [, , $accountId, $client] = $this->metaApiContext();
 
-        $response = $client->get("/users/current/accounts/{$accountId}/account-information");
-        $decoded = json_decode((string) $response->getBody(), true);
+        $cacheKey = 'mt5_account_information_'.md5($accountId);
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached) && $cached !== []) {
+            return $cached;
+        }
 
-        if (!is_array($decoded)) {
-            return [];
+        $decoded = $this->fetchAccountInformationWithRetry($client, $accountId);
+        if ($decoded !== []) {
+            Cache::put($cacheKey, $decoded, now()->addSeconds(self::ACCOUNT_INFO_CACHE_SECONDS));
         }
 
         return $decoded;
@@ -1589,6 +1596,68 @@ class Mt5Service
         }
 
         throw new RuntimeException('MetaApi history deals failed after retries due to too many requests.');
+    }
+
+    /**
+     * Fetch account information with bounded retries for transient failures.
+     *
+     * @param Client $client Configured MetaApi HTTP client.
+     * @param string $accountId MetaApi account id.
+     * @return array<string, mixed>
+     * @throws RuntimeException
+     */
+    private function fetchAccountInformationWithRetry(Client $client, string $accountId): array
+    {
+        $path = "/users/current/accounts/{$accountId}/account-information";
+
+        for ($attempt = 0; $attempt <= self::ACCOUNT_INFO_MAX_RETRIES; $attempt++) {
+            try {
+                $response = $client->get($path);
+                $decoded = json_decode((string) $response->getBody(), true);
+
+                return is_array($decoded) ? $decoded : [];
+            } catch (ClientException $e) {
+                $status = $e->getResponse()->getStatusCode();
+                $body = (string) $e->getResponse()->getBody();
+                $decoded = json_decode($body, true);
+                $detail = is_array($decoded) ? ($decoded['message'] ?? $body) : $body;
+                $isRetryableStatus = in_array($status, [429, 502, 503, 504], true);
+
+                if ($isRetryableStatus && $attempt < self::ACCOUNT_INFO_MAX_RETRIES) {
+                    $delayMs = $this->accountInfoBackoffDelayMs($e, $attempt, $status);
+                    usleep($delayMs * 1000);
+                    continue;
+                }
+
+                throw new RuntimeException("MetaApi account information failed [{$status}]: {$detail}");
+            } catch (RequestException $e) {
+                if ($attempt < self::ACCOUNT_INFO_MAX_RETRIES) {
+                    $delayMs = self::ACCOUNT_INFO_BACKOFF_BASE_MS * (2 ** $attempt);
+                    usleep($delayMs * 1000);
+                    continue;
+                }
+
+                throw new RuntimeException('MetaApi account information request failed: '.$e->getMessage());
+            }
+        }
+
+        throw new RuntimeException('MetaApi account information failed after retries.');
+    }
+
+    /**
+     * Determine retry delay for account-information retries.
+     */
+    private function accountInfoBackoffDelayMs(ClientException $e, int $attempt, int $status): int
+    {
+        if ($status === 429) {
+            $retryAfter = trim($e->getResponse()->getHeaderLine('Retry-After'));
+
+            if (is_numeric($retryAfter)) {
+                return (int) $retryAfter * 1000;
+            }
+        }
+
+        return self::ACCOUNT_INFO_BACKOFF_BASE_MS * (2 ** $attempt);
     }
 
     /**
