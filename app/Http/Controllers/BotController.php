@@ -891,7 +891,8 @@ class BotController extends Controller
             $openSnapshot['error'] = $e->getMessage();
         }
 
-        $positions = is_array($openSnapshot['positions'] ?? null) ? $openSnapshot['positions'] : [];
+        $positionsPayload = $openSnapshot['positions'] ?? null;
+        $positions = (is_array($positionsPayload) && array_is_list($positionsPayload)) ? $positionsPayload : [];
         $todayStart = now()->startOfDay();
         $todayLogs = BotTradeLog::query()->where('created_at', '>=', $todayStart);
 

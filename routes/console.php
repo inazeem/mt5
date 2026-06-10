@@ -849,7 +849,8 @@ Artisan::command('mt5:auto-forex
         }
 
         $openSnapshot = $mt5Service->getOpenTradeSnapshot();
-        $positions = is_array($openSnapshot['positions'] ?? null) ? $openSnapshot['positions'] : [];
+        $positionsPayload = $openSnapshot['positions'] ?? null;
+        $positions = (is_array($positionsPayload) && array_is_list($positionsPayload)) ? $positionsPayload : [];
         if (!$testMode && count($positions) >= $maxOpenPositions) {
             $msg = 'Skipped entries: max open positions reached ('.count($positions).'/'.$maxOpenPositions.').';
             $this->line($msg);
@@ -953,6 +954,7 @@ Artisan::command('mt5:auto-forex
         $skippedOpen = 0;
         $skippedLowScore = 0;
         $skippedLowVolume = 0;
+        $stoppedByRateLimit = false;
 
         $calculateBotScore = static function (float $signalDeltaPips, float $spreadPips, float $effectiveVolume, float $minEffectiveVolume): int {
             $signalStrengthScore = min(100.0, (abs($signalDeltaPips) / 10.0) * 100.0);
@@ -1067,14 +1069,23 @@ Artisan::command('mt5:auto-forex
             try {
                 $quote = $mt5Service->getTickerPrice($quoteSymbol);
             } catch (\Throwable $e) {
-                Log::warning('Auto bot quote failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
-                $this->line("  {$quoteSymbol}: quote error — {$e->getMessage()}");
+                $errorMessage = $e->getMessage();
+                Log::warning('Auto bot quote failed', ['symbol' => $symbol, 'error' => $errorMessage]);
+                $this->line("  {$quoteSymbol}: quote error — {$errorMessage}");
                 $logSignal([
                     'status' => 'quote_error',
                     'symbol' => $symbol,
                     'message' => 'Signal skipped due to quote retrieval failure.',
-                    'error_message' => $e->getMessage(),
+                    'error_message' => $errorMessage,
                 ]);
+
+                $upperError = strtoupper($errorMessage);
+                if (str_contains($upperError, 'TOOMANYREQUESTS') || str_contains($upperError, '429')) {
+                    $stoppedByRateLimit = true;
+                    $this->warn('  Rate limit detected; stopping remaining symbol scans for this cycle.');
+                    break;
+                }
+
                 continue;
             }
 
@@ -1643,6 +1654,7 @@ Artisan::command('mt5:auto-forex
             .' lowVolume='.$skippedLowVolume
             .' cooldown='.$skippedCooldown
             .' hasOpen='.$skippedOpen
+            .' rateLimitStop='.(int) $stoppedByRateLimit
         );
 
         BotTradeLog::query()->create(array_merge($botLogDefaults, [
@@ -1658,6 +1670,7 @@ Artisan::command('mt5:auto-forex
                 'skipped_low_volume' => $skippedLowVolume,
                 'skipped_cooldown' => $skippedCooldown,
                 'skipped_open_position' => $skippedOpen,
+                'stopped_by_rate_limit' => $stoppedByRateLimit,
                 'session_start_utc' => $sessionStartUtc,
                 'session_end_utc' => $sessionEndUtc,
                 'current_hour_utc' => $currentHourUtc,
