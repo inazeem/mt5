@@ -22,6 +22,8 @@ class Mt5Service
 {
     private const BASE_URL = 'https://mt-client-api-v1.{region}.agiliumtrade.ai';
     private const MARKET_DATA_BASE_URL = 'https://mt-market-data-client-api-v1.{region}.agiliumtrade.ai';
+    private const METAAPI_TIMEOUT_SECONDS = 12;
+    private const METAAPI_CONNECT_TIMEOUT_SECONDS = 5;
     private const COMMON_SPREAD_BET_SUFFIXES = ['_SB'];
     private const COMMON_PEPPERSTONE_SUFFIXES = ['_SB'];
     private const HISTORY_DEALS_CACHE_SECONDS = 60;
@@ -1495,8 +1497,8 @@ class Mt5Service
     {
         return new Client([
             'base_uri' => str_replace('{region}', $metaApiRegion, self::BASE_URL),
-            'timeout' => 45,
-            'connect_timeout' => 10,
+            'timeout' => self::METAAPI_TIMEOUT_SECONDS,
+            'connect_timeout' => self::METAAPI_CONNECT_TIMEOUT_SECONDS,
             'headers' => [
                 'auth-token' => $metaApiToken,
                 'Content-Type' => 'application/json',
@@ -1511,8 +1513,8 @@ class Mt5Service
     {
         return new Client([
             'base_uri' => str_replace('{region}', $metaApiRegion, self::MARKET_DATA_BASE_URL),
-            'timeout' => 45,
-            'connect_timeout' => 10,
+            'timeout' => self::METAAPI_TIMEOUT_SECONDS,
+            'connect_timeout' => self::METAAPI_CONNECT_TIMEOUT_SECONDS,
             'headers' => [
                 'auth-token' => $metaApiToken,
                 'Content-Type' => 'application/json',

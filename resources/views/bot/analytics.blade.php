@@ -433,7 +433,7 @@
                 });
             }
 
-            scheduleNext();
+            fetchLive();
         })();
     </script>
 </x-app-layout>

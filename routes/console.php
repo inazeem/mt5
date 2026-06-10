@@ -1011,6 +1011,7 @@ Artisan::command('mt5:auto-forex
 
         $logSignal = static function (array $data) use ($calculateBotScore, $minBotScore, $testMode, $volumeMultiplier, $minEffectiveVolume, $lotSize, $botLogDefaults, $botKey, $botName, $selectedStrategyKeys, $trendTimeframes, $strategyParams): void {
             $payload = is_array($data['meta_payload'] ?? null) ? $data['meta_payload'] : [];
+            $status = (string) ($data['status'] ?? '');
 
             $resolvedBotScore = null;
             if (is_numeric($payload['bot_score'] ?? null)) {
@@ -1023,7 +1024,24 @@ Artisan::command('mt5:auto-forex
                 $resolvedBotScore = 0;
             }
 
-            if (!$testMode && $resolvedBotScore < $minBotScore) {
+            $alwaysLogStatuses = [
+                'strategy_rejected',
+                'strategy_invalid_side',
+                'strategy_conflict_rejected',
+                'strategy_data_error',
+                'quote_error',
+                'invalid_quote',
+                'spread_rejected',
+                'cooldown_rejected',
+                'trend_rejected',
+                'entry_timeframe_wait',
+                'open_position_rejected',
+                'low_volume_rejected',
+                'ai_rejected',
+            ];
+            $isDiagnosticStatus = in_array($status, $alwaysLogStatuses, true) || str_ends_with($status, '_rejected');
+
+            if (!$testMode && !$isDiagnosticStatus && $resolvedBotScore < $minBotScore) {
                 return;
             }
 
@@ -1216,6 +1234,10 @@ Artisan::command('mt5:auto-forex
                 $strategyResults = [];
                 $strategySides = [];
                 $strategySignalStrengths = [];
+                $strategyDebug = [];
+                $strategyConsoleLines = [];
+                $strategyRejectedKeys = [];
+                $strategyInvalidSideKeys = [];
 
                 foreach ($strategies as $strategy) {
                     $result = $strategy->evaluate([
@@ -1230,34 +1252,85 @@ Artisan::command('mt5:auto-forex
                         'timeframe' => $primaryTimeframe,
                     ]);
 
-                    $strategyResults[$strategy->key()] = $result;
+                    $strategyKey = $strategy->key();
+                    $strategyResults[$strategyKey] = $result;
 
-                    if (!(bool) ($result['signal'] ?? false)) {
-                        $skippedNoMove++;
-                        $logSignal([
-                            'status' => (string) ($result['status'] ?? 'strategy_rejected'),
-                            'symbol' => $symbol,
-                            'spread_pips' => $spreadPips,
-                            'signal_delta_pips' => isset($result['signal_delta_pips']) ? (float) $result['signal_delta_pips'] : null,
-                            'message' => (string) ($result['message'] ?? 'Signal rejected by strategy conditions.'),
-                            'meta_payload' => [
-                                'strategies' => $selectedStrategyKeys,
-                                'strategy_timeframe' => $primaryTimeframe,
-                                'strategy_params' => $strategyParams,
-                                'strategy_results' => $strategyResults,
-                            ],
-                        ]);
-                        continue 2;
+                    $signaled = (bool) ($result['signal'] ?? false);
+                    $resultStatus = (string) ($result['status'] ?? ($signaled ? 'signal' : 'strategy_rejected'));
+                    $resultMessage = trim((string) ($result['message'] ?? ''));
+                    $resultSide = strtolower(trim((string) ($result['side'] ?? '')));
+                    $resultDeltaPips = isset($result['signal_delta_pips']) && is_numeric($result['signal_delta_pips'])
+                        ? abs((float) $result['signal_delta_pips'])
+                        : null;
+
+                    $strategyDebug[$strategyKey] = [
+                        'signal' => $signaled,
+                        'status' => $resultStatus,
+                        'side' => $resultSide !== '' ? $resultSide : null,
+                        'signal_delta_pips' => $resultDeltaPips,
+                        'message' => $resultMessage,
+                    ];
+
+                    if ($signaled) {
+                        if (!in_array($resultSide, ['buy', 'sell'], true)) {
+                            $strategyInvalidSideKeys[] = $strategyKey;
+                            $strategyConsoleLines[] = "{$strategyKey}: INVALID_SIDE status={$resultStatus}";
+                            continue;
+                        }
+
+                        $strategySides[] = $resultSide;
+                        $strategySignalStrengths[] = $resultDeltaPips ?? 0.0;
+                        $deltaText = $resultDeltaPips !== null ? number_format($resultDeltaPips, 2).'pip' : 'n/a';
+                        $strategyConsoleLines[] = "{$strategyKey}: OK side={$resultSide} move={$deltaText}";
+                        continue;
                     }
 
-                    $resultSide = (string) ($result['side'] ?? '');
-                    if (!in_array($resultSide, ['buy', 'sell'], true)) {
-                        $skippedNoMove++;
-                        continue 2;
-                    }
+                    $strategyRejectedKeys[] = $strategyKey;
+                    $reasonText = $resultMessage !== '' ? $resultMessage : 'conditions not met';
+                    $strategyConsoleLines[] = "{$strategyKey}: NO status={$resultStatus} reason={$reasonText}";
+                }
 
-                    $strategySides[] = $resultSide;
-                    $strategySignalStrengths[] = abs((float) ($result['signal_delta_pips'] ?? 0));
+                $this->line("  {$symbol}: strategy diagnostics");
+                foreach ($strategyConsoleLines as $strategyConsoleLine) {
+                    $this->line('    - '.$strategyConsoleLine);
+                }
+
+                if (!empty($strategyRejectedKeys)) {
+                    $skippedNoMove++;
+                    $logSignal([
+                        'status' => 'strategy_rejected',
+                        'symbol' => $symbol,
+                        'spread_pips' => $spreadPips,
+                        'message' => 'Signal rejected because one or more selected strategies did not confirm: '.implode(', ', $strategyRejectedKeys).'.',
+                        'meta_payload' => [
+                            'strategies' => $selectedStrategyKeys,
+                            'strategy_timeframe' => $primaryTimeframe,
+                            'strategy_params' => $strategyParams,
+                            'strategy_results' => $strategyResults,
+                            'strategy_debug' => $strategyDebug,
+                            'strategy_rejected_keys' => array_values($strategyRejectedKeys),
+                        ],
+                    ]);
+                    continue;
+                }
+
+                if (!empty($strategyInvalidSideKeys)) {
+                    $skippedNoMove++;
+                    $logSignal([
+                        'status' => 'strategy_invalid_side',
+                        'symbol' => $symbol,
+                        'spread_pips' => $spreadPips,
+                        'message' => 'Signal rejected because one or more strategies returned an invalid side: '.implode(', ', $strategyInvalidSideKeys).'.',
+                        'meta_payload' => [
+                            'strategies' => $selectedStrategyKeys,
+                            'strategy_timeframe' => $primaryTimeframe,
+                            'strategy_params' => $strategyParams,
+                            'strategy_results' => $strategyResults,
+                            'strategy_debug' => $strategyDebug,
+                            'strategy_invalid_side_keys' => array_values($strategyInvalidSideKeys),
+                        ],
+                    ]);
+                    continue;
                 }
 
                 if (count(array_unique($strategySides)) !== 1) {
@@ -1272,6 +1345,7 @@ Artisan::command('mt5:auto-forex
                             'strategy_timeframe' => $primaryTimeframe,
                             'strategy_params' => $strategyParams,
                             'strategy_results' => $strategyResults,
+                            'strategy_debug' => $strategyDebug,
                         ],
                     ]);
                     continue;

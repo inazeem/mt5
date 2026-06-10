@@ -14,6 +14,7 @@ class BotController extends Controller
 {
     private const ALLOWED_SIGNAL_TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h'];
     private const ALLOWED_STRATEGIES = ['momentum', 'sma_cross', 'ema_cross', 'bollinger_reversion', 'vwap_reversion'];
+    private const ANALYTICS_SLOW_MS = 1000;
 
     public function index(Mt5Service $mt5Service)
     {
@@ -190,7 +191,8 @@ class BotController extends Controller
     {
         $settings = AppSetting::singleton();
 
-        $payload = $this->buildAnalyticsPayload($mt5Service);
+        // Keep initial analytics render fast by avoiding network calls.
+        $payload = $this->buildAnalyticsPayload($mt5Service, false, 'page');
         $openSnapshot = $payload['openSnapshot'];
         $positions = $payload['positions'];
         $stats = $payload['stats'];
@@ -200,7 +202,7 @@ class BotController extends Controller
 
     public function analyticsLive(Mt5Service $mt5Service)
     {
-        $payload = $this->buildAnalyticsPayload($mt5Service);
+        $payload = $this->buildAnalyticsPayload($mt5Service, true, 'live');
 
         return response()->json([
             'ok' => true,
@@ -877,22 +879,22 @@ class BotController extends Controller
             ->with('status', "Cleared {$deleted} alert record(s).");
     }
 
-    private function buildAnalyticsPayload(Mt5Service $mt5Service): array
+    private function buildAnalyticsPayload(
+        Mt5Service $mt5Service,
+        bool $allowRemoteFetch = true,
+        string $context = 'unknown'
+    ): array
     {
-        $openSnapshot = [
-            'positions' => [],
-            'orders' => [],
-            'error' => null,
-        ];
+        $startedAt = microtime(true);
 
-        try {
-            $openSnapshot = $mt5Service->getOpenTradeSnapshot();
-        } catch (Throwable $e) {
-            $openSnapshot['error'] = $e->getMessage();
-        }
+        $openStart = microtime(true);
+        $openSnapshot = $this->openSnapshotCached($mt5Service, $allowRemoteFetch);
+        $openDurationMs = (int) round((microtime(true) - $openStart) * 1000);
 
         $positionsPayload = $openSnapshot['positions'] ?? null;
         $positions = (is_array($positionsPayload) && array_is_list($positionsPayload)) ? $positionsPayload : [];
+
+        $todayStatsStart = microtime(true);
         $todayStart = now()->startOfDay();
         $todayLogs = BotTradeLog::query()->where('created_at', '>=', $todayStart);
 
@@ -907,8 +909,30 @@ class BotController extends Controller
             'today_failed' => (clone $todayLogs)->where('event_type', 'trade_open')->where('status', 'failed')->count(),
             'today_trailing_updates' => (clone $todayLogs)->where('event_type', 'trailing_update')->where('status', 'success')->count(),
         ];
+        $todayStatsDurationMs = (int) round((microtime(true) - $todayStatsStart) * 1000);
 
-        $historyStats = $this->historyStatsCached($mt5Service);
+        $historyStart = microtime(true);
+        $historyStats = $this->historyStatsCached($mt5Service, $allowRemoteFetch);
+        $historyDurationMs = (int) round((microtime(true) - $historyStart) * 1000);
+        $totalDurationMs = (int) round((microtime(true) - $startedAt) * 1000);
+
+        if (
+            $totalDurationMs >= self::ANALYTICS_SLOW_MS
+            || !empty($openSnapshot['error'])
+            || !empty($historyStats['history_error'])
+        ) {
+            logger()->warning('analytics payload timing', [
+                'context' => $context,
+                'allow_remote_fetch' => $allowRemoteFetch,
+                'total_ms' => $totalDurationMs,
+                'open_snapshot_ms' => $openDurationMs,
+                'today_stats_ms' => $todayStatsDurationMs,
+                'history_ms' => $historyDurationMs,
+                'positions_count' => count($positions),
+                'open_error' => $openSnapshot['error'] ?? null,
+                'history_error' => $historyStats['history_error'] ?? null,
+            ]);
+        }
 
         return [
             'openSnapshot' => $openSnapshot,
@@ -917,19 +941,61 @@ class BotController extends Controller
         ];
     }
 
-    private function historyStatsCached(Mt5Service $mt5Service): array
+    private function openSnapshotCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true): array
     {
-        return Cache::remember('bot_analytics_history_30d', now()->addMinutes(10), function () use ($mt5Service) {
-            $history = [
-                'total_pnl' => null,
-                'total_trades' => null,
-                'winning_trades' => null,
-                'losing_trades' => null,
-                'win_rate' => null,
-                'avg_win' => null,
-                'avg_loss' => null,
-                'history_error' => null,
-            ];
+        $default = [
+            'positions' => [],
+            'orders' => [],
+            'error' => null,
+        ];
+
+        $cacheKey = 'bot_analytics_open_snapshot';
+
+        if ($allowRemoteFetch) {
+            return Cache::remember($cacheKey, now()->addSeconds(30), function () use ($mt5Service, $default) {
+                try {
+                    $snapshot = $mt5Service->getOpenTradeSnapshot();
+                    return is_array($snapshot) ? array_merge($default, $snapshot) : $default;
+                } catch (Throwable $e) {
+                    $default['error'] = $e->getMessage();
+                    return $default;
+                }
+            });
+        }
+
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            return array_merge($default, $cached);
+        }
+
+        return $default;
+    }
+
+    private function historyStatsCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true): array
+    {
+        $cacheKey = 'bot_analytics_history_30d';
+        $default = [
+            'total_pnl' => null,
+            'total_trades' => null,
+            'winning_trades' => null,
+            'losing_trades' => null,
+            'win_rate' => null,
+            'avg_win' => null,
+            'avg_loss' => null,
+            'history_error' => null,
+        ];
+
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            return array_merge($default, $cached);
+        }
+
+        if (!$allowRemoteFetch) {
+            return $default;
+        }
+
+        return Cache::remember($cacheKey, now()->addMinutes(10), function () use ($mt5Service, $default) {
+            $history = $default;
 
             try {
                 $deals = $mt5Service->getHistoryDeals(now()->subDays(30), now());
