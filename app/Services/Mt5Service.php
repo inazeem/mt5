@@ -275,12 +275,15 @@ class Mt5Service
             ['client' => $marketDataClient, 'query' => []],
             ['client' => $client, 'query' => ['keepSubscription' => 'true']],
         ];
+        $attemptedSymbols = [];
 
         $quote = null;
         $resolvedSymbol = null;
         $lastError = null;
 
         foreach ($candidateSymbols as $candidateSymbol) {
+            $attemptedSymbols[] = $candidateSymbol;
+
             foreach ($quoteSources as $source) {
                 try {
                     $quote = $this->fetchCurrentPricePayload(
@@ -320,7 +323,10 @@ class Mt5Service
         }
 
         if ($quote === null) {
-            throw new RuntimeException('Unable to fetch current ticker price for symbol '.$requested.'.'.($lastError ? " {$lastError}" : ''));
+            $attempted = !empty($attemptedSymbols)
+                ? ' Attempted symbols: '.implode(', ', array_values(array_unique($attemptedSymbols))).'.'
+                : '';
+            throw new RuntimeException('Unable to fetch current ticker price for symbol '.$requested.'.'.$attempted.($lastError ? " {$lastError}" : ''));
         }
 
         return [
@@ -1077,6 +1083,8 @@ class Mt5Service
         $baseRequested = str_ends_with($requested, '_SB') ? substr($requested, 0, -3) : $requested;
         $candidates = [];
         $isPlainFxPair = preg_match('/^[A-Z]{6}$/', $requested) === 1;
+        $isSpreadBetRequested = $this->isSpreadBetSymbol($requested);
+        $requireSpreadBetVariant = $isPlainFxPair || $isSpreadBetRequested;
 
         foreach (self::COMMON_SPREAD_BET_SUFFIXES as $suffix) {
             $candidates[] = $baseRequested.$suffix;
@@ -1088,11 +1096,28 @@ class Mt5Service
         }
 
         $resolved = $this->resolveBrokerSymbol($client, $accountId, $requested);
-        if ($resolved !== '' && (!$isPlainFxPair || $this->isSpreadBetSymbol($resolved))) {
+        if ($resolved !== '' && (!$requireSpreadBetVariant || $this->isSpreadBetSymbol($resolved))) {
             $candidates[] = $resolved;
         }
 
-        if (!$isPlainFxPair) {
+        // Add a best-effort broker-discovered symbol variant for the same base pair.
+        try {
+            $response = $client->get("/users/current/accounts/{$accountId}/symbols");
+            $decoded = json_decode((string) $response->getBody(), true);
+            $availableSymbols = $this->extractSymbolNames($decoded);
+            if (!empty($availableSymbols)) {
+                $preferred = $this->pickBestSymbolForPair($baseRequested, $availableSymbols);
+                if ($preferred !== null && $preferred !== '') {
+                    if (!$requireSpreadBetVariant || $this->isSpreadBetSymbol($preferred)) {
+                        $candidates[] = $preferred;
+                    }
+                }
+            }
+        } catch (\Throwable) {
+            // Keep best-effort local candidates when discovery fails.
+        }
+
+        if (!$isPlainFxPair && !$isSpreadBetRequested) {
             $candidates[] = $baseRequested;
         }
 
