@@ -1034,13 +1034,16 @@ Artisan::command('mt5:auto-forex
 
         foreach ($symbols as $symbol) {
             $symbol = strtoupper((string) $symbol);
+            $quoteSymbol = preg_match('/^[A-Z]{6}$/', $symbol) === 1
+                ? $symbol.'_SB'
+                : $symbol;
             $scanned++;
 
             try {
-                $quote = $mt5Service->getTickerPrice($symbol);
+                $quote = $mt5Service->getTickerPrice($quoteSymbol);
             } catch (\Throwable $e) {
                 Log::warning('Auto bot quote failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
-                $this->line("  {$symbol}: quote error — {$e->getMessage()}");
+                $this->line("  {$quoteSymbol}: quote error — {$e->getMessage()}");
                 $logSignal([
                     'status' => 'quote_error',
                     'symbol' => $symbol,

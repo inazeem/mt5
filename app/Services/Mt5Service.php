@@ -28,6 +28,8 @@ class Mt5Service
     private const HISTORY_DEALS_STALE_CACHE_MINUTES = 15;
     private const HISTORY_DEALS_MAX_RETRIES = 3;
     private const HISTORY_DEALS_BACKOFF_BASE_MS = 400;
+    private const QUOTE_MAX_RETRIES = 2;
+    private const QUOTE_BACKOFF_BASE_MS = 300;
 
     /**
      * Place a new market order, optionally split into multiple exit legs.
@@ -354,10 +356,48 @@ class Mt5Service
         $path = "/users/current/accounts/{$accountId}/symbols/{$encodedSymbol}/current-price";
         $options = $query === [] ? [] : ['query' => $query];
 
-        $response = $client->get($path, $options);
-        $decoded = json_decode((string) $response->getBody(), true);
+        for ($attempt = 0; $attempt <= self::QUOTE_MAX_RETRIES; $attempt++) {
+            try {
+                $response = $client->get($path, $options);
+                $decoded = json_decode((string) $response->getBody(), true);
 
-        return is_array($decoded) ? $decoded : [];
+                return is_array($decoded) ? $decoded : [];
+            } catch (ClientException $e) {
+                $status = $e->getResponse()->getStatusCode();
+
+                if ($status === 429 && $attempt < self::QUOTE_MAX_RETRIES) {
+                    $delayMs = $this->quoteBackoffDelayMs($e, $attempt);
+                    usleep($delayMs * 1000);
+                    continue;
+                }
+
+                throw $e;
+            } catch (RequestException $e) {
+                if ($attempt < self::QUOTE_MAX_RETRIES) {
+                    $delayMs = self::QUOTE_BACKOFF_BASE_MS * (2 ** $attempt);
+                    usleep($delayMs * 1000);
+                    continue;
+                }
+
+                throw $e;
+            }
+        }
+
+        throw new RuntimeException('MetaApi current-price request failed after retries due to too many requests.');
+    }
+
+    /**
+     * Determine retry delay for quote 429 responses.
+     */
+    private function quoteBackoffDelayMs(ClientException $e, int $attempt): int
+    {
+        $retryAfter = trim($e->getResponse()->getHeaderLine('Retry-After'));
+
+        if (is_numeric($retryAfter)) {
+            return (int) $retryAfter * 1000;
+        }
+
+        return self::QUOTE_BACKOFF_BASE_MS * (2 ** $attempt);
     }
 
     /**
