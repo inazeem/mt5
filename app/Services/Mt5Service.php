@@ -262,35 +262,60 @@ class Mt5Service
      */
     public function getTickerPrice(string $symbol): array
     {
-        [, , $accountId, $client] = $this->metaApiContext();
+        [$settings, $metaApiToken, $accountId, $client] = $this->metaApiContext();
 
         $requested = strtoupper(str_replace('/', '', trim($symbol)));
         if ($requested === '') {
             throw new RuntimeException('Symbol is required to fetch current ticker price.');
         }
 
+        $marketDataClient = $this->marketDataClient($metaApiToken, (string) ($settings->metaapi_region ?? 'new-york'));
         $candidateSymbols = $this->buildQuoteSymbolCandidates($client, $accountId, $requested);
+        $quoteSources = [
+            ['client' => $marketDataClient, 'query' => []],
+            ['client' => $client, 'query' => ['keepSubscription' => 'true']],
+        ];
 
         $quote = null;
         $resolvedSymbol = null;
         $lastError = null;
 
         foreach ($candidateSymbols as $candidateSymbol) {
-            $encodedSymbol = rawurlencode($candidateSymbol);
-            $path = "/users/current/accounts/{$accountId}/symbols/{$encodedSymbol}/current-price";
-
-            try {
-                $response = $client->get($path, [
-                    'query' => ['keepSubscription' => 'true'],
-                ]);
-                $decoded = json_decode((string) $response->getBody(), true);
-                if (is_array($decoded)) {
-                    $quote = $decoded;
+            foreach ($quoteSources as $source) {
+                try {
+                    $quote = $this->fetchCurrentPricePayload(
+                        $source['client'],
+                        $accountId,
+                        $candidateSymbol,
+                        $source['query']
+                    );
                     $resolvedSymbol = $candidateSymbol;
-                    break;
+                    break 2;
+                } catch (\Throwable $e) {
+                    $lastError = $e->getMessage();
                 }
-            } catch (\Throwable $e) {
-                $lastError = $e->getMessage();
+            }
+
+            if (!$this->shouldWarmQuoteSubscription($lastError)
+                || !$this->subscribeQuoteSymbol($client, $accountId, $candidateSymbol)) {
+                continue;
+            }
+
+            usleep(500000);
+
+            foreach ($quoteSources as $source) {
+                try {
+                    $quote = $this->fetchCurrentPricePayload(
+                        $source['client'],
+                        $accountId,
+                        $candidateSymbol,
+                        $source['query']
+                    );
+                    $resolvedSymbol = $candidateSymbol;
+                    break 2;
+                } catch (\Throwable $e) {
+                    $lastError = $e->getMessage();
+                }
             }
         }
 
@@ -306,6 +331,69 @@ class Mt5Service
             'time' => $quote['time'] ?? $quote['brokerTime'] ?? now()->toDateTimeString(),
             'raw' => $quote,
         ];
+    }
+
+    /**
+     * Fetch current quote payload for a broker symbol.
+     *
+     * @param Client $client Configured MetaApi HTTP client.
+     * @param string $accountId MetaApi account id.
+     * @param string $symbol Broker symbol.
+     * @param array<string, string> $query Optional query parameters.
+     * @return array<string, mixed>
+     */
+    private function fetchCurrentPricePayload(Client $client, string $accountId, string $symbol, array $query = []): array
+    {
+        $encodedSymbol = rawurlencode($symbol);
+        $path = "/users/current/accounts/{$accountId}/symbols/{$encodedSymbol}/current-price";
+        $options = $query === [] ? [] : ['query' => $query];
+
+        $response = $client->get($path, $options);
+        $decoded = json_decode((string) $response->getBody(), true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * Warm a symbol subscription so current-price can backfill on brokers that
+     * require current-candles subscription first.
+     *
+     * @param Client $client Configured MetaApi HTTP client.
+     * @param string $accountId MetaApi account id.
+     * @param string $symbol Broker symbol.
+     * @return bool
+     */
+    private function subscribeQuoteSymbol(Client $client, string $accountId, string $symbol): bool
+    {
+        $encodedSymbol = rawurlencode($symbol);
+
+        try {
+            $response = $client->get(
+                "/users/current/accounts/{$accountId}/symbols/{$encodedSymbol}/current-candles/1m",
+                ['query' => ['keepSubscription' => 'true']]
+            );
+            $decoded = json_decode((string) $response->getBody(), true);
+
+            return is_array($decoded);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Detect symbol-price misses that can be recovered by warming a subscription.
+     */
+    private function shouldWarmQuoteSubscription(?string $message): bool
+    {
+        if (!is_string($message) || trim($message) === '') {
+            return false;
+        }
+
+        $upper = strtoupper($message);
+
+        return str_contains($upper, 'SPECIFIED SYMBOL PRICE NOT FOUND')
+            || str_contains($upper, 'NOTFOUNDERROR')
+            || str_contains($upper, '404 NOT FOUND');
     }
 
     /**
