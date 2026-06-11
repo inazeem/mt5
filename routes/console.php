@@ -1024,29 +1024,13 @@ Artisan::command('mt5:auto-forex
                 $resolvedBotScore = 0;
             }
 
-            $alwaysLogStatuses = [
-                'strategy_rejected',
-                'strategy_invalid_side',
-                'strategy_conflict_rejected',
-                'strategy_data_error',
-                'quote_error',
-                'invalid_quote',
-                'spread_rejected',
-                'cooldown_rejected',
-                'trend_rejected',
-                'entry_timeframe_wait',
-                'open_position_rejected',
-                'low_volume_rejected',
-                'ai_rejected',
-            ];
-            $isDiagnosticStatus = in_array($status, $alwaysLogStatuses, true) || str_ends_with($status, '_rejected');
-
-            if (!$testMode && !$isDiagnosticStatus && $resolvedBotScore < $minBotScore) {
+            $alertLogMinScore = max(70, (int) $minBotScore);
+            if (!$testMode && $resolvedBotScore < $alertLogMinScore) {
                 return;
             }
 
             $payload['bot_score'] = $resolvedBotScore;
-            $payload['min_bot_score'] = $minBotScore;
+            $payload['min_bot_score'] = $alertLogMinScore;
             if (!isset($payload['volume_multiplier'])) {
                 $payload['volume_multiplier'] = $volumeMultiplier;
             }
