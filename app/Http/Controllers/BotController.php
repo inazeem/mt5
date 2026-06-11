@@ -730,6 +730,10 @@ class BotController extends Controller
             $log->trade_outcome = $storedOutcome !== '' ? $storedOutcome : '-';
             $log->trade_pnl = is_numeric($log->trade_pnl ?? null) ? (float) $log->trade_pnl : null;
 
+            if ($log->trade_outcome === 'ERROR' && empty($log->trade_resolved_at)) {
+                $log->trade_outcome = 'PENDING';
+            }
+
             $bucketKey = $normalizeSymbolForMatch((string) ($log->symbol ?? ''))
                 .'|'.strtolower((string) ($log->side ?? ''))
                 .'|'.strtolower((string) ($log->bot_key ?? $log->bot_name ?? 'default'));
@@ -807,11 +811,15 @@ class BotController extends Controller
         $startedAt = microtime(true);
 
         $openStart = microtime(true);
-        $openSnapshot = $this->openSnapshotCached($mt5Service, $allowRemoteFetch);
+        $openSnapshot = $this->activeTradesSnapshotCached($mt5Service, $allowRemoteFetch);
         $openDurationMs = (int) round((microtime(true) - $openStart) * 1000);
 
-        $positionsPayload = $openSnapshot['positions'] ?? null;
-        $positions = (is_array($positionsPayload) && array_is_list($positionsPayload)) ? $positionsPayload : [];
+        $positions = $openSnapshot['positions'] ?? [];
+
+        if ($allowRemoteFetch && !empty($positions)) {
+            $positions = $this->enrichPositionsWithLiveQuotes($mt5Service, $positions);
+            $openSnapshot['positions'] = $positions;
+        }
 
         $todayStatsStart = microtime(true);
         $todayStart = now()->startOfDay();
@@ -918,6 +926,65 @@ class BotController extends Controller
         }
 
         return $default;
+    }
+
+    /**
+     * Enrich live open positions with current bid/ask from MetaAPI so active trades auto-update.
+     *
+     * Quotes are cached per symbol for a short period to avoid repeated lookups during auto-refresh.
+     *
+     * @param array<int, array<string, mixed>> $positions
+     * @return array<int, array<string, mixed>>
+     */
+    private function enrichPositionsWithLiveQuotes(Mt5Service $mt5Service, array $positions): array
+    {
+        $uniqueSymbols = collect($positions)
+            ->filter(static fn ($position) => is_array($position) && !empty($position['symbol']))
+            ->map(static fn ($position) => strtoupper((string) $position['symbol']))
+            ->unique()
+            ->values();
+
+        $quotesBySymbol = [];
+        foreach ($uniqueSymbols as $symbol) {
+            $cacheKey = 'bot_analytics_live_quote_'.preg_replace('/[^A-Z0-9_]/', '_', $symbol);
+            $quotesBySymbol[$symbol] = Cache::remember($cacheKey, now()->addSeconds(10), function () use ($mt5Service, $symbol) {
+                try {
+                    return $mt5Service->getTickerPrice($symbol);
+                } catch (Throwable $e) {
+                    logger()->warning('analytics live quote lookup failed', [
+                        'symbol' => $symbol,
+                        'error' => $e->getMessage(),
+                    ]);
+
+                    return null;
+                }
+            });
+        }
+
+        return array_map(static function (array $position) use ($quotesBySymbol): array {
+            $symbol = strtoupper((string) ($position['symbol'] ?? ''));
+            $quote = $quotesBySymbol[$symbol] ?? null;
+
+            if (is_array($quote)) {
+                $type = strtoupper((string) ($position['type'] ?? 'BUY'));
+                $livePrice = $type === 'SELL'
+                    ? ($quote['ask'] ?? $quote['last'] ?? null)
+                    : ($quote['bid'] ?? $quote['last'] ?? null);
+
+                if (is_numeric($livePrice)) {
+                    $position['currentPrice'] = (float) $livePrice;
+                }
+
+                if (is_numeric($position['openPrice'] ?? null) && is_numeric($position['currentPrice'] ?? null) && empty($position['profit'])) {
+                    $openPrice = (float) $position['openPrice'];
+                    $currentPrice = (float) $position['currentPrice'];
+                    $direction = $type === 'SELL' ? ($openPrice - $currentPrice) : ($currentPrice - $openPrice);
+                    $position['profit'] = round($direction, 5);
+                }
+            }
+
+            return $position;
+        }, $positions);
     }
 
     private function historyStatsCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true): array
@@ -1038,23 +1105,7 @@ class BotController extends Controller
      */
     private function reconcilePendingTradeOutcomes(Mt5Service $mt5Service): void
     {
-        $throttleKey = 'bot_pending_reconcile_last_run_at_v1';
-        $lastRunRaw = Cache::get($throttleKey);
-        if (is_string($lastRunRaw) && trim($lastRunRaw) !== '') {
-            try {
-                $lastRunAt = \Carbon\Carbon::parse($lastRunRaw);
-                if ($lastRunAt->gt(now()->subSeconds(45))) {
-                    return;
-                }
-            } catch (Throwable) {
-                // Ignore malformed cache values and continue.
-            }
-        }
-
-        Cache::put($throttleKey, now()->toIso8601String(), now()->addMinutes(10));
-
         $this->bootstrapPendingOutcomesFromHistory($mt5Service);
-        $this->resolvePendingOutcomesFromActiveSnapshot($mt5Service);
     }
 
     /**
@@ -1176,6 +1227,70 @@ class BotController extends Controller
     }
 
     /**
+     * Build the active-trades snapshot from the database, then enrich it with live quotes.
+     *
+     * This keeps the active trades table visible even when MetaApi's positions endpoint is stale.
+     *
+     * @return array{positions: array<int, array<string, mixed>>, orders: array<int, mixed>, error: null}
+     */
+    private function activeTradesSnapshotCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true): array
+    {
+        $cacheKey = 'bot_analytics_active_trades_db_v2';
+
+        $snapshot = Cache::remember($cacheKey, now()->addSeconds(15), function () {
+            $activeTrades = BotTradeLog::query()
+                ->where('event_type', 'trade_open')
+                ->where('status', 'success')
+                ->where(function ($query) {
+                    $query->whereNull('trade_outcome')
+                        ->orWhere('trade_outcome', 'PENDING')
+                        ->orWhere('trade_outcome', 'ERROR');
+                })
+                ->orderByDesc('created_at')
+                ->get();
+
+            $positions = $activeTrades->map(static function (BotTradeLog $log): array {
+                $tradeType = strtolower((string) ($log->side ?? 'buy')) === 'sell' ? 'sell' : 'buy';
+
+                return [
+                    'symbol' => (string) ($log->symbol ?? '-'),
+                    'type' => strtoupper($tradeType),
+                    'volume' => (float) ($log->lot_size ?? 0),
+                    'openPrice' => is_numeric($log->entry_price) ? (float) $log->entry_price : null,
+                    'currentPrice' => is_numeric($log->entry_price) ? (float) $log->entry_price : null,
+                    'stopLoss' => is_numeric($log->stop_loss) ? (float) $log->stop_loss : null,
+                    'takeProfit' => is_numeric($log->take_profit) ? (float) $log->take_profit : null,
+                    'profit' => is_numeric($log->trade_pnl) ? (float) $log->trade_pnl : 0,
+                    'positionId' => (string) ($log->position_id ?? ''),
+                    'orderId' => (string) ($log->order_id ?? ''),
+                    'tradeOutcome' => (string) ($log->trade_outcome ?? 'PENDING'),
+                ];
+            })->values()->all();
+
+            return [
+                'positions' => $positions,
+                'orders' => [],
+                'error' => null,
+            ];
+        });
+
+        if (!$allowRemoteFetch || empty($snapshot['positions'])) {
+            return $snapshot;
+        }
+
+        $snapshot['positions'] = $this->enrichPositionsWithLiveQuotes($mt5Service, $snapshot['positions']);
+
+        return $snapshot;
+    }
+
+    private function enrichAlertLogStatus(BotTradeLog $log): void
+    {
+        if (($log->trade_outcome ?? null) === 'ERROR' && empty($log->trade_resolved_at)) {
+            $log->trade_outcome = 'PENDING';
+        }
+    }
+
+    /**
      * Resolve remaining pending trades by checking only currently active positions/orders.
      */
     private function resolvePendingOutcomesFromActiveSnapshot(Mt5Service $mt5Service): void
@@ -1195,13 +1310,9 @@ class BotController extends Controller
             return;
         }
 
-        $snapshotCacheKey = 'bot_pending_active_snapshot_v1';
-        $snapshot = Cache::remember($snapshotCacheKey, now()->addSeconds(30), function () use ($mt5Service) {
-            return $mt5Service->getOpenTradeSnapshot();
-        });
-
+        $snapshot = $this->activeTradesSnapshotCached($mt5Service, true);
         $positions = is_array($snapshot['positions'] ?? null) ? $snapshot['positions'] : [];
-        $orders = is_array($snapshot['orders'] ?? null) ? $snapshot['orders'] : [];
+        $orders = [];
 
         $activePositionIds = [];
         foreach ($positions as $position) {
