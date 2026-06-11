@@ -1235,16 +1235,14 @@ class BotController extends Controller
      */
     private function activeTradesSnapshotCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true): array
     {
-        $cacheKey = 'bot_analytics_active_trades_db_v2';
+        $cacheKey = 'bot_analytics_active_trades_db_v3';
 
         $snapshot = Cache::remember($cacheKey, now()->addSeconds(15), function () {
             $activeTrades = BotTradeLog::query()
                 ->where('event_type', 'trade_open')
                 ->where('status', 'success')
                 ->where(function ($query) {
-                    $query->whereNull('trade_outcome')
-                        ->orWhere('trade_outcome', 'PENDING')
-                        ->orWhere('trade_outcome', 'ERROR');
+                    $query->where('trade_outcome', 'PENDING');
                 })
                 ->orderByDesc('created_at')
                 ->get();
@@ -1299,8 +1297,7 @@ class BotController extends Controller
             ->where('event_type', 'trade_open')
             ->where('status', 'success')
             ->where(function ($query) {
-                $query->whereNull('trade_outcome')
-                    ->orWhere('trade_outcome', 'PENDING');
+                $query->where('trade_outcome', 'PENDING');
             })
             ->where('created_at', '<=', now()->subMinutes(2))
             ->orderBy('created_at')
