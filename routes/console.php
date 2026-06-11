@@ -1553,9 +1553,12 @@ Artisan::command('mt5:auto-forex
                 }
             }
 
-            $this->line("  {$symbol}: signal {$side} — move=".number_format($signalDeltaPips,2)."pip spread=".number_format($spreadPips,2)."pip bid={$bid} ask={$ask}");
+            $recommendedSide = $side;
+            $executionSide = $recommendedSide === 'buy' ? 'sell' : 'buy';
 
-            if ($side === 'buy') {
+            $this->line("  {$symbol}: signal {$recommendedSide} => executing {$executionSide} — move=".number_format($signalDeltaPips,2)."pip spread=".number_format($spreadPips,2)."pip bid={$bid} ask={$ask}");
+
+            if ($executionSide === 'buy') {
                 $entry = $ask;
                 $takeProfit = round($entry + ($tpPipsForSymbol * $pipSize), 5);
                 $stopLoss = round($entry - ($slPipsForSymbol * $pipSize), 5);
@@ -1607,7 +1610,7 @@ Artisan::command('mt5:auto-forex
                         Log::warning('Auto bot candle fetch failed', ['symbol' => $symbol, 'error' => $candleError->getMessage()]);
                     }
 
-                    $this->line("  {$symbol}: asking AI ({$symbol} {$side} entry={$entry} TP={$takeProfit} SL={$stopLoss})...");
+                    $this->line("  {$symbol}: asking AI ({$symbol} recommended={$recommendedSide} executing={$executionSide} entry={$entry} TP={$takeProfit} SL={$stopLoss})...");
 
                     $strategyLine = $scalperMode
                         ? 'This is a scalping trade. Prefer quick in-and-out setups and reject slow/unclear setups.'
@@ -1616,7 +1619,7 @@ Artisan::command('mt5:auto-forex
                     $prompt = "You are validating an automated forex trade. Reply strictly with one line starting with APPROVE or REJECT, then a short reason. "
                         ."Include a confidence percentage like 'Confidence: 85%' in your reply. "
                         .$strategyLine.' '
-                        ."Symbol: {$symbol}. Side: {$side}. Entry: {$entry}. TP: {$takeProfit}. SL: {$stopLoss}. "
+                        ."Symbol: {$symbol}. Recommended side: {$recommendedSide}. Executing side: {$executionSide}. Entry: {$entry}. TP: {$takeProfit}. SL: {$stopLoss}. "
                         ."Spread pips: ".number_format($spreadPips, 2).". Signal move pips: ".number_format($signalDeltaPips, 2).". "
                         ."TP pips: ".number_format($tpPipsForSymbol, 2).". SL pips: ".number_format($slPipsForSymbol, 2)."."
                         .$candleContext;
@@ -1647,7 +1650,7 @@ Artisan::command('mt5:auto-forex
                 $logSignal([
                     'status' => 'ai_rejected',
                     'symbol' => $symbol,
-                    'side' => $side,
+                    'side' => $executionSide,
                     'lot_size' => $lotSize,
                     'entry_price' => $entry,
                     'take_profit' => $takeProfit,
@@ -1664,6 +1667,8 @@ Artisan::command('mt5:auto-forex
                         'volume_multiplier' => $volumeMultiplier,
                         'effective_volume' => $effectiveVolume,
                         'min_effective_volume' => $minEffectiveVolume,
+                        'recommended_side' => $recommendedSide,
+                        'execution_side' => $executionSide,
                         'ticker_category' => $tickerCategory,
                         'tp_pips_for_symbol' => $tpPipsForSymbol,
                         'sl_pips_for_symbol' => $slPipsForSymbol,
@@ -1676,7 +1681,7 @@ Artisan::command('mt5:auto-forex
             $logSignal([
                 'status' => 'confirmed',
                 'symbol' => $symbol,
-                'side' => $side,
+                'side' => $executionSide,
                 'lot_size' => $lotSize,
                 'entry_price' => $entry,
                 'take_profit' => $takeProfit,
@@ -1693,6 +1698,8 @@ Artisan::command('mt5:auto-forex
                     'volume_multiplier' => $volumeMultiplier,
                     'effective_volume' => $effectiveVolume,
                     'min_effective_volume' => $minEffectiveVolume,
+                    'recommended_side' => $recommendedSide,
+                    'execution_side' => $executionSide,
                     'ticker_category' => $tickerCategory,
                     'tp_pips_for_symbol' => $tpPipsForSymbol,
                     'sl_pips_for_symbol' => $slPipsForSymbol,
@@ -1701,20 +1708,25 @@ Artisan::command('mt5:auto-forex
             ]);
 
             try {
-                $result = $mt5Service->placeOrder($symbol, $lotSize, $side, [[
+                $result = $mt5Service->placeOrder($symbol, $lotSize, $executionSide, [[
                     'close_percent' => 100,
                     'take_profit' => $takeProfit,
                     'stop_loss' => $stopLoss,
                 ]]);
                 $opened++;
                 $openBySymbol[$symbol] = true;
-                $this->info('Opened '.$side.' '.$symbol.' TP='.$takeProfit.' SL='.$stopLoss);
-                Log::info('Auto bot opened trade', ['symbol' => $symbol, 'side' => $side, 'result' => $result]);
+                $this->info('Opened '.$executionSide.' '.$symbol.' (recommended '.$recommendedSide.') TP='.$takeProfit.' SL='.$stopLoss);
+                Log::info('Auto bot opened trade', [
+                    'symbol' => $symbol,
+                    'recommended_side' => $recommendedSide,
+                    'side' => $executionSide,
+                    'result' => $result,
+                ]);
                 BotTradeLog::query()->create(array_merge($botLogDefaults, [
                     'event_type' => 'trade_open',
                     'status' => 'success',
                     'symbol' => $symbol,
-                    'side' => $side,
+                    'side' => $executionSide,
                     'lot_size' => $lotSize,
                     'entry_price' => $entry,
                     'take_profit' => $takeProfit,
@@ -1731,6 +1743,8 @@ Artisan::command('mt5:auto-forex
                         'volume_multiplier' => $volumeMultiplier,
                         'effective_volume' => $effectiveVolume,
                         'min_effective_volume' => $minEffectiveVolume,
+                        'recommended_side' => $recommendedSide,
+                        'execution_side' => $executionSide,
                     ],
                     'message' => 'Trade opened successfully.',
                     'meta_response' => $result,
@@ -1751,12 +1765,17 @@ Artisan::command('mt5:auto-forex
                     break;
                 }
             } catch (\Throwable $e) {
-                Log::warning('Auto bot trade failed', ['symbol' => $symbol, 'side' => $side, 'error' => $e->getMessage()]);
+                Log::warning('Auto bot trade failed', [
+                    'symbol' => $symbol,
+                    'recommended_side' => $recommendedSide,
+                    'side' => $executionSide,
+                    'error' => $e->getMessage(),
+                ]);
                 BotTradeLog::query()->create(array_merge($botLogDefaults, [
                     'event_type' => 'trade_open',
                     'status' => 'failed',
                     'symbol' => $symbol,
-                    'side' => $side,
+                    'side' => $executionSide,
                     'lot_size' => $lotSize,
                     'entry_price' => $entry,
                     'take_profit' => $takeProfit,
@@ -1773,6 +1792,8 @@ Artisan::command('mt5:auto-forex
                         'volume_multiplier' => $volumeMultiplier,
                         'effective_volume' => $effectiveVolume,
                         'min_effective_volume' => $minEffectiveVolume,
+                        'recommended_side' => $recommendedSide,
+                        'execution_side' => $executionSide,
                     ],
                     'message' => 'Trade open failed.',
                     'error_message' => $e->getMessage(),
