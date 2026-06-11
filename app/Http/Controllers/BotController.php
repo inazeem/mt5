@@ -1303,13 +1303,20 @@ class BotController extends Controller
             ->orderBy('created_at')
             ->get();
 
-        if ($pendingTrades->isEmpty()) {
+        $erroredTrades = BotTradeLog::query()
+            ->where('event_type', 'trade_open')
+            ->where('status', 'success')
+            ->where('trade_outcome', 'ERROR')
+            ->orderBy('created_at')
+            ->get();
+
+        if ($pendingTrades->isEmpty() && $erroredTrades->isEmpty()) {
             return;
         }
 
-        $snapshot = $this->activeTradesSnapshotCached($mt5Service, true);
+        $snapshot = $this->openSnapshotCached($mt5Service, true);
         $positions = is_array($snapshot['positions'] ?? null) ? $snapshot['positions'] : [];
-        $orders = [];
+        $orders = is_array($snapshot['orders'] ?? null) ? $snapshot['orders'] : [];
 
         $activePositionIds = [];
         foreach ($positions as $position) {
@@ -1357,6 +1364,28 @@ class BotController extends Controller
             $existingMessage = trim((string) ($tradeLog->message ?? ''));
             $suffix = 'Trade is no longer active and was not found in open positions/orders.';
             $tradeLog->message = $existingMessage === '' ? $suffix : $existingMessage.' '.$suffix;
+            $tradeLog->save();
+        }
+
+        foreach ($erroredTrades as $tradeLog) {
+            $positionId = trim((string) ($tradeLog->position_id ?? ''));
+            $orderId = trim((string) ($tradeLog->order_id ?? ''));
+
+            $isActive = false;
+            if ($positionId !== '' && isset($activePositionIds[$positionId])) {
+                $isActive = true;
+            }
+            if (!$isActive && $orderId !== '' && isset($activeOrderIds[$orderId])) {
+                $isActive = true;
+            }
+
+            if (!$isActive) {
+                continue;
+            }
+
+            $tradeLog->trade_outcome = 'PENDING';
+            $tradeLog->trade_resolved_at = null;
+            $tradeLog->message = preg_replace('/\s*Trade is no longer active and was not found in open positions\/orders\.\s*/', ' ', (string) ($tradeLog->message ?? '')) ?? (string) ($tradeLog->message ?? '');
             $tradeLog->save();
         }
     }
