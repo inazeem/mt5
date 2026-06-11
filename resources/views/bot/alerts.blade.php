@@ -156,6 +156,7 @@
                                                 'WIN' => 'bg-emerald-100 text-emerald-700',
                                                 'LOSS' => 'bg-rose-100 text-rose-700',
                                                 'PENDING' => 'bg-amber-100 text-amber-700',
+                                                'ERROR' => 'bg-orange-100 text-orange-700',
                                                 'FAILED' => 'bg-gray-200 text-gray-700',
                                                 'NOT_OPENED' => 'bg-slate-100 text-slate-700',
                                                 'BREAKEVEN' => 'bg-sky-100 text-sky-700',
