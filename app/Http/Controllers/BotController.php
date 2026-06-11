@@ -721,9 +721,10 @@ class BotController extends Controller
                 $botScore = (int) round(($signalStrengthScore * 0.7) + ($spreadScore * 0.3));
             }
 
-            $log->linked_trade = '-';
-            $log->trade_outcome = '-';
-            $log->trade_pnl = null;
+            $log->linked_trade = trim((string) ($log->linked_trade ?? '')) !== '' ? (string) $log->linked_trade : '-';
+            $storedOutcome = strtoupper(trim((string) ($log->trade_outcome ?? '')));
+            $log->trade_outcome = $storedOutcome !== '' ? $storedOutcome : '-';
+            $log->trade_pnl = is_numeric($log->trade_pnl ?? null) ? (float) $log->trade_pnl : null;
 
             $bucketKey = $normalizeSymbolForMatch((string) ($log->symbol ?? ''))
                 .'|'.strtolower((string) ($log->side ?? ''))
@@ -755,13 +756,21 @@ class BotController extends Controller
                     $positionId = $response['positionId'] ?? null;
                 }
 
-                $ref = $positionId ?: $orderId ?: (string) $matchedTrade->id;
-                $log->linked_trade = 'TRADE #'.$ref;
+                $ref = trim((string) ($matchedTrade->linked_trade ?? ''));
+                if ($ref === '') {
+                    $idRef = $positionId ?: $orderId ?: (string) $matchedTrade->id;
+                    $ref = 'TRADE #'.$idRef;
+                }
+                $log->linked_trade = $ref;
 
                 if ($matchedTrade->status === 'failed') {
                     $log->trade_outcome = 'FAILED';
                 } elseif ($matchedTrade->status === 'success') {
-                    $log->trade_outcome = 'PENDING';
+                    $resolvedOutcome = strtoupper(trim((string) ($matchedTrade->trade_outcome ?? '')));
+                    $log->trade_outcome = $resolvedOutcome !== '' ? $resolvedOutcome : 'PENDING';
+                    if (is_numeric($matchedTrade->trade_pnl ?? null)) {
+                        $log->trade_pnl = (float) $matchedTrade->trade_pnl;
+                    }
                 }
             } elseif ($log->status === 'ai_rejected' || str_ends_with((string) $log->status, '_rejected')) {
                 $log->trade_outcome = 'NOT_OPENED';

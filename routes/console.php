@@ -1708,6 +1708,12 @@ Artisan::command('mt5:auto-forex
                 ]]);
                 $opened++;
                 $openBySymbol[$symbol] = true;
+                $firstOrder = is_array($result['orders'][0] ?? null) ? $result['orders'][0] : null;
+                $firstResponse = is_array($firstOrder['response'] ?? null) ? $firstOrder['response'] : [];
+                $orderId = trim((string) ($firstResponse['orderId'] ?? ''));
+                $positionId = trim((string) ($firstResponse['positionId'] ?? ''));
+                $tradeRef = $positionId !== '' ? $positionId : ($orderId !== '' ? $orderId : (string) $symbol);
+
                 $this->info('Opened '.$side.' '.$symbol.' TP='.$takeProfit.' SL='.$stopLoss);
                 Log::info('Auto bot opened trade', ['symbol' => $symbol, 'side' => $side, 'result' => $result]);
                 BotTradeLog::query()->create(array_merge($botLogDefaults, [
@@ -1715,6 +1721,10 @@ Artisan::command('mt5:auto-forex
                     'status' => 'success',
                     'symbol' => $symbol,
                     'side' => $side,
+                    'order_id' => $orderId !== '' ? $orderId : null,
+                    'position_id' => $positionId !== '' ? $positionId : null,
+                    'linked_trade' => 'TRADE #'.$tradeRef,
+                    'trade_outcome' => 'PENDING',
                     'lot_size' => $lotSize,
                     'entry_price' => $entry,
                     'take_profit' => $takeProfit,
@@ -1757,6 +1767,8 @@ Artisan::command('mt5:auto-forex
                     'status' => 'failed',
                     'symbol' => $symbol,
                     'side' => $side,
+                    'trade_outcome' => 'FAILED',
+                    'trade_resolved_at' => now(),
                     'lot_size' => $lotSize,
                     'entry_price' => $entry,
                     'take_profit' => $takeProfit,
