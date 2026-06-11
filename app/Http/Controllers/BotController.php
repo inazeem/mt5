@@ -1272,7 +1272,22 @@ class BotController extends Controller
             ];
         });
 
-        if (!$allowRemoteFetch || empty($snapshot['positions'])) {
+        if (!$allowRemoteFetch) {
+            return $snapshot;
+        }
+
+        // If DB has no pending rows but broker still has open positions,
+        // fall back to live snapshot so analytics remains accurate.
+        if (empty($snapshot['positions'])) {
+            $liveSnapshot = $this->openSnapshotCached($mt5Service, true);
+            $livePositionsPayload = $liveSnapshot['positions'] ?? null;
+            $livePositions = (is_array($livePositionsPayload) && array_is_list($livePositionsPayload)) ? $livePositionsPayload : [];
+
+            if (!empty($livePositions)) {
+                $liveSnapshot['positions'] = $this->enrichPositionsWithLiveQuotes($mt5Service, $livePositions);
+                return $liveSnapshot;
+            }
+
             return $snapshot;
         }
 
