@@ -1039,6 +1039,21 @@ class BotController extends Controller
      */
     private function reconcilePendingTradeOutcomes(Mt5Service $mt5Service): void
     {
+        $throttleKey = 'bot_pending_reconcile_last_run_at_v1';
+        $lastRunRaw = Cache::get($throttleKey);
+        if (is_string($lastRunRaw) && trim($lastRunRaw) !== '') {
+            try {
+                $lastRunAt = \Carbon\Carbon::parse($lastRunRaw);
+                if ($lastRunAt->gt(now()->subSeconds(45))) {
+                    return;
+                }
+            } catch (Throwable) {
+                // Ignore malformed cache values and continue.
+            }
+        }
+
+        Cache::put($throttleKey, now()->toIso8601String(), now()->addMinutes(10));
+
         $this->bootstrapPendingOutcomesFromHistory($mt5Service);
         $this->resolvePendingOutcomesFromActiveSnapshot($mt5Service);
     }
@@ -1051,8 +1066,21 @@ class BotController extends Controller
     private function bootstrapPendingOutcomesFromHistory(Mt5Service $mt5Service): void
     {
         $bootstrapKey = 'bot_pending_history_bootstrap_done_v1';
+        $retryAfterKey = 'bot_pending_history_bootstrap_retry_after_v1';
         if (Cache::has($bootstrapKey)) {
             return;
+        }
+
+        $retryAfterRaw = Cache::get($retryAfterKey);
+        if (is_string($retryAfterRaw) && trim($retryAfterRaw) !== '') {
+            try {
+                $retryAfter = \Carbon\Carbon::parse($retryAfterRaw);
+                if ($retryAfter->isFuture()) {
+                    return;
+                }
+            } catch (Throwable) {
+                // Ignore malformed retry values and continue.
+            }
         }
 
         $pendingTrades = BotTradeLog::query()
@@ -1074,6 +1102,7 @@ class BotController extends Controller
             $deals = $mt5Service->getHistoryDeals(now()->subDays(30), now());
         } catch (Throwable $e) {
             logger()->warning('pending history bootstrap skipped', ['error' => $e->getMessage()]);
+            Cache::put($retryAfterKey, now()->addMinutes(10)->toIso8601String(), now()->addMinutes(10));
             return;
         }
 
@@ -1144,6 +1173,7 @@ class BotController extends Controller
         }
 
         Cache::put($bootstrapKey, true, now()->addDays(30));
+        Cache::forget($retryAfterKey);
     }
 
     /**

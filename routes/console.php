@@ -1113,7 +1113,49 @@ Artisan::command('mt5:auto-forex
             return true;
         };
 
+        $metaApiPauseKey = 'metaapi_outage_pause_until';
+        $metaApiPauseMinutes = 3;
+        $isMetaApiOutageError = static function (string $message): bool {
+            $upper = strtoupper($message);
+
+            return str_contains($upper, 'TIMEOUTERROR')
+                || str_contains($upper, 'OPERATION TIMED OUT')
+                || str_contains($upper, 'CURL ERROR 28')
+                || str_contains($upper, 'GATEWAY TIMEOUT')
+                || str_contains($upper, ' 504 ')
+                || str_contains($upper, 'NOT CONNE')
+                || str_contains($upper, 'NOT CONNECTED')
+                || str_contains($upper, 'ECONNRESET')
+                || str_contains($upper, 'CONNECTION RESET');
+        };
+
         foreach ($symbols as $symbol) {
+            $pauseUntilRaw = Cache::get($metaApiPauseKey);
+            if (is_string($pauseUntilRaw) && trim($pauseUntilRaw) !== '') {
+                try {
+                    $pauseUntil = \Carbon\Carbon::parse($pauseUntilRaw);
+                    if ($pauseUntil->isFuture()) {
+                        $remaining = now()->diffInSeconds($pauseUntil);
+                        $message = 'MetaApi outage cooldown active; skipping symbol scans for this cycle.';
+                        $this->warn('  '.$message.' remaining='.$remaining.'s');
+
+                        BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                            'event_type' => 'guardrail',
+                            'status' => 'metaapi_cooldown_skip',
+                            'message' => $message,
+                            'meta_payload' => [
+                                'pause_until' => $pauseUntil->toIso8601String(),
+                                'remaining_seconds' => $remaining,
+                            ],
+                        ]));
+
+                        break;
+                    }
+                } catch (\Throwable) {
+                    // Ignore malformed pause values and continue.
+                }
+            }
+
             if ($scanDelayMs > 0 && $scanned > 0) {
                 usleep($scanDelayMs * 1000);
             }
@@ -1146,6 +1188,13 @@ Artisan::command('mt5:auto-forex
                 if (str_contains($upperError, 'TOOMANYREQUESTS') || str_contains($upperError, '429')) {
                     $stoppedByRateLimit = true;
                     $this->warn('  Rate limit detected; stopping remaining symbol scans for this cycle.');
+                    break;
+                }
+
+                if ($isMetaApiOutageError($errorMessage)) {
+                    $pauseUntil = now()->addMinutes($metaApiPauseMinutes);
+                    Cache::put($metaApiPauseKey, $pauseUntil->toIso8601String(), $pauseUntil);
+                    $this->warn('  MetaApi connectivity outage detected; pausing scans for '.$metaApiPauseMinutes.' minutes.');
                     break;
                 }
 
