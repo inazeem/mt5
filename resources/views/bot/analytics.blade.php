@@ -201,7 +201,7 @@
     <script>
         (function () {
             const liveUrl = @json(route('bot.analytics.live'));
-            const fastIntervalMs = 60000;
+            const fastIntervalMs = 20000;
             const maxIntervalMs = 300000;
             const refreshBtn = document.getElementById('analytics-refresh-btn');
             let currentInterval = fastIntervalMs;
