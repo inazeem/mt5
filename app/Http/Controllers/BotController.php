@@ -191,8 +191,16 @@ class BotController extends Controller
     {
         $settings = AppSetting::singleton();
 
-        // Keep initial analytics render fast by avoiding network calls.
-        $payload = $this->buildAnalyticsPayload($mt5Service, false, 'page');
+        try {
+            // Keep initial analytics render fast by avoiding network calls.
+            $payload = $this->buildAnalyticsPayload($mt5Service, false, 'page');
+        } catch (Throwable $e) {
+            logger()->error('analytics page payload failed', [
+                'error' => $e->getMessage(),
+            ]);
+            $payload = $this->analyticsFallbackPayload($e->getMessage());
+        }
+
         $openSnapshot = $payload['openSnapshot'];
         $positions = $payload['positions'];
         $stats = $payload['stats'];
@@ -202,7 +210,14 @@ class BotController extends Controller
 
     public function analyticsLive(Mt5Service $mt5Service)
     {
-        $payload = $this->buildAnalyticsPayload($mt5Service, true, 'live');
+        try {
+            $payload = $this->buildAnalyticsPayload($mt5Service, true, 'live');
+        } catch (Throwable $e) {
+            logger()->error('analytics live payload failed', [
+                'error' => $e->getMessage(),
+            ]);
+            $payload = $this->analyticsFallbackPayload($e->getMessage());
+        }
 
         return response()->json([
             'ok' => true,
@@ -938,6 +953,37 @@ class BotController extends Controller
             'openSnapshot' => $openSnapshot,
             'positions' => $positions,
             'stats' => array_merge($stats, $historyStats),
+        ];
+    }
+
+    private function analyticsFallbackPayload(?string $errorMessage = null): array
+    {
+        $error = trim((string) $errorMessage);
+        $historyError = $error !== '' ? $error : 'Analytics data is temporarily unavailable.';
+
+        return [
+            'openSnapshot' => [
+                'positions' => [],
+                'orders' => [],
+                'error' => $error !== '' ? $error : 'Could not load active positions right now.',
+            ],
+            'positions' => [],
+            'stats' => [
+                'active_positions' => 0,
+                'today_signals' => 0,
+                'today_opened' => 0,
+                'today_rejected_ai' => 0,
+                'today_failed' => 0,
+                'today_trailing_updates' => 0,
+                'total_pnl' => null,
+                'total_trades' => null,
+                'winning_trades' => null,
+                'losing_trades' => null,
+                'win_rate' => null,
+                'avg_win' => null,
+                'avg_loss' => null,
+                'history_error' => $historyError,
+            ],
         ];
     }
 
