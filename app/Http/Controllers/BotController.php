@@ -807,11 +807,10 @@ class BotController extends Controller
         $startedAt = microtime(true);
 
         $openStart = microtime(true);
-        $openSnapshot = $this->openSnapshotCached($mt5Service, $allowRemoteFetch);
+        $openSnapshot = $this->activeTradesSnapshotCached();
         $openDurationMs = (int) round((microtime(true) - $openStart) * 1000);
 
-        $positionsPayload = $openSnapshot['positions'] ?? null;
-        $positions = (is_array($positionsPayload) && array_is_list($positionsPayload)) ? $positionsPayload : [];
+        $positions = $openSnapshot['positions'] ?? [];
 
         $todayStatsStart = microtime(true);
         $todayStart = now()->startOfDay();
@@ -837,7 +836,6 @@ class BotController extends Controller
 
         if (
             $totalDurationMs >= self::ANALYTICS_SLOW_MS
-            || !empty($openSnapshot['error'])
             || !empty($historyStats['history_error'])
         ) {
             logger()->warning('analytics payload timing', [
@@ -848,7 +846,7 @@ class BotController extends Controller
                 'today_stats_ms' => $todayStatsDurationMs,
                 'history_ms' => $historyDurationMs,
                 'positions_count' => count($positions),
-                'open_error' => $openSnapshot['error'] ?? null,
+                'open_error' => null,
                 'history_error' => $historyStats['history_error'] ?? null,
             ]);
         }
@@ -863,13 +861,12 @@ class BotController extends Controller
     private function analyticsFallbackPayload(?string $errorMessage = null): array
     {
         $error = trim((string) $errorMessage);
-        $historyError = $error !== '' ? $error : 'Analytics data is temporarily unavailable.';
 
         return [
             'openSnapshot' => [
                 'positions' => [],
                 'orders' => [],
-                'error' => $error !== '' ? $error : 'Could not load active positions right now.',
+                'error' => null,
             ],
             'positions' => [],
             'stats' => [
@@ -886,9 +883,50 @@ class BotController extends Controller
                 'win_rate' => null,
                 'avg_win' => null,
                 'avg_loss' => null,
-                'history_error' => $historyError,
+                'history_error' => $error !== '' ? $error : 'Analytics data is temporarily unavailable.',
             ],
         ];
+    }
+
+    private function activeTradesSnapshotCached(): array
+    {
+        $cacheKey = 'bot_analytics_active_trades_db_v1';
+
+        return Cache::remember($cacheKey, now()->addSeconds(15), function () {
+            $activeTrades = BotTradeLog::query()
+                ->where('event_type', 'trade_open')
+                ->where('status', 'success')
+                ->where(function ($query) {
+                    $query->whereNull('trade_outcome')
+                        ->orWhere('trade_outcome', 'PENDING');
+                })
+                ->orderByDesc('created_at')
+                ->get();
+
+            $positions = $activeTrades->map(static function (BotTradeLog $log): array {
+                $tradeType = strtolower((string) ($log->side ?? 'buy')) === 'sell' ? 'sell' : 'buy';
+
+                return [
+                    'symbol' => (string) ($log->symbol ?? '-'),
+                    'type' => strtoupper($tradeType),
+                    'volume' => (float) ($log->lot_size ?? 0),
+                    'openPrice' => is_numeric($log->entry_price) ? (float) $log->entry_price : null,
+                    'currentPrice' => is_numeric($log->entry_price) ? (float) $log->entry_price : null,
+                    'stopLoss' => is_numeric($log->stop_loss) ? (float) $log->stop_loss : null,
+                    'takeProfit' => is_numeric($log->take_profit) ? (float) $log->take_profit : null,
+                    'profit' => is_numeric($log->trade_pnl) ? (float) $log->trade_pnl : 0,
+                    'positionId' => (string) ($log->position_id ?? ''),
+                    'orderId' => (string) ($log->order_id ?? ''),
+                    'tradeOutcome' => (string) ($log->trade_outcome ?? 'PENDING'),
+                ];
+            })->values()->all();
+
+            return [
+                'positions' => $positions,
+                'orders' => [],
+                'error' => null,
+            ];
+        });
     }
 
     private function openSnapshotCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true): array
