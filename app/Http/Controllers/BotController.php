@@ -923,7 +923,7 @@ class BotController extends Controller
 
     private function historyStatsCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true): array
     {
-        $cacheKey = 'bot_analytics_history_30d';
+        $cacheKey = 'bot_analytics_history_30d_v2';
         $default = [
             'total_pnl' => null,
             'total_trades' => null,
@@ -940,14 +940,42 @@ class BotController extends Controller
             return array_merge($default, $cached);
         }
 
-        if (!$allowRemoteFetch) {
-            return $default;
-        }
+        return Cache::remember($cacheKey, now()->addMinutes(5), function () use ($default) {
+            $from = now()->subDays(30);
 
-        return Cache::remember($cacheKey, now()->addMinutes(10), function () use ($default) {
-            // Completed-trade outcomes are now local-only; analytics no longer calls MetaAPI history.
+            $resolvedTrades = BotTradeLog::query()
+                ->where('event_type', 'trade_open')
+                ->where('status', 'success')
+                ->where('created_at', '>=', $from)
+                ->whereIn('trade_outcome', ['WIN', 'LOSS', 'BREAKEVEN'])
+                ->get(['trade_outcome', 'trade_pnl']);
+
+            if ($resolvedTrades->isEmpty()) {
+                return $default;
+            }
+
+            $profits = $resolvedTrades
+                ->pluck('trade_pnl')
+                ->filter(static fn ($value) => is_numeric($value))
+                ->map(static fn ($value) => (float) $value)
+                ->values();
+
+            $totalTrades = $resolvedTrades->count();
+            $winCount = $resolvedTrades->where('trade_outcome', 'WIN')->count();
+            $lossCount = $resolvedTrades->where('trade_outcome', 'LOSS')->count();
+
+            $wins = $profits->filter(static fn (float $value) => $value > 0)->values();
+            $losses = $profits->filter(static fn (float $value) => $value < 0)->values();
+
             return array_merge($default, [
-                'history_error' => 'Completed trade outcomes are local-only. Pending and active trades are fetched live.',
+                'total_pnl' => $profits->sum(),
+                'total_trades' => $totalTrades,
+                'winning_trades' => $winCount,
+                'losing_trades' => $lossCount,
+                'win_rate' => $totalTrades > 0 ? round(($winCount / $totalTrades) * 100, 1) : null,
+                'avg_win' => $wins->isNotEmpty() ? $wins->avg() : null,
+                'avg_loss' => $losses->isNotEmpty() ? $losses->avg() : null,
+                'history_error' => null,
             ]);
         });
     }
