@@ -1106,6 +1106,7 @@ class BotController extends Controller
     private function reconcilePendingTradeOutcomes(Mt5Service $mt5Service): void
     {
         $this->bootstrapPendingOutcomesFromHistory($mt5Service);
+        $this->resolvePendingOutcomesFromActiveSnapshot($mt5Service);
     }
 
     /**
@@ -1329,75 +1330,16 @@ class BotController extends Controller
             return;
         }
 
-        $snapshot = $this->openSnapshotCached($mt5Service, true);
-        $positions = is_array($snapshot['positions'] ?? null) ? $snapshot['positions'] : [];
-        $orders = is_array($snapshot['orders'] ?? null) ? $snapshot['orders'] : [];
-
-        $activePositionIds = [];
-        foreach ($positions as $position) {
-            if (!is_array($position)) {
-                continue;
-            }
-            $id = trim((string) ($position['id'] ?? $position['positionId'] ?? $position['position_id'] ?? ''));
-            if ($id !== '') {
-                $activePositionIds[$id] = true;
-            }
-        }
-
-        $activeOrderIds = [];
-        foreach ($orders as $order) {
-            if (!is_array($order)) {
-                continue;
-            }
-            $id = trim((string) ($order['id'] ?? $order['orderId'] ?? $order['order_id'] ?? ''));
-            if ($id !== '') {
-                $activeOrderIds[$id] = true;
-            }
-        }
-
+        // Keep trades pending until an actual close outcome is resolved.
         foreach ($pendingTrades as $tradeLog) {
-            $positionId = trim((string) ($tradeLog->position_id ?? ''));
-            $orderId = trim((string) ($tradeLog->order_id ?? ''));
-
-            $isActive = false;
-            if ($positionId !== '' && isset($activePositionIds[$positionId])) {
-                $isActive = true;
+            if (strtoupper((string) ($tradeLog->trade_outcome ?? '')) !== 'PENDING') {
+                $tradeLog->trade_outcome = 'PENDING';
+                $tradeLog->trade_resolved_at = null;
+                $tradeLog->save();
             }
-            if (!$isActive && $orderId !== '' && isset($activeOrderIds[$orderId])) {
-                $isActive = true;
-            }
-
-            if ($isActive) {
-                continue;
-            }
-
-            $tradeLog->trade_outcome = 'ERROR';
-            $tradeLog->trade_resolved_at = now();
-            if (!is_numeric($tradeLog->trade_pnl ?? null)) {
-                $tradeLog->trade_pnl = 0;
-            }
-            $existingMessage = trim((string) ($tradeLog->message ?? ''));
-            $suffix = 'Trade is no longer active and was not found in open positions/orders.';
-            $tradeLog->message = $existingMessage === '' ? $suffix : $existingMessage.' '.$suffix;
-            $tradeLog->save();
         }
 
         foreach ($erroredTrades as $tradeLog) {
-            $positionId = trim((string) ($tradeLog->position_id ?? ''));
-            $orderId = trim((string) ($tradeLog->order_id ?? ''));
-
-            $isActive = false;
-            if ($positionId !== '' && isset($activePositionIds[$positionId])) {
-                $isActive = true;
-            }
-            if (!$isActive && $orderId !== '' && isset($activeOrderIds[$orderId])) {
-                $isActive = true;
-            }
-
-            if (!$isActive) {
-                continue;
-            }
-
             $tradeLog->trade_outcome = 'PENDING';
             $tradeLog->trade_resolved_at = null;
             $tradeLog->message = preg_replace('/\s*Trade is no longer active and was not found in open positions\/orders\.\s*/', ' ', (string) ($tradeLog->message ?? '')) ?? (string) ($tradeLog->message ?? '');
