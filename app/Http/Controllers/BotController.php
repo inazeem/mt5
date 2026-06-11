@@ -656,63 +656,6 @@ class BotController extends Controller
             $tradeBuckets[$key][] = $tradeLog;
         }
 
-        $closingDealsBySymbol = [];
-        $closingDealsByPosition = [];
-        try {
-            $deals = $mt5Service->getHistoryDeals(now()->subDays(30), now());
-            foreach ($deals as $deal) {
-                if (!is_array($deal)) {
-                    continue;
-                }
-
-                $entry = strtoupper((string) ($deal['entryType'] ?? $deal['entry'] ?? ''));
-                if (!str_contains($entry, 'OUT')) {
-                    continue;
-                }
-
-                $symbolKey = $normalizeSymbolForMatch((string) ($deal['symbol'] ?? ''));
-                if ($symbolKey === '') {
-                    continue;
-                }
-
-                $timeRaw = $deal['brokerTime'] ?? $deal['time'] ?? null;
-                if (!$timeRaw) {
-                    continue;
-                }
-
-                try {
-                    $dealTime = \Carbon\Carbon::parse((string) $timeRaw);
-                } catch (\Throwable) {
-                    continue;
-                }
-
-                $dealRecord = [
-                    'time' => $dealTime,
-                    'profit' => (float) ($deal['profit'] ?? 0),
-                    'used' => false,
-                ];
-
-                $closingDealsBySymbol[$symbolKey][] = $dealRecord;
-
-                $positionId = trim((string) ($deal['positionId'] ?? $deal['position_id'] ?? ''));
-                if ($positionId !== '') {
-                    $closingDealsByPosition[$positionId][] = $dealRecord;
-                }
-            }
-
-            foreach ($closingDealsBySymbol as $symbolKey => $symbolDeals) {
-                usort($symbolDeals, static fn ($a, $b) => $a['time']->lessThan($b['time']) ? -1 : 1);
-                $closingDealsBySymbol[$symbolKey] = $symbolDeals;
-            }
-            foreach ($closingDealsByPosition as $positionId => $positionDeals) {
-                usort($positionDeals, static fn ($a, $b) => $a['time']->lessThan($b['time']) ? -1 : 1);
-                $closingDealsByPosition[$positionId] = $positionDeals;
-            }
-        } catch (\Throwable) {
-            $closingDealsBySymbol = [];
-            $closingDealsByPosition = [];
-        }
-
         $buildReasoning = static function (?string $aiSummary, ?string $message, ?string $errorMessage, array $metaPayload): string {
             $parts = [];
 
@@ -765,7 +708,7 @@ class BotController extends Controller
             return implode("\n", $parts);
         };
 
-        return $logs->transform(static function (BotTradeLog $log) use (&$tradeBuckets, &$closingDealsBySymbol, &$closingDealsByPosition, $normalizeSymbolForMatch, $buildReasoning) {
+        return $logs->transform(static function (BotTradeLog $log) use (&$tradeBuckets, $normalizeSymbolForMatch, $buildReasoning) {
             $delta = is_numeric($log->signal_delta_pips) ? abs((float) $log->signal_delta_pips) : null;
             $spread = is_numeric($log->spread_pips) ? (float) $log->spread_pips : null;
             $metaPayload = is_array($log->meta_payload) ? $log->meta_payload : [];
@@ -819,58 +762,6 @@ class BotController extends Controller
                     $log->trade_outcome = 'FAILED';
                 } elseif ($matchedTrade->status === 'success') {
                     $log->trade_outcome = 'PENDING';
-
-                    $resolveOutcome = static function (float $profit): string {
-                        if ($profit > 0) {
-                            return 'WIN';
-                        }
-                        if ($profit < 0) {
-                            return 'LOSS';
-                        }
-
-                        return 'BREAKEVEN';
-                    };
-
-                    if (!empty($positionId) && isset($closingDealsByPosition[$positionId])) {
-                        foreach ($closingDealsByPosition[$positionId] as $dealIdx => $deal) {
-                            if (($deal['used'] ?? false) === true) {
-                                continue;
-                            }
-                            if ($deal['time']->lt($matchedTrade->created_at)) {
-                                continue;
-                            }
-                            if ($deal['time']->gt($matchedTrade->created_at->copy()->addDays(7))) {
-                                break;
-                            }
-
-                            $closingDealsByPosition[$positionId][$dealIdx]['used'] = true;
-                            $profit = (float) ($deal['profit'] ?? 0);
-                            $log->trade_outcome = $resolveOutcome($profit);
-                            $log->trade_pnl = $profit;
-                            break;
-                        }
-                    }
-
-                    $symbolKey = $normalizeSymbolForMatch((string) ($log->symbol ?? ''));
-                    if ($log->trade_outcome === 'PENDING' && isset($closingDealsBySymbol[$symbolKey])) {
-                        foreach ($closingDealsBySymbol[$symbolKey] as $dealIdx => $deal) {
-                            if (($deal['used'] ?? false) === true) {
-                                continue;
-                            }
-                            if ($deal['time']->lt($matchedTrade->created_at)) {
-                                continue;
-                            }
-                            if ($deal['time']->gt($matchedTrade->created_at->copy()->addDays(7))) {
-                                break;
-                            }
-
-                            $closingDealsBySymbol[$symbolKey][$dealIdx]['used'] = true;
-                            $profit = (float) ($deal['profit'] ?? 0);
-                            $log->trade_outcome = $resolveOutcome($profit);
-                            $log->trade_pnl = $profit;
-                            break;
-                        }
-                    }
                 }
             } elseif ($log->status === 'ai_rejected' || str_ends_with((string) $log->status, '_rejected')) {
                 $log->trade_outcome = 'NOT_OPENED';
@@ -1040,44 +931,11 @@ class BotController extends Controller
             return $default;
         }
 
-        return Cache::remember($cacheKey, now()->addMinutes(10), function () use ($mt5Service, $default) {
-            $history = $default;
-
-            try {
-                $deals = $mt5Service->getHistoryDeals(now()->subDays(30), now());
-
-                $closingDeals = array_filter($deals, static function (mixed $deal): bool {
-                    if (!is_array($deal)) {
-                        return false;
-                    }
-                    $entry = strtoupper((string) ($deal['entryType'] ?? $deal['entry'] ?? ''));
-                    return str_contains($entry, 'OUT');
-                });
-
-                $wins = array_filter($closingDeals, fn ($d) => (float) ($d['profit'] ?? 0) > 0);
-                $losses = array_filter($closingDeals, fn ($d) => (float) ($d['profit'] ?? 0) < 0);
-
-                $totalPnl = array_sum(array_column(array_values($closingDeals), 'profit'));
-                $totalTrades = count($closingDeals);
-                $winCount = count($wins);
-                $lossCount = count($losses);
-
-                $history['total_pnl'] = $totalPnl;
-                $history['total_trades'] = $totalTrades;
-                $history['winning_trades'] = $winCount;
-                $history['losing_trades'] = $lossCount;
-                $history['win_rate'] = $totalTrades > 0 ? round(($winCount / $totalTrades) * 100, 1) : null;
-                $history['avg_win'] = $winCount > 0
-                    ? array_sum(array_column(array_values($wins), 'profit')) / $winCount
-                    : null;
-                $history['avg_loss'] = $lossCount > 0
-                    ? array_sum(array_column(array_values($losses), 'profit')) / $lossCount
-                    : null;
-            } catch (Throwable $e) {
-                $history['history_error'] = $e->getMessage();
-            }
-
-            return $history;
+        return Cache::remember($cacheKey, now()->addMinutes(10), function () use ($default) {
+            // Completed-trade outcomes are now local-only; analytics no longer calls MetaAPI history.
+            return array_merge($default, [
+                'history_error' => 'Completed trade outcomes are local-only. Pending and active trades are fetched live.',
+            ]);
         });
     }
 
