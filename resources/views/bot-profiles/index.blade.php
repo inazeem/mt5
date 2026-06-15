@@ -34,6 +34,7 @@
                                     <th class="py-3 px-4">Name</th>
                                     <th class="py-3 px-4">Status</th>
                                     <th class="py-3 px-4">Strategy</th>
+                                    <th class="py-3 px-4">Reverse</th>
                                     <th class="py-3 px-4">Timeframe</th>
                                     <th class="py-3 px-4">Lot</th>
                                     <th class="py-3 px-4">TP/SL (pips)</th>
@@ -69,6 +70,13 @@
                                                 {{ strtoupper(implode(',', $profileStrategies)) }}
                                             @else
                                                 <span class="text-gray-400">DEFAULT</span>
+                                            @endif
+                                        </td>
+                                        <td class="py-3 px-4 text-xs">
+                                            @if ((bool) ($profile['reverse_strategy'] ?? false))
+                                                <span class="inline-flex items-center rounded px-2.5 py-0.5 text-xs font-semibold bg-amber-100 text-amber-700">ON</span>
+                                            @else
+                                                <span class="text-gray-400">OFF</span>
                                             @endif
                                         </td>
                                         <td class="py-3 px-4 text-xs">
