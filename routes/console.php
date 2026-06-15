@@ -49,6 +49,7 @@ Artisan::command('mt5:auto-forex
     {--strategy=momentum : Legacy single strategy option (prefer --strategies)}
     {--strategies= : Comma-separated strategies (momentum,sma_cross,ema_cross,bollinger_reversion,vwap_reversion)}
     {--scalper=1 : 1 enables scalper mode (quick in/out), 0 keeps normal mode}
+    {--reverse-strategy=0 : 1 flips strategy direction (buy<->sell), 0 keeps normal direction}
     {--trend-filter=0 : 1 requires all selected trend timeframes to align with the signal side}
     {--signal-timeframes= : Comma-separated trend timeframes (5m,15m,30m,1h,4h). Example: 5m,15m,1h}
     {--entry-timeframe= : Final entry trigger timeframe (must be one of signal timeframes; defaults to lowest selected)}
@@ -557,6 +558,8 @@ Artisan::command('mt5:auto-forex
         $strategyParams = array_merge($globalStrategyParams, $profileStrategyParams);
         $scalperSetting = $optionOrProfileOrSetting('scalper', $botProfile['scalper'] ?? null, null, 1);
         $scalperMode = (string) $scalperSetting !== '0' && (bool) $scalperSetting;
+        $reverseStrategySetting = $optionOrProfileOrSetting('reverse-strategy', $botProfile['reverse_strategy'] ?? null, null, 0);
+        $reverseStrategy = (string) $reverseStrategySetting !== '0' && (bool) $reverseStrategySetting;
         $trendFilterSetting = $optionOrProfileOrSetting('trend-filter', $botProfile['trend_filter'] ?? null, null, 0);
         $useTrendFilter = (string) $trendFilterSetting !== '0' && (bool) $trendFilterSetting;
         $trendTimeframes = $normalizeTimeframeList($optionOrProfileOrSetting(
@@ -678,6 +681,7 @@ Artisan::command('mt5:auto-forex
         $this->line('Volume settings  multiplier='.$volumeMultiplier.'  minEffectiveVolume='.$minEffectiveVolume);
         $this->line('Cycle credit budget '.($maxCycleCredits > 0 ? $maxCycleCredits : 'OFF'));
         $this->line('Strategies '.strtoupper(implode(',', $selectedStrategyKeys)).' on '.strtoupper($entryTimeframe));
+        $this->line('Reverse strategy '.($reverseStrategy ? 'ON' : 'OFF'));
 
         // Force UTC timezone to ensure correct time comparison
         date_default_timezone_set('UTC');
@@ -1355,6 +1359,10 @@ Artisan::command('mt5:auto-forex
                 $signalDeltaPips = !empty($strategySignalStrengths)
                     ? (float) (array_sum($strategySignalStrengths) / count($strategySignalStrengths))
                     : 0.0;
+            }
+
+            if ($reverseStrategy) {
+                $side = $side === 'buy' ? 'sell' : 'buy';
             }
             $effectiveVolume = $lotSize * $volumeMultiplier;
             $botScore = $calculateBotScore($signalDeltaPips, $spreadPips, $effectiveVolume, $minEffectiveVolume);

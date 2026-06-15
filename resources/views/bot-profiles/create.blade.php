@@ -233,6 +233,10 @@
                             <input type="checkbox" id="scalper" name="scalper" value="1" {{ old('scalper') ? 'checked' : '' }} class="rounded border-gray-300" />
                             <span class="text-sm text-gray-700">Enable scalper mode</span>
                         </label>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" id="reverse_strategy" name="reverse_strategy" value="1" {{ old('reverse_strategy') ? 'checked' : '' }} class="rounded border-gray-300" />
+                            <span class="text-sm text-gray-700">Reverse strategy side (buy/sell inversion)</span>
+                        </label>
                     </div>
 
                     <div class="rounded border border-gray-200 p-4">
