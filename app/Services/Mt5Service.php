@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Ticker;
 use App\Models\AppSetting;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
@@ -20,6 +21,7 @@ use RuntimeException;
  */
 class Mt5Service
 {
+    private const KNOWN_FX_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD'];
     private const BASE_URL = 'https://mt-client-api-v1.{region}.agiliumtrade.ai';
     private const MARKET_DATA_BASE_URL = 'https://mt-market-data-client-api-v1.{region}.agiliumtrade.ai';
     private const METAAPI_TIMEOUT_SECONDS = 12;
@@ -35,6 +37,10 @@ class Mt5Service
     private const ACCOUNT_INFO_CACHE_SECONDS = 20;
     private const ACCOUNT_INFO_MAX_RETRIES = 2;
     private const ACCOUNT_INFO_BACKOFF_BASE_MS = 400;
+    /**
+     * @var array<string, array{pip_size: float|null, category: string|null}>
+     */
+    private array $tickerMetaCache = [];
 
     /**
      * Place a new market order, optionally split into multiple exit legs.
@@ -710,6 +716,7 @@ class Mt5Service
             }
 
             $pipSize = $this->pipSize($symbol);
+            $pricePrecision = $this->pricePrecisionForPipSize($pipSize);
 
             $resolvedStartPips = $startPips;
             $resolvedTrailPips = $trailPips;
@@ -747,7 +754,7 @@ class Mt5Service
                     continue;
                 }
 
-                $newSl = round($currentPrice - $trailDistance, 5);
+                $newSl = round($currentPrice - $trailDistance, $pricePrecision);
                 if ($currentSl !== null && $newSl <= $currentSl) {
                     $skipped++;
                     continue;
@@ -759,7 +766,7 @@ class Mt5Service
                     continue;
                 }
 
-                $newSl = round($currentPrice + $trailDistance, 5);
+                $newSl = round($currentPrice + $trailDistance, $pricePrecision);
                 if ($currentSl !== null && $newSl >= $currentSl) {
                     $skipped++;
                     continue;
@@ -774,12 +781,12 @@ class Mt5Service
                 if ($isBuy) {
                     $tpDistance = $currentTp - $openPrice;
                     if ($tpDistance > 0) {
-                        $newTp = round($openPrice + ($tpDistance * $resolvedTpMultiplier), 5);
+                        $newTp = round($openPrice + ($tpDistance * $resolvedTpMultiplier), $pricePrecision);
                     }
                 } else {
                     $tpDistance = $openPrice - $currentTp;
                     if ($tpDistance > 0) {
-                        $newTp = round($openPrice - ($tpDistance * $resolvedTpMultiplier), 5);
+                        $newTp = round($openPrice - ($tpDistance * $resolvedTpMultiplier), $pricePrecision);
                     }
                 }
             }
@@ -1359,14 +1366,116 @@ class Mt5Service
      */
     private function pipSize(string $symbol): float
     {
-        $upper = strtoupper($symbol);
-        $base = substr($upper, 0, 6);
+        $meta = $this->tickerMetaForSymbol($symbol);
 
-        if (strlen($base) === 6 && str_ends_with($base, 'JPY')) {
-            return 0.01;
+        return $this->resolvePipSize(
+            $symbol,
+            $meta['category'] ?? null,
+            $meta['pip_size'] ?? null
+        );
+    }
+
+    /**
+     * Resolve pip/tick size for a symbol across FX and non-FX assets.
+     */
+    public function resolvePipSize(string $symbol, ?string $category = null, ?float $overridePipSize = null): float
+    {
+        if (is_numeric($overridePipSize) && (float) $overridePipSize > 0) {
+            return (float) $overridePipSize;
         }
 
-        return 0.0001;
+        $normalizedCategory = strtolower(trim((string) $category));
+        if ($normalizedCategory !== '') {
+            if (
+                str_contains($normalizedCategory, 'stock')
+                || str_contains($normalizedCategory, 'equity')
+                || str_contains($normalizedCategory, 'share')
+                || str_contains($normalizedCategory, 'commodity')
+                || str_contains($normalizedCategory, 'metal')
+                || str_contains($normalizedCategory, 'energy')
+                || str_contains($normalizedCategory, 'oil')
+                || str_contains($normalizedCategory, 'gold')
+                || str_contains($normalizedCategory, 'silver')
+                || str_contains($normalizedCategory, 'index')
+                || str_contains($normalizedCategory, 'indice')
+                || str_contains($normalizedCategory, 'crypto')
+                || str_contains($normalizedCategory, 'other')
+            ) {
+                // 1.0 means 1 pip = 1 price point (dollar/index point/coin unit).
+                // This keeps TP/SL/spread config values human-readable for non-FX assets.
+                return 1.0;
+            }
+        }
+
+        $base = $this->baseSymbol($symbol);
+        if ($this->looksLikeForexPair($base)) {
+            return str_ends_with($base, 'JPY') ? 0.01 : 0.0001;
+        }
+
+        // Unknown symbol — default to 1.0 (point-based) so spread/TP/SL stay human-readable.
+        return 1.0;
+    }
+
+    /**
+     * Determine price precision from pip/tick size.
+     */
+    public function pricePrecisionForPipSize(float $pipSize): int
+    {
+        if ($pipSize <= 0) {
+            return 5;
+        }
+
+        $formatted = rtrim(rtrim(sprintf('%.10F', $pipSize), '0'), '.');
+        $dotPos = strpos($formatted, '.');
+        if ($dotPos === false) {
+            return 0;
+        }
+
+        return min(8, max(0, strlen($formatted) - $dotPos - 1));
+    }
+
+    /**
+     * @return array{pip_size: float|null, category: string|null}
+     */
+    private function tickerMetaForSymbol(string $symbol): array
+    {
+        $upper = strtoupper(trim($symbol));
+        if ($upper === '') {
+            return ['pip_size' => null, 'category' => null];
+        }
+
+        if (isset($this->tickerMetaCache[$upper])) {
+            return $this->tickerMetaCache[$upper];
+        }
+
+        $base = $this->baseSymbol($upper);
+        $ticker = Ticker::query()
+            ->whereIn('symbol', array_values(array_unique([$upper, $base])))
+            ->orderByRaw('CASE WHEN symbol = ? THEN 0 ELSE 1 END', [$upper])
+            ->first(['pip_size', 'category']);
+
+        $meta = [
+            'pip_size' => $ticker && is_numeric($ticker->pip_size) ? (float) $ticker->pip_size : null,
+            'category' => $ticker ? (string) ($ticker->category ?? '') : null,
+        ];
+
+        $this->tickerMetaCache[$upper] = $meta;
+
+        return $meta;
+    }
+
+    private function looksLikeForexPair(string $symbol): bool
+    {
+        $base = strtoupper(trim($symbol));
+        if (!preg_match('/^[A-Z]{6}$/', $base)) {
+            return false;
+        }
+
+        $baseCurrency = substr($base, 0, 3);
+        $quoteCurrency = substr($base, 3, 3);
+
+        return in_array($baseCurrency, self::KNOWN_FX_CURRENCIES, true)
+            && in_array($quoteCurrency, self::KNOWN_FX_CURRENCIES, true);
     }
 
     /**

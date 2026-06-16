@@ -69,7 +69,7 @@
         <x-text-input id="pip_size" name="pip_size" type="number" step="0.00000001" min="0" class="mt-1 block w-48"
                       value="{{ old('pip_size', $ticker->pip_size ?? '') }}"
                       placeholder="Leave blank for auto" />
-        <p class="mt-1 text-xs text-gray-400">Forex auto-detected (0.0001 / 0.01 JPY). Stock/Commodity/Other default: 0.01.</p>
+        <p class="mt-1 text-xs text-gray-400">Forex auto-detected (0.0001 / 0.01 JPY). Stock/Index/Crypto/Other default: 1.0 (1 pip = 1 price point). Leave blank for auto.</p>
         <x-input-error :messages="$errors->get('pip_size')" class="mt-1" />
     </div>
 

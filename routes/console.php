@@ -307,7 +307,9 @@ Artisan::command('mt5:auto-forex
             return $result;
         };
 
-        $classifySpreadCategory = static function (string $symbol, mixed $tickerCategory): string {
+        $knownFxCurrencies = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD'];
+
+        $classifySpreadCategory = static function (string $symbol, mixed $tickerCategory) use ($knownFxCurrencies): string {
             $rawCategory = strtolower(trim((string) $tickerCategory));
             if ($rawCategory !== '') {
                 if (str_contains($rawCategory, 'stock') || str_contains($rawCategory, 'equity') || str_contains($rawCategory, 'share')) {
@@ -340,9 +342,26 @@ Artisan::command('mt5:auto-forex
                 }
             }
 
-            $lettersOnly = preg_replace('/[^A-Z]/', '', strtoupper($symbol)) ?? '';
-            if (strlen($lettersOnly) >= 6 && preg_match('/^[A-Z]{6}/', $lettersOnly) === 1) {
-                return 'forex';
+            $normalized = strtoupper(str_replace('/', '', trim((string) $symbol)));
+            if (str_ends_with($normalized, '_SB')) {
+                $normalized = substr($normalized, 0, -3);
+            }
+
+            if (preg_match('/^[A-Z]{6}$/', $normalized) === 1) {
+                $baseCurrency = substr($normalized, 0, 3);
+                $quoteCurrency = substr($normalized, 3, 3);
+                if (in_array($baseCurrency, $knownFxCurrencies, true) && in_array($quoteCurrency, $knownFxCurrencies, true)) {
+                    return 'forex';
+                }
+            }
+
+            if (
+                str_contains($normalized, 'XAU')
+                || str_contains($normalized, 'XAG')
+                || str_contains($normalized, 'WTI')
+                || str_contains($normalized, 'BRENT')
+            ) {
+                return 'commodity';
             }
 
             return 'other';
@@ -1200,26 +1219,20 @@ Artisan::command('mt5:auto-forex
                 continue;
             }
 
-            $base = substr($symbol, 0, 6);
-            $tickerCategory = $dbTickers->get($symbol)?->category;
+            $ticker = $dbTickers->get($symbol);
+            $tickerCategory = $ticker?->category;
             $spreadCategory = $classifySpreadCategory($symbol, $tickerCategory);
-            $defaultPipSize = match ($spreadCategory) {
-                'stock' => 0.01,
-                'commodity', 'other' => 0.01,
-                default => (str_ends_with($base, 'JPY') ? 0.01 : 0.0001),
-            };
-            $pipSize = (float) ($dbTickers->get($symbol)?->pip_size ?? $defaultPipSize);
-            if ($pipSize <= 0) {
-                $pipSize = $defaultPipSize;
-            }
+            $tickerPipOverride = is_numeric($ticker?->pip_size) ? (float) $ticker->pip_size : null;
+            $pipSize = $mt5Service->resolvePipSize($symbol, is_string($tickerCategory) ? $tickerCategory : null, $tickerPipOverride);
+            $pricePrecision = $mt5Service->pricePrecisionForPipSize($pipSize);
 
             $cacheKey = 'auto_bot_last_bid_'.preg_replace('/[^a-z0-9_]/', '_', strtolower($botKey)).'_'.preg_replace('/[^A-Z0-9_]/', '_', $symbol);
             $lastBid = Cache::get($cacheKey);
             Cache::put($cacheKey, $bid, now()->addHours(6));
             $spreadPips = ($ask - $bid) / $pipSize;
-            $tickerSpreadOverride = $dbTickers->get($symbol)?->max_spread_pips;
-            $tickerTpOverride = $dbTickers->get($symbol)?->max_tp_pips;
-            $tickerSlOverride = $dbTickers->get($symbol)?->max_sl_pips;
+            $tickerSpreadOverride = $ticker?->max_spread_pips;
+            $tickerTpOverride = $ticker?->max_tp_pips;
+            $tickerSlOverride = $ticker?->max_sl_pips;
             $maxSpreadForSymbol = (float) (
                 (is_numeric($tickerSpreadOverride) ? (float) $tickerSpreadOverride : null)
                 ?? $maxSpreadByCategory[$spreadCategory]
@@ -1608,12 +1621,12 @@ Artisan::command('mt5:auto-forex
 
             if ($executionSide === 'buy') {
                 $entry = $ask;
-                $takeProfit = round($entry + ($tpPipsForSymbol * $pipSize), 5);
-                $stopLoss = round($entry - ($slPipsForSymbol * $pipSize), 5);
+                $takeProfit = round($entry + ($tpPipsForSymbol * $pipSize), $pricePrecision);
+                $stopLoss = round($entry - ($slPipsForSymbol * $pipSize), $pricePrecision);
             } else {
                 $entry = $bid;
-                $takeProfit = round($entry - ($tpPipsForSymbol * $pipSize), 5);
-                $stopLoss = round($entry + ($slPipsForSymbol * $pipSize), 5);
+                $takeProfit = round($entry - ($tpPipsForSymbol * $pipSize), $pricePrecision);
+                $stopLoss = round($entry + ($slPipsForSymbol * $pipSize), $pricePrecision);
             }
 
             $aiProvider = null;
