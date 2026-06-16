@@ -15,6 +15,7 @@ class BotController extends Controller
     private const ALLOWED_SIGNAL_TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h'];
     private const ALLOWED_STRATEGIES = ['momentum', 'sma_cross', 'ema_cross', 'bollinger_reversion', 'vwap_reversion'];
     private const ANALYTICS_SLOW_MS = 1000;
+    private const MAX_HISTORY_SYNC_CALLS_PER_DAY = 2;
 
     public function index(Mt5Service $mt5Service)
     {
@@ -1101,130 +1102,137 @@ class BotController extends Controller
     }
 
     /**
-     * Resolve pending trade outcomes using a one-time history backfill then active snapshot checks.
+     * Resolve pending trade outcomes by syncing broker history, then applying active-snapshot checks.
      */
     private function reconcilePendingTradeOutcomes(Mt5Service $mt5Service): void
     {
-        $this->bootstrapPendingOutcomesFromHistory($mt5Service);
+        $this->syncPendingOutcomesFromHistory($mt5Service);
         $this->resolvePendingOutcomesFromActiveSnapshot($mt5Service);
     }
 
     /**
-     * One-time historical backfill for pending trades.
+     * Incrementally resolve pending/error trade outcomes from broker deal history.
      *
-     * This runs once and persists resolved outcomes in bot_trade_logs.
+     * Runs on alerts load with a short lock to avoid duplicate network calls.
      */
-    private function bootstrapPendingOutcomesFromHistory(Mt5Service $mt5Service): void
+    private function syncPendingOutcomesFromHistory(Mt5Service $mt5Service): void
     {
-        $bootstrapKey = 'bot_pending_history_bootstrap_done_v1';
-        $retryAfterKey = 'bot_pending_history_bootstrap_retry_after_v1';
-        if (Cache::has($bootstrapKey)) {
-            return;
-        }
-
-        $retryAfterRaw = Cache::get($retryAfterKey);
-        if (is_string($retryAfterRaw) && trim($retryAfterRaw) !== '') {
-            try {
-                $retryAfter = \Carbon\Carbon::parse($retryAfterRaw);
-                if ($retryAfter->isFuture()) {
-                    return;
-                }
-            } catch (Throwable) {
-                // Ignore malformed retry values and continue.
-            }
-        }
-
-        $pendingTrades = BotTradeLog::query()
-            ->where('event_type', 'trade_open')
-            ->where('status', 'success')
-            ->where(function ($query) {
-                $query->whereNull('trade_outcome')
-                    ->orWhere('trade_outcome', 'PENDING');
-            })
-            ->orderBy('created_at')
-            ->get();
-
-        if ($pendingTrades->isEmpty()) {
-            Cache::put($bootstrapKey, true, now()->addDays(30));
+        $syncLockKey = 'bot_pending_history_sync_lock_v2';
+        if (!Cache::add($syncLockKey, true, now()->addSeconds(20))) {
             return;
         }
 
         try {
-            $deals = $mt5Service->getHistoryDeals(now()->subDays(30), now());
-        } catch (Throwable $e) {
-            logger()->warning('pending history bootstrap skipped', ['error' => $e->getMessage()]);
-            Cache::put($retryAfterKey, now()->addMinutes(10)->toIso8601String(), now()->addMinutes(10));
-            return;
-        }
+            $pendingTrades = BotTradeLog::query()
+                ->where('event_type', 'trade_open')
+                ->where('status', 'success')
+                ->where(function ($query) {
+                    $query->whereNull('trade_outcome')
+                        ->orWhere('trade_outcome', 'PENDING')
+                        ->orWhere('trade_outcome', 'ERROR');
+                })
+                ->whereNotNull('position_id')
+                ->where('position_id', '!=', '')
+                ->orderBy('created_at')
+                ->get();
 
-        $byPosition = [];
-        foreach ($deals as $deal) {
-            if (!is_array($deal)) {
-                continue;
+            if ($pendingTrades->isEmpty()) {
+                return;
             }
 
-            $entry = strtoupper((string) ($deal['entryType'] ?? $deal['entry'] ?? ''));
-            if (!str_contains($entry, 'OUT')) {
-                continue;
+            $dayKey = 'bot_pending_history_sync_calls_v2:'.now('UTC')->format('Ymd');
+            $callsToday = (int) Cache::get($dayKey, 0);
+            if ($callsToday >= self::MAX_HISTORY_SYNC_CALLS_PER_DAY) {
+                return;
             }
 
-            $positionId = trim((string) ($deal['positionId'] ?? $deal['position_id'] ?? ''));
-            if ($positionId === '') {
-                continue;
+            $oldestPending = $pendingTrades->first()?->created_at;
+            $from = $oldestPending ? $oldestPending->copy()->subDays(2) : now()->subDays(30);
+            $minFrom = now()->subDays(45);
+            if ($from->lt($minFrom)) {
+                $from = $minFrom;
             }
-
-            $timeRaw = $deal['brokerTime'] ?? $deal['time'] ?? null;
-            if (!$timeRaw) {
-                continue;
-            }
+            $to = now()->addMinutes(1);
+            Cache::put($dayKey, $callsToday + 1, now('UTC')->endOfDay());
 
             try {
-                $dealTime = \Carbon\Carbon::parse((string) $timeRaw);
-            } catch (Throwable) {
-                continue;
+                $deals = $mt5Service->getHistoryDeals($from, $to);
+            } catch (Throwable $e) {
+                logger()->warning('pending history sync skipped', [
+                    'error' => $e->getMessage(),
+                ]);
+
+                return;
             }
 
-            $byPosition[$positionId][] = [
-                'time' => $dealTime,
-                'profit' => (float) ($deal['profit'] ?? 0),
-                'used' => false,
-            ];
-        }
-
-        foreach ($byPosition as $positionId => $items) {
-            usort($items, static fn ($a, $b) => $a['time']->lt($b['time']) ? -1 : 1);
-            $byPosition[$positionId] = $items;
-        }
-
-        foreach ($pendingTrades as $tradeLog) {
-            $positionId = trim((string) ($tradeLog->position_id ?? ''));
-            if ($positionId === '' || !isset($byPosition[$positionId])) {
-                continue;
-            }
-
-            foreach ($byPosition[$positionId] as $idx => $deal) {
-                if (($deal['used'] ?? false) === true) {
-                    continue;
-                }
-                if ($deal['time']->lt($tradeLog->created_at)) {
+            $byPosition = [];
+            foreach ($deals as $deal) {
+                if (!is_array($deal)) {
                     continue;
                 }
 
-                $profit = (float) ($deal['profit'] ?? 0);
-                $outcome = $profit > 0 ? 'WIN' : ($profit < 0 ? 'LOSS' : 'BREAKEVEN');
+                $entry = strtoupper((string) ($deal['entryType'] ?? $deal['entry'] ?? ''));
+                if (!str_contains($entry, 'OUT')) {
+                    continue;
+                }
 
-                $tradeLog->trade_outcome = $outcome;
-                $tradeLog->trade_pnl = $profit;
-                $tradeLog->trade_resolved_at = $deal['time'];
-                $tradeLog->save();
+                $positionId = trim((string) ($deal['positionId'] ?? $deal['position_id'] ?? ''));
+                if ($positionId === '') {
+                    continue;
+                }
 
-                $byPosition[$positionId][$idx]['used'] = true;
-                break;
+                $timeRaw = $deal['brokerTime'] ?? $deal['time'] ?? null;
+                if (!$timeRaw) {
+                    continue;
+                }
+
+                try {
+                    $dealTime = \Carbon\Carbon::parse((string) $timeRaw);
+                } catch (Throwable) {
+                    continue;
+                }
+
+                $byPosition[$positionId][] = [
+                    'time' => $dealTime,
+                    'profit' => (float) ($deal['profit'] ?? 0),
+                    'used' => false,
+                ];
             }
-        }
 
-        Cache::put($bootstrapKey, true, now()->addDays(30));
-        Cache::forget($retryAfterKey);
+            foreach ($byPosition as $positionId => $items) {
+                usort($items, static fn ($a, $b) => $a['time']->lt($b['time']) ? -1 : 1);
+                $byPosition[$positionId] = $items;
+            }
+
+            foreach ($pendingTrades as $tradeLog) {
+                $positionId = trim((string) ($tradeLog->position_id ?? ''));
+                if ($positionId === '' || !isset($byPosition[$positionId])) {
+                    continue;
+                }
+
+                foreach ($byPosition[$positionId] as $idx => $deal) {
+                    if (($deal['used'] ?? false) === true) {
+                        continue;
+                    }
+                    if ($deal['time']->lt($tradeLog->created_at)) {
+                        continue;
+                    }
+
+                    $profit = (float) ($deal['profit'] ?? 0);
+                    $outcome = $profit > 0 ? 'WIN' : ($profit < 0 ? 'LOSS' : 'BREAKEVEN');
+
+                    $tradeLog->trade_outcome = $outcome;
+                    $tradeLog->trade_pnl = $profit;
+                    $tradeLog->trade_resolved_at = $deal['time'];
+                    $tradeLog->save();
+
+                    $byPosition[$positionId][$idx]['used'] = true;
+                    break;
+                }
+            }
+        } finally {
+            Cache::forget($syncLockKey);
+        }
     }
 
     /**
