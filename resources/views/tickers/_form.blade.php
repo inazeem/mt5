@@ -47,9 +47,9 @@
                     <button type="button" id="category-info-close-form" class="text-gray-500 hover:text-gray-700 text-sm">Close</button>
                 </div>
                 <div class="p-4 text-sm text-gray-700 space-y-2">
-                    <p><span class="font-semibold">Spread:</span> Forex=global, Stock=max(global,25), Commodity=max(global,15), Other=max(global,10)</p>
-                    <p><span class="font-semibold">TP:</span> Forex=global, Stock=max(global,120), Commodity=max(global,80), Other=max(global,60)</p>
-                    <p><span class="font-semibold">SL:</span> Forex=global, Stock=max(global,60), Commodity=max(global,40), Other=max(global,30)</p>
+                    <p><span class="font-semibold">Spread:</span> Forex=global, Stock=max(global,40), Commodity=max(global,15), Other=max(global,10)</p>
+                    <p><span class="font-semibold">TP:</span> Forex=global, Stock=max(global,160), Commodity=max(global,80), Other=max(global,60)</p>
+                    <p><span class="font-semibold">SL:</span> Forex=global, Stock=max(global,80), Commodity=max(global,40), Other=max(global,30)</p>
                     <p><span class="font-semibold">Category options:</span> Forex, Stock, Commodity, Index, Crypto, Other</p>
                     <p class="text-xs text-gray-500">Ticker-level overrides (`max_spread_pips`, `max_tp_pips`, `max_sl_pips`) take priority when set.</p>
                 </div>
@@ -69,7 +69,7 @@
         <x-text-input id="pip_size" name="pip_size" type="number" step="0.00000001" min="0" class="mt-1 block w-48"
                       value="{{ old('pip_size', $ticker->pip_size ?? '') }}"
                       placeholder="Leave blank for auto" />
-        <p class="mt-1 text-xs text-gray-400">Forex auto-detected (0.0001 / 0.01 JPY). Stocks: 0.1 · Indices: 1.0 · Crypto: 0.01</p>
+        <p class="mt-1 text-xs text-gray-400">Forex auto-detected (0.0001 / 0.01 JPY). Stock/Commodity/Other default: 0.01.</p>
         <x-input-error :messages="$errors->get('pip_size')" class="mt-1" />
     </div>
 
