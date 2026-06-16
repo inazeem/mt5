@@ -1167,7 +1167,7 @@ class BotController extends Controller
                 return 0;
             }
 
-            return $this->applyClosingDealsToTrades($pendingTrades, $deals);
+            return $this->applyClosingDealsToTrades($pendingTrades, $deals, $tradeSubset !== null);
         } finally {
             Cache::forget($syncLockKey);
         }
@@ -1179,17 +1179,27 @@ class BotController extends Controller
      * @param Collection<int, BotTradeLog> $trades
      * @param array<int, array<string, mixed>> $deals
      */
-    private function applyClosingDealsToTrades(Collection $trades, array $deals): int
+    private function applyClosingDealsToTrades(Collection $trades, array $deals, bool $markUnmatchedAsFailed = false): int
     {
         $byPosition = $this->buildClosingDealsByPosition($deals);
         $resolved = 0;
 
         foreach ($trades as $tradeLog) {
             $positionId = trim((string) ($tradeLog->position_id ?? ''));
-            if ($positionId === '' || !isset($byPosition[$positionId])) {
+            if ($positionId === '') {
                 continue;
             }
 
+            if (!isset($byPosition[$positionId])) {
+                if ($markUnmatchedAsFailed) {
+                    $this->markTradeOutcomeFailed($tradeLog);
+                    $resolved++;
+                }
+
+                continue;
+            }
+
+            $matched = false;
             foreach ($byPosition[$positionId] as $idx => $deal) {
                 if (($deal['used'] ?? false) === true) {
                     continue;
@@ -1207,12 +1217,26 @@ class BotController extends Controller
                 $tradeLog->save();
 
                 $byPosition[$positionId][$idx]['used'] = true;
+                $matched = true;
                 $resolved++;
                 break;
+            }
+
+            if (!$matched && $markUnmatchedAsFailed) {
+                $this->markTradeOutcomeFailed($tradeLog);
+                $resolved++;
             }
         }
 
         return $resolved;
+    }
+
+    private function markTradeOutcomeFailed(BotTradeLog $tradeLog): void
+    {
+        $tradeLog->trade_outcome = 'FAILED';
+        $tradeLog->trade_pnl = null;
+        $tradeLog->trade_resolved_at = now();
+        $tradeLog->save();
     }
 
     /**
