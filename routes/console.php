@@ -19,9 +19,9 @@ Artisan::command('inspire', function () {
 Artisan::command('mt5:auto-forex
     {--lot=0.01 : Base lot size for each trade}
     {--tp-pips=25 : Take profit distance in pips}
-    {--tp-pips-by-category= : Category TP overrides, e.g. "forex:25,stock:120,commodity:80,default:25"}
+    {--tp-pips-by-category= : Category TP overrides, e.g. "forex:25,stock:160,commodity:80,default:25"}
     {--sl-pips=15 : Stop loss distance in pips}
-    {--sl-pips-by-category= : Category SL overrides, e.g. "forex:15,stock:60,commodity:40,default:15"}
+    {--sl-pips-by-category= : Category SL overrides, e.g. "forex:15,stock:80,commodity:40,default:15"}
     {--trail-start-pips=10 : Profit pips required before trailing activates}
     {--trail-start-pips-by-category= : Category trail-start overrides, e.g. "forex:10,stock:50,commodity:30,default:10"}
     {--trail-pips=8 : Trailing stop distance in pips}
@@ -31,7 +31,7 @@ Artisan::command('mt5:auto-forex
     {--min-move-pips=3 : Minimum move from previous tick to trigger entry}
     {--min-move-pips-by-category= : Category min-move overrides, e.g. "forex:3,stock:25,commodity:12,default:3"}
     {--max-spread-pips=2.5 : Maximum spread allowed for entries}
-    {--max-spread-pips-by-category= : Category spread overrides, e.g. "forex:2.5,stock:25,commodity:15,default:2.5"}
+    {--max-spread-pips-by-category= : Category spread overrides, e.g. "forex:2.5,stock:40,commodity:15,default:2.5"}
     {--cooldown-minutes=30 : Cooldown per symbol after successful entry}
     {--session-start-utc : Start trading hour (UTC) - uses database setting if not specified}
     {--session-end-utc : End trading hour (UTC) - uses database setting if not specified}
@@ -402,7 +402,7 @@ Artisan::command('mt5:auto-forex
         if (empty($tpPipsByCategory)) {
             $tpPipsByCategory = [
                 'forex' => $tpPips,
-                'stock' => max($tpPips, 120.0),
+                'stock' => max($tpPips, 160.0),
                 'commodity' => max($tpPips, 80.0),
                 'other' => max($tpPips, 60.0),
                 'default' => $tpPips,
@@ -419,7 +419,7 @@ Artisan::command('mt5:auto-forex
         if (empty($slPipsByCategory)) {
             $slPipsByCategory = [
                 'forex' => $slPips,
-                'stock' => max($slPips, 60.0),
+                'stock' => max($slPips, 80.0),
                 'commodity' => max($slPips, 40.0),
                 'other' => max($slPips, 30.0),
                 'default' => $slPips,
@@ -436,7 +436,7 @@ Artisan::command('mt5:auto-forex
         if (empty($maxSpreadByCategory)) {
             $maxSpreadByCategory = [
                 'forex' => $maxSpreadPips,
-                'stock' => max($maxSpreadPips, 25.0),
+                'stock' => max($maxSpreadPips, 40.0),
                 'commodity' => max($maxSpreadPips, 15.0),
                 'other' => max($maxSpreadPips, 10.0),
                 'default' => $maxSpreadPips,
@@ -1168,18 +1168,25 @@ Artisan::command('mt5:auto-forex
             }
 
             $base = substr($symbol, 0, 6);
-            $pipSize = $dbTickers->get($symbol)?->pip_size
-                ?? (str_ends_with($base, 'JPY') ? 0.01 : 0.0001);
+            $tickerCategory = $dbTickers->get($symbol)?->category;
+            $spreadCategory = $classifySpreadCategory($symbol, $tickerCategory);
+            $defaultPipSize = match ($spreadCategory) {
+                'stock' => 0.01,
+                'commodity', 'other' => 0.01,
+                default => (str_ends_with($base, 'JPY') ? 0.01 : 0.0001),
+            };
+            $pipSize = (float) ($dbTickers->get($symbol)?->pip_size ?? $defaultPipSize);
+            if ($pipSize <= 0) {
+                $pipSize = $defaultPipSize;
+            }
 
             $cacheKey = 'auto_bot_last_bid_'.preg_replace('/[^a-z0-9_]/', '_', strtolower($botKey)).'_'.preg_replace('/[^A-Z0-9_]/', '_', $symbol);
             $lastBid = Cache::get($cacheKey);
             Cache::put($cacheKey, $bid, now()->addHours(6));
             $spreadPips = ($ask - $bid) / $pipSize;
-            $tickerCategory = $dbTickers->get($symbol)?->category;
             $tickerSpreadOverride = $dbTickers->get($symbol)?->max_spread_pips;
             $tickerTpOverride = $dbTickers->get($symbol)?->max_tp_pips;
             $tickerSlOverride = $dbTickers->get($symbol)?->max_sl_pips;
-            $spreadCategory = $classifySpreadCategory($symbol, $tickerCategory);
             $maxSpreadForSymbol = (float) (
                 (is_numeric($tickerSpreadOverride) ? (float) $tickerSpreadOverride : null)
                 ?? $maxSpreadByCategory[$spreadCategory]
