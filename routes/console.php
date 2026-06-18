@@ -36,6 +36,7 @@ Artisan::command('mt5:auto-forex
     {--session-start-utc : Start trading hour (UTC) - uses database setting if not specified}
     {--session-end-utc : End trading hour (UTC) - uses database setting if not specified}
     {--max-trades-per-day : Stop opening new trades after this daily count}
+    {--max-trades-per-asset-per-day=2 : Maximum successful entries per symbol per UTC day}
     {--max-daily-loss-percent=2 : Stop opening new trades when daily drawdown exceeds this percent}
     {--ai-confirm=1 : 1 requires AI approval before entry, 0 bypasses AI confirmation}
     {--ai-min-confidence=70 : Minimum AI confidence percentage (0-100) required to approve a trade}
@@ -544,6 +545,7 @@ Artisan::command('mt5:auto-forex
         $sessionStartUtc   = (int) $optionOrProfileOrSetting('session-start-utc', $botProfile['session_start_utc'] ?? null, $db->bot_session_start_utc ?? null, 6);
         $sessionEndUtc     = (int) $optionOrProfileOrSetting('session-end-utc', $botProfile['session_end_utc'] ?? null, $db->bot_session_end_utc ?? null, 20);
         $maxTradesPerDay   = max(1, (int) $optionOrProfileOrSetting('max-trades-per-day', $botProfile['max_trades_per_day'] ?? null, $db->bot_max_trades_per_day ?? null, 20));
+        $maxTradesPerAssetPerDay = max(1, (int) $optionOrProfileOrSetting('max-trades-per-asset-per-day', $botProfile['max_trades_per_asset_per_day'] ?? null, null, 2));
         $maxDailyLossPercent = (float) $optionOrProfileOrSetting('max-daily-loss-percent', $botProfile['max_daily_loss_percent'] ?? null, $db->bot_max_daily_loss_percent ?? null, 2);
         $aiConfirmSetting = $optionOrProfileOrSetting('ai-confirm', $botProfile['ai_confirm'] ?? null, $db->bot_ai_confirm ?? true, true);
         $useAiConfirm      = (string) $aiConfirmSetting !== '0' && (bool) $aiConfirmSetting;
@@ -780,6 +782,16 @@ Artisan::command('mt5:auto-forex
             ->where('created_at', '>=', $todayStart)
             ->count();
 
+        $openedTodayBySymbol = BotTradeLog::query()
+            ->where('bot_key', $botKey)
+            ->where('event_type', 'trade_open')
+            ->where('status', 'success')
+            ->where('created_at', '>=', $todayStart)
+            ->pluck('symbol')
+            ->map(static fn ($symbol) => strtoupper((string) $symbol))
+            ->countBy()
+            ->all();
+
         if (!$testMode && $openedToday >= $maxTradesPerDay) {
             $msg = "Skipped entries: daily max trades reached ({$openedToday}/{$maxTradesPerDay}).";
             $this->warn($msg);
@@ -977,6 +989,7 @@ Artisan::command('mt5:auto-forex
         $skippedNoMove = 0;
         $skippedSpread = 0;
         $skippedCooldown = 0;
+        $skippedAssetDailyLimit = 0;
         $skippedOpen = 0;
         $skippedLowScore = 0;
         $skippedLowVolume = 0;
@@ -1493,6 +1506,26 @@ Artisan::command('mt5:auto-forex
                 continue;
             }
 
+            $symbolKey = strtoupper($symbol);
+            $symbolTradesToday = (int) ($openedTodayBySymbol[$symbolKey] ?? 0);
+            if (!$testMode && $symbolTradesToday >= $maxTradesPerAssetPerDay) {
+                $this->line("  {$symbol}: ASSET DAILY LIMIT — {$symbolTradesToday}/{$maxTradesPerAssetPerDay} trades today");
+                $skippedAssetDailyLimit++;
+                $logSignal([
+                    'status' => 'asset_daily_limit_rejected',
+                    'symbol' => $symbol,
+                    'side' => $side,
+                    'spread_pips' => $spreadPips,
+                    'signal_delta_pips' => $signalDeltaPips,
+                    'meta_payload' => [
+                        'symbol_trades_today' => $symbolTradesToday,
+                        'max_trades_per_asset_per_day' => $maxTradesPerAssetPerDay,
+                    ],
+                    'message' => 'Signal rejected because this symbol reached the daily trade limit.',
+                ]);
+                continue;
+            }
+
             $lastSuccessfulTrade = BotTradeLog::query()
                 ->where('bot_key', $botKey)
                 ->where('event_type', 'trade_open')
@@ -1776,6 +1809,7 @@ Artisan::command('mt5:auto-forex
                 ]]);
                 $opened++;
                 $openBySymbol[$symbol] = true;
+                $openedTodayBySymbol[$symbolKey] = $symbolTradesToday + 1;
                 $firstOrder = is_array($result['orders'][0] ?? null) ? $result['orders'][0] : null;
                 $firstResponse = is_array($firstOrder['response'] ?? null) ? $firstOrder['response'] : [];
                 $orderId = trim((string) ($firstResponse['orderId'] ?? ''));
@@ -1885,6 +1919,7 @@ Artisan::command('mt5:auto-forex
             .' lowScore='.$skippedLowScore
             .' lowVolume='.$skippedLowVolume
             .' cooldown='.$skippedCooldown
+            .' assetDailyLimit='.$skippedAssetDailyLimit
             .' hasOpen='.$skippedOpen
             .' rateLimitStop='.(int) $stoppedByRateLimit
             .' creditStop='.(int) $stoppedByCreditBudget
@@ -1904,6 +1939,7 @@ Artisan::command('mt5:auto-forex
                 'skipped_low_score' => $skippedLowScore,
                 'skipped_low_volume' => $skippedLowVolume,
                 'skipped_cooldown' => $skippedCooldown,
+                'skipped_asset_daily_limit' => $skippedAssetDailyLimit,
                 'skipped_open_position' => $skippedOpen,
                 'stopped_by_rate_limit' => $stoppedByRateLimit,
                 'stopped_by_credit_budget' => $stoppedByCreditBudget,
