@@ -21,6 +21,7 @@
                     @csrf
                     @method('PUT')
                     @php
+                        $allTimeframes = ['5m', '15m', '30m', '1h', '4h'];
                         $selectedSignalTimeframes = old('signal_timeframes');
                         if (!is_array($selectedSignalTimeframes)) {
                             $selectedSignalTimeframes = isset($profile['signal_timeframes']) && is_array($profile['signal_timeframes'])
@@ -32,10 +33,10 @@
                         }
                         $selectedEntryTimeframe = old('entry_timeframe', (string) ($profile['entry_timeframe'] ?? ''));
                         if ($selectedEntryTimeframe === '') {
-                            $selectedEntryTimeframe = $selectedSignalTimeframes[0] ?? '';
+                            $selectedEntryTimeframe = '15m';
                         }
-                        if ($selectedEntryTimeframe !== '' && !in_array($selectedEntryTimeframe, $selectedSignalTimeframes, true)) {
-                            $selectedEntryTimeframe = $selectedSignalTimeframes[0] ?? '';
+                        if (!in_array($selectedEntryTimeframe, $allTimeframes, true)) {
+                            $selectedEntryTimeframe = '15m';
                         }
                         $selectedStrategies = old('strategies');
                         if (!is_array($selectedStrategies)) {
@@ -363,9 +364,9 @@
                             </div>
 
                             <div class="sm:col-span-2">
-                                <label class="block text-sm font-medium text-indigo-900">Trend Timeframes (must all align)</label>
+                                <label class="block text-sm font-medium text-indigo-900">Trend Timeframes (higher-TF context: 1h, 4h)</label>
                                 <div class="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">
-                                    @foreach (['5m', '15m', '30m', '1h', '4h'] as $timeframe)
+                                    @foreach ($allTimeframes as $timeframe)
                                         <label class="inline-flex items-center gap-2 rounded border border-indigo-100 bg-white px-3 py-2">
                                             <input type="checkbox" name="signal_timeframes[]" value="{{ $timeframe }}"
                                                    {{ in_array($timeframe, $selectedSignalTimeframes, true) ? 'checked' : '' }}
@@ -374,7 +375,7 @@
                                         </label>
                                     @endforeach
                                 </div>
-                                <p class="text-xs text-gray-500 mt-1">Leave all unchecked to use global Auto-Bot timeframe defaults.</p>
+                                <p class="text-xs text-gray-500 mt-1">Leave all unchecked to use global defaults (1h + 4h). Entry timeframe is separate below.</p>
                                 @error('signal_timeframes')
                                     <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
                                 @enderror
@@ -384,14 +385,14 @@
                             </div>
 
                             <div>
-                                <label class="block text-sm font-medium text-indigo-900">Entry Timeframe (final trigger)</label>
+                                <label class="block text-sm font-medium text-indigo-900">Entry Timeframe (strategy + trigger)</label>
                                 <select name="entry_timeframe" class="mt-1 block w-full rounded border-gray-300">
-                                    <option value="">Auto (lowest selected)</option>
-                                    @foreach ($selectedSignalTimeframes as $timeframe)
+                                    <option value="">Auto (global default: 15m)</option>
+                                    @foreach ($allTimeframes as $timeframe)
                                         <option value="{{ $timeframe }}" {{ $selectedEntryTimeframe === $timeframe ? 'selected' : '' }}>{{ strtoupper($timeframe) }}</option>
                                     @endforeach
                                 </select>
-                                <p class="text-xs text-gray-500 mt-1">Must be one of selected trend timeframes.</p>
+                                <p class="text-xs text-gray-500 mt-1">Strategies run here; trend filter waits for this candle after 1h/4h context.</p>
                                 @error('entry_timeframe')
                                     <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
                                 @enderror

@@ -12,6 +12,201 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schedule;
 
+/**
+ * routes/console.php — Bot console commands (full reference).
+ *
+ * Markdown copy (tables/diagrams): routes/console.md
+ * Ideal production setup: IDEAL_BOT_SETUP.md
+ * Mt5Service split: app/Services/console-vs-mt5service.md
+ *
+ * ─── ARCHITECTURE ───────────────────────────────────────────────────────────
+ * This file is the bot brain (when/what/whether to trade). Broker I/O lives in
+ * Mt5Service; strategy math in TradingStrategies/*; AI in AiService; logs in BotTradeLog.
+ *
+ * Flow: Schedule/CLI → mt5:auto-forex → resolve settings → guardrails → trailing →
+ * symbol list → per-symbol quote/strategy/filters/AI → placeOrder → BotTradeLog.
+ *
+ * ─── COMMANDS ───────────────────────────────────────────────────────────────
+ * inspire              — Laravel demo quote.
+ * mt5:auto-forex       — Main automated trading loop (see below).
+ * mt5:learn-policy     — Analyze history; recommend/apply min_bot_score, hours, symbols.
+ *
+ * Scheduler (bottom of file):
+ *   mt5:auto-forex --once every minute, withoutOverlapping(120).
+ * Server cron: * * * * * php artisan schedule:run
+ *
+ * ─── mt5:auto-forex STRUCTURE ────────────────────────────────────────────────
+ * $resolveProfiles()  — Load app_settings.bot_profiles; normalize key/name; filter --bot.
+ * $runCycle($profile) — One full scan/trade cycle for a single profile.
+ * $runAllBots()       — Run $runCycle for each enabled profile.
+ *
+ * Run modes:
+ *   --once     Single cycle for all profiles, then exit.
+ *   (default)  Loop forever: run all profiles, sleep 60s, repeat.
+ *
+ * ─── CONFIG PRECEDENCE ($optionOrProfileOrSetting) ───────────────────────────
+ * 1. CLI flag ONLY if explicitly on argv ($optionProvided scans $_SERVER['argv']).
+ * 2. Bot profile JSON field (bot_profiles[].*).
+ * 3. AppSetting DB column (bot_*).
+ * 4. Hard-coded fallback in this file.
+ *
+ * ─── BOT PROFILES ─────────────────────────────────────────────────────────────
+ * Stored in app_settings.bot_profiles. key = slug from key/name; enabled=false skipped.
+ * Empty profiles → synthetic default/Default Bot. --bot= filters by key or name.
+ * Every log row includes bot_key + bot_name from $botLogDefaults.
+ *
+ * Common profile keys: lot, tp_pips, sl_pips, trail_*, min_move_pips, max_spread_pips,
+ * cooldown_minutes, session_*_utc, max_trades_per_day, max_trades_per_asset_per_day,
+ * max_daily_loss_percent, ai_confirm, ai_min_confidence, max_symbols, max_open_positions,
+ * max_per_cycle, min_bot_score, scalper, strategies, strategy_params, symbols,
+ * signal_timeframes, entry_timeframe, trend_filter, reverse_strategy,
+ * cooldown_override_ratio, preferred/blocked_hours_utc, preferred_symbols,
+ * ticker_categories, *_by_category maps.
+ *
+ * ─── CLI OPTIONS (defaults shown; all overridable via profile/DB) ────────────
+ * Trade sizing: --lot=0.01 --tp-pips=25 --sl-pips=15 --trail-start-pips=10
+ *   --trail-pips=8 --trail-tp-multiplier=2 --*-by-category=forex:25,stock:160,...
+ * Entry filters: --min-move-pips=3 --max-spread-pips=2.5 --cooldown-minutes=30
+ *   --cooldown-override-ratio=0 (bypass cooldown when move ≥ last×ratio)
+ * Session/limits: --session-start-utc=6 --session-end-utc=20 --max-trades-per-day=20
+ *   --max-trades-per-asset-per-day=2 --max-daily-loss-percent=2
+ * AI/scoring: --ai-confirm=1 --ai-min-confidence=70 --min-bot-score=70
+ * Scanning: --max-symbols=200 --scan-delay-ms=0 --max-cycle-credits=900
+ *   --max-open-positions=10 --max-per-cycle=5
+ * Strategy: --strategies=momentum,sma_cross,... --scalper=1 --reverse-strategy=0
+ *   --trend-filter=0 --signal-timeframes=15m --entry-timeframe=
+ * Filters: --preferred-hours-utc= --blocked-hours-utc=15 --preferred-symbols=
+ * Control: --bot= --test-mode (bypass ALL safety) --once
+ *
+ * ─── INTERNAL HELPERS (inside $runCycle) ──────────────────────────────────────
+ * normalizeHourList, normalizeSymbolList, normalizeTimeframeList, normalizeStrategyList,
+ * normalizeStrategyParams, normalizeCategoryNumericMap, classifySpreadCategory,
+ * categoryValueOrDefault, calculateBotScore, extractConfidence, resolveTrendSide,
+ * logSignal, reserveCycleCredits, isMetaApiOutageError, resolveTrailingParamsForSymbol.
+ *
+ * ─── INSTRUMENT CATEGORIES (classifySpreadCategory) ─────────────────────────
+ * forex | stock | commodity | other — drives default TP/SL/spread/trail/min-move maps.
+ * Ticker overrides (tickers table): pip_size, max_spread_pips, max_tp_pips, max_sl_pips.
+ * Scalper mode caps TP/SL/spread/cooldown tighter (e.g. TP≤30, SL≤10, cooldown≤5min).
+ *
+ * ─── CYCLE LIFECYCLE ($runCycle) ─────────────────────────────────────────────
+ * 1. Resolve settings + validate numerics
+ * 2. Print diagnostics (categories, strategies, volume, credits)
+ * 3. PRE-SCAN GUARDRAILS (§11)
+ * 4. Trailing stops on open positions (§12)
+ * 5. Fetch open positions; abort if max open (§11)
+ * 6. Build symbol list (§13)
+ * 7. FOR EACH SYMBOL → pipeline (§14–§20)
+ * 8. Log guardrail/cycle_complete with counters (§25)
+ *
+ * All session/hour checks use UTC (date_default_timezone_set('UTC')).
+ *
+ * ─── §11 PRE-SCAN GUARDRAILS (skip entire cycle) ──────────────────────────────
+ * session_block        Outside session-start/end-utc (overnight sessions supported).
+ * hour_block           Current hour in blocked-hours-utc (default: 15 UTC).
+ * hour_not_preferred   preferred-hours-utc set and hour not in list.
+ * daily_trade_limit    openedToday >= max-trades-per-day (successful trade_open today).
+ * daily_loss_limit     Drawdown from day-start equity >= max-daily-loss-percent.
+ *                      Cache: auto_bot_day_start_equity_{bot_key}_{Ymd}
+ * max_open_positions   Broker open count >= max-open-positions.
+ * symbol_filter_block  No symbols after preferred/category filters.
+ * Test mode skips: session, hours, daily trade/loss, most per-symbol filters.
+ *
+ * Per-symbol daily count: openedTodayBySymbol from successful trade_open today;
+ * enforced in scan as asset_daily_limit_rejected (default max 2 per symbol).
+ *
+ * ─── §12 TRAILING STOPS ───────────────────────────────────────────────────────
+ * Mt5Service::applyTrailingStops() before scan; category params via resolveTrailingParamsForSymbol.
+ * Logs trailing_update success/failed. Post-open immediate trailing pass after each new trade.
+ *
+ * ─── §13 SYMBOL UNIVERSE ──────────────────────────────────────────────────────
+ * Priority: profile.symbols[] → Ticker::active() → Mt5Service::getForexSymbols().
+ * Then: preferred-symbols intersect → ticker_categories filter → round-robin window.
+ * Round-robin cache: auto_bot_symbol_cursor_{bot_key} (7-day TTL).
+ * openBySymbol indexes broker symbol + baseSymbol() for suffix matching.
+ *
+ * ─── §14 PER-SYMBOL PIPELINE ──────────────────────────────────────────────────
+ * MetaAPI pause check → scan-delay → reserve quote credits → getTickerPrice
+ * → spread/pip/category limits → strategy candles → strategy consensus (§15)
+ * → reverse-strategy flip (§16) → bot score (§17) → volume/open/spread checks
+ * → asset daily limit → cooldown → trend filter (§18) → TP/SL → AI (§19) → placeOrder (§20)
+ *
+ * Quote fetch: 6-letter pairs use {SYMBOL}_SB suffix; orders use raw symbol.
+ * Last bid cache: auto_bot_last_bid_{bot_key}_{symbol} (6 hours).
+ *
+ * ─── §15 STRATEGY EVALUATION ──────────────────────────────────────────────────
+ * Strategies: momentum, sma_cross, ema_cross, bollinger_reversion, vwap_reversion.
+ * ALL selected strategies must signal; same side required or strategy_conflict_rejected.
+ * Statuses: strategy_rejected, strategy_invalid_side, strategy_data_error.
+ * Test mode: side from bid vs last bid; skips strategy classes.
+ *
+ * ─── §16 REVERSE STRATEGY / EXECUTION SIDE ────────────────────────────────────
+ * recommendedSide = consensus side from strategies (+ trend/AI gates).
+ * reverse-strategy=0 (default): executionSide = recommendedSide (trade with consensus).
+ * reverse-strategy=1: executionSide is inverted (fade / contrarian test mode).
+ *
+ * ─── §17 BOT SCORE ────────────────────────────────────────────────────────────
+ * 60% signal strength (|delta|/10 pips), 25% spread (1-spread/3), 15% volume ratio.
+ * Execute when score >= min-bot-score. Log signal when score >= max(70, min-bot-score).
+ *
+ * ─── §18 TREND FILTER ─────────────────────────────────────────────────────────
+ * When trend-filter=1: context timeframes (signal TFs minus entry TF) must align with side;
+ * entry timeframe candle must also align. trend_rejected | entry_timeframe_wait.
+ *
+ * ─── §19 AI CONFIRMATION ──────────────────────────────────────────────────────
+ * ai-confirm=1: AiService prompt with trade details + optional candle history.
+ * Must start with APPROVE and meet ai-min-confidence. ai_rejected on fail/error.
+ *
+ * ─── §20 TRADE EXECUTION ──────────────────────────────────────────────────────
+ * Mt5Service::placeOrder(symbol, lot, executionSide, [[close_percent, tp, sl]]).
+ * Success: trade_open/success, trade_outcome=PENDING, increments openedTodayBySymbol.
+ * Failure: trade_open/failed, trade_outcome=FAILED. Stop scan when opened >= max-per-cycle.
+ *
+ * ─── §21 BotTradeLog event_type / status ──────────────────────────────────────
+ * event_type: guardrail | trailing_update | signal | trade_open
+ * Signal statuses: quote_error, invalid_quote, strategy_*, spread_rejected,
+ *   asset_daily_limit_rejected, cooldown_rejected, trend_rejected, entry_timeframe_wait,
+ *   ai_rejected, confirmed, open_position_rejected, low_volume_rejected, ...
+ * Guardrail statuses: session_block, hour_block, daily_trade_limit, daily_loss_limit,
+ *   max_open_positions, credit_budget_stop, metaapi_cooldown_skip, cycle_complete,
+ *   policy_recommendation, ...
+ *
+ * ─── §22 CACHE KEYS ───────────────────────────────────────────────────────────
+ * auto_bot_day_start_equity_{bot_key}_{Ymd}     — daily loss baseline (2 days)
+ * auto_bot_symbol_cursor_{bot_key}              — round-robin offset (7 days)
+ * auto_bot_last_bid_{bot_key}_{symbol}          — momentum reference (6 hours)
+ * metaapi_outage_pause_until                    — pause scans after outage (3 min)
+ *
+ * ─── §23 METAAPI CREDIT BUDGET ────────────────────────────────────────────────
+ * Quote=50 credits, candle=50. reserveCycleCredits(); credit_budget_stop breaks loop.
+ * max-cycle-credits=0 disables guard (still tracks usage in cycle_complete).
+ *
+ * ─── §24 OUTAGE / RATE LIMIT ──────────────────────────────────────────────────
+ * 429/TOOMANYREQUESTS → stop scan cycle (stoppedByRateLimit).
+ * Timeout/504/not connected → metaapi_outage_pause_until + break loop.
+ *
+ * ─── §25 CYCLE SUMMARY ────────────────────────────────────────────────────────
+ * Console + guardrail/cycle_complete meta: scanned, opened, noMove, spread, lowScore,
+ * lowVolume, cooldown, assetDailyLimit, hasOpen, rateLimitStop, creditStop, creditUsed.
+ *
+ * ─── §26 mt5:learn-policy ─────────────────────────────────────────────────────
+ * Options: --bot --lookback-days=30 --min-resolved=20 --apply
+ * Matches confirmed signals → trade_open → MetaAPI closing deals for P/L.
+ * Recommends min_bot_score, preferred/blocked_hours_utc, preferred_symbols.
+ * --apply merges into bot_profiles when resolved count >= min-resolved.
+ *
+ * ─── FAQ ──────────────────────────────────────────────────────────────────────
+ * Why sell when strategy says buy? reverse-strategy=1 was enabled (contrarian mode).
+ * 2 trades/asset/day? max-trades-per-asset-per-day=2 + openedTodayBySymbol check.
+ * WIN/LOSS resolution? BotController reconciliation (not this file).
+ * New filter? Add before placeOrder in $runCycle; log via $logSignal or guardrail.
+ *
+ * ─── EXAMPLES ─────────────────────────────────────────────────────────────────
+ * php artisan mt5:auto-forex --once --bot=scalper --scalper=1 --trend-filter=1
+ * php artisan mt5:auto-forex --once --test-mode --max-symbols=3
+ * php artisan mt5:learn-policy --bot=scalper --apply
+ */
+
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
@@ -50,7 +245,7 @@ Artisan::command('mt5:auto-forex
     {--strategy=momentum : Legacy single strategy option (prefer --strategies)}
     {--strategies= : Comma-separated strategies (momentum,sma_cross,ema_cross,bollinger_reversion,vwap_reversion)}
     {--scalper=1 : 1 enables scalper mode (quick in/out), 0 keeps normal mode}
-    {--reverse-strategy=0 : 1 flips strategy direction (buy<->sell), 0 keeps normal direction}
+    {--reverse-strategy=0 : 1 inverts execution side (fade consensus); 0 trades with consensus direction}
     {--trend-filter=0 : 1 requires all selected trend timeframes to align with the signal side}
     {--signal-timeframes= : Comma-separated trend timeframes (5m,15m,30m,1h,4h). Example: 5m,15m,1h}
     {--entry-timeframe= : Final entry trigger timeframe (must be one of signal timeframes; defaults to lowest selected)}
@@ -62,6 +257,7 @@ Artisan::command('mt5:auto-forex
     {--test-mode : Bypass ALL filters and AI — trade the first --max-symbols symbols at market for testing only}
     {--once : Run one cycle only}
 ', function (Mt5Service $mt5Service, AiService $aiService, StrategyFactory $strategyFactory) {
+    // ── $resolveProfiles — load/normalize bot_profiles; filter by --bot ──────────
     $resolveProfiles = function (): array {
         $db = AppSetting::singleton();
         $rawProfiles = is_array($db->bot_profiles) ? $db->bot_profiles : [];
@@ -112,6 +308,7 @@ Artisan::command('mt5:auto-forex
         return array_values(array_filter($profiles, static fn (array $profile): bool => (bool) ($profile['enabled'] ?? true)));
     };
 
+    // ── $runCycle — one full scan/trade cycle (see file header docblock) ─────────
     $runCycle = function (array $botProfile) use ($mt5Service, $aiService, $strategyFactory) {
         $db = AppSetting::singleton();
         $botKey = (string) ($botProfile['key'] ?? 'default');
@@ -121,6 +318,7 @@ Artisan::command('mt5:auto-forex
             'bot_name' => $botName,
         ];
 
+        // ── Config helpers: $optionProvided, $optionOrProfileOrSetting, normalizers ──
         // Use CLI option only when the flag is explicitly passed; otherwise prefer DB settings.
         $optionProvided = static function (string $name): bool {
             foreach ($_SERVER['argv'] ?? [] as $arg) {
@@ -587,30 +785,30 @@ Artisan::command('mt5:auto-forex
             'signal-timeframes',
             $botProfile['signal_timeframes'] ?? (isset($botProfile['signal_timeframe']) ? [(string) $botProfile['signal_timeframe']] : null),
             $db->bot_signal_timeframes ?? null,
-            ['15m']
+            ['1h', '4h']
         ));
         if (empty($trendTimeframes)) {
-            $trendTimeframes = ['15m'];
+            $trendTimeframes = ['1h', '4h'];
         }
         $entryTimeframeRaw = strtolower(trim((string) $optionOrProfileOrSetting(
             'entry-timeframe',
             $botProfile['entry_timeframe'] ?? null,
             $db->bot_entry_timeframe ?? null,
-            $trendTimeframes[0]
+            '15m'
         )));
-        $entryTimeframe = in_array($entryTimeframeRaw, $trendTimeframes, true)
+        $allowedEntryTimeframes = ['5m', '15m', '30m', '1h', '4h'];
+        $entryTimeframe = in_array($entryTimeframeRaw, $allowedEntryTimeframes, true)
             ? $entryTimeframeRaw
-            : $trendTimeframes[0];
-        $trendContextTimeframes = $trendTimeframes;
-        if (count($trendContextTimeframes) > 1) {
-            $trendContextTimeframes = array_values(array_filter(
-                $trendContextTimeframes,
-                static fn (string $timeframe): bool => $timeframe !== $entryTimeframe
-            ));
-        }
+            : '15m';
+        // HTF trend context uses signal_timeframes only; entry_timeframe is separate (e.g. 1h+4h context, 15m entry).
+        $trendContextTimeframes = array_values(array_filter(
+            $trendTimeframes,
+            static fn (string $timeframe): bool => $timeframe !== $entryTimeframe
+        ));
         if (empty($trendContextTimeframes)) {
-            $trendContextTimeframes = [$entryTimeframe];
+            $trendContextTimeframes = $trendTimeframes;
         }
+        $aiContextTimeframes = array_values(array_unique(array_merge($trendContextTimeframes, [$entryTimeframe])));
         $cooldownOverrideRatio = (float) $optionOrProfileOrSetting('cooldown-override-ratio', $botProfile['cooldown_override_ratio'] ?? null, null, 0);
         $preferredHoursUtc = $normalizeHourList($optionOrProfileOrSetting('preferred-hours-utc', $botProfile['preferred_hours_utc'] ?? null, null, null));
         $blockedHoursUtc = $normalizeHourList($optionOrProfileOrSetting('blocked-hours-utc', $botProfile['blocked_hours_utc'] ?? null, null, 15));
@@ -704,6 +902,7 @@ Artisan::command('mt5:auto-forex
         $this->line('Strategies '.strtoupper(implode(',', $selectedStrategyKeys)).' on '.strtoupper($entryTimeframe));
         $this->line('Reverse strategy '.($reverseStrategy ? 'ON' : 'OFF'));
 
+        // ── §11 PRE-SCAN GUARDRAILS (session, hours, daily trade/loss limits) ─────
         // Force UTC timezone to ensure correct time comparison
         date_default_timezone_set('UTC');
         $currentHourUtc = (int) \Carbon\Carbon::now('UTC')->format('G');
@@ -835,6 +1034,7 @@ Artisan::command('mt5:auto-forex
             $this->warn('Account info unavailable, skipping daily loss guard: '.$e->getMessage());
         }
 
+        // ── §12 TRAILING STOPS (pre-scan + category-aware params) ───────────────────
         $tickerCategoryMapForTrailing = Ticker::query()
             ->select(['symbol', 'category'])
             ->get()
@@ -886,6 +1086,7 @@ Artisan::command('mt5:auto-forex
             }
         }
 
+        // ── §11 max open positions + §13 SYMBOL UNIVERSE ───────────────────────────
         $openSnapshot = $mt5Service->getOpenTradeSnapshot();
         $positionsPayload = $openSnapshot['positions'] ?? null;
         $positions = (is_array($positionsPayload) && array_is_list($positionsPayload)) ? $positionsPayload : [];
@@ -984,6 +1185,7 @@ Artisan::command('mt5:auto-forex
         }
 
         $this->line('Scanning '.count($symbols).' symbols. Open positions: '.count($positions).'.');
+        // Scan counters + bot score / AI helpers (§17–§19)
         $opened = 0;
         $scanned = 0;
         $skippedNoMove = 0;
@@ -1149,6 +1351,7 @@ Artisan::command('mt5:auto-forex
                 || str_contains($upper, 'CONNECTION RESET');
         };
 
+        // ── §14–§20 PER-SYMBOL SCAN LOOP (quote → strategy → filters → AI → order) ──
         foreach ($symbols as $symbol) {
             $pauseUntilRaw = Cache::get($metaApiPauseKey);
             if (is_string($pauseUntilRaw) && trim($pauseUntilRaw) !== '') {
@@ -1301,6 +1504,7 @@ Artisan::command('mt5:auto-forex
                 $side = $delta >= 0 ? 'buy' : 'sell';
                 $signalDeltaPips = $pipSize > 0 ? abs($delta / $pipSize) : 0.0;
             } else {
+                // ── §15 STRATEGY EVALUATION (all selected strategies must agree) ─────
                 $strategyResults = [];
                 $strategySides = [];
                 $strategySignalStrengths = [];
@@ -1427,9 +1631,6 @@ Artisan::command('mt5:auto-forex
                     : 0.0;
             }
 
-            if ($reverseStrategy) {
-                $side = $side === 'buy' ? 'sell' : 'buy';
-            }
             $effectiveVolume = $lotSize * $volumeMultiplier;
             $botScore = $calculateBotScore($signalDeltaPips, $spreadPips, $effectiveVolume, $minEffectiveVolume);
 
@@ -1508,6 +1709,7 @@ Artisan::command('mt5:auto-forex
 
             $symbolKey = strtoupper($symbol);
             $symbolTradesToday = (int) ($openedTodayBySymbol[$symbolKey] ?? 0);
+            // ── Per-asset daily limit (default max-trades-per-asset-per-day=2) ────────
             if (!$testMode && $symbolTradesToday >= $maxTradesPerAssetPerDay) {
                 $this->line("  {$symbol}: ASSET DAILY LIMIT — {$symbolTradesToday}/{$maxTradesPerAssetPerDay} trades today");
                 $skippedAssetDailyLimit++;
@@ -1569,6 +1771,7 @@ Artisan::command('mt5:auto-forex
             }
 
             if (!$testMode && $useTrendFilter) {
+                // ── §18 TREND FILTER (context + entry timeframe alignment) ────────────
                 try {
                     $trendByTimeframe = [];
                     foreach ($trendContextTimeframes as $timeframe) {
@@ -1648,7 +1851,9 @@ Artisan::command('mt5:auto-forex
             }
 
             $recommendedSide = $side;
-            $executionSide = $recommendedSide === 'buy' ? 'sell' : 'buy';
+            $executionSide = $reverseStrategy
+                ? ($recommendedSide === 'buy' ? 'sell' : 'buy')
+                : $recommendedSide;
 
             $this->line("  {$symbol}: signal {$recommendedSide} => executing {$executionSide} — move=".number_format($signalDeltaPips,2)."pip spread=".number_format($spreadPips,2)."pip bid={$bid} ask={$ask}");
 
@@ -1668,6 +1873,7 @@ Artisan::command('mt5:auto-forex
             $aiSummary = null;
 
             if (!$testMode && $useAiConfirm) {
+                // ── §19 AI CONFIRMATION ───────────────────────────────────────────────
                 try {
                     // Fetch candle context from MetaAPI for richer AI analysis.
                     $candleContext = '';
@@ -1689,7 +1895,7 @@ Artisan::command('mt5:auto-forex
                             return implode("\n", $lines);
                         };
 
-                        foreach ($trendTimeframes as $index => $timeframe) {
+                        foreach ($aiContextTimeframes as $index => $timeframe) {
                             $limit = $index === 0 ? 20 : 10;
                             if (!$reserveCycleCredits($creditCostCandle, 'ai_context_'.$timeframe, $symbol)) {
                                 break 2;
@@ -1802,6 +2008,7 @@ Artisan::command('mt5:auto-forex
             ]);
 
             try {
+                // ── §20 TRADE EXECUTION (Mt5Service::placeOrder) ──────────────────────
                 $result = $mt5Service->placeOrder($symbol, $lotSize, $executionSide, [[
                     'close_percent' => 100,
                     'take_profit' => $takeProfit,
@@ -1911,6 +2118,7 @@ Artisan::command('mt5:auto-forex
             }
         }
 
+        // ── §25 CYCLE SUMMARY (console output + guardrail/cycle_complete log) ────────
         $this->info(
             'Cycle complete ['.$botName.']. Scanned='.$scanned
             .' opened='.$opened
@@ -1976,6 +2184,7 @@ Artisan::command('mt5:auto-forex
         return 0;
     };
 
+    // ── $runAllBots — run $runCycle for each enabled profile; --once or 60s loop ─
     $runAllBots = function () use ($resolveProfiles, $runCycle) {
         $profiles = $resolveProfiles();
         if (empty($profiles)) {
@@ -2008,6 +2217,7 @@ Artisan::command('mt5:auto-forex
     }
 })->purpose('Run automated forex trading with TP/SL and trailing stop on MetaApi');
 
+// ── §26 mt5:learn-policy — analyze history; recommend/apply profile tuning ───────
 Artisan::command('mt5:learn-policy
     {--bot= : Bot profile key/name to tune}
     {--lookback-days=30 : Number of days to analyze}
@@ -2403,6 +2613,7 @@ Artisan::command('mt5:learn-policy
     return 0;
 })->purpose('Learn bot policy recommendations from recent resolved trades.');
 
+// ── §27 SCHEDULER — mt5:auto-forex --once every minute, lock 120 min ─────────────
 Schedule::command('mt5:auto-forex --once')
     ->name('mt5-auto-forex-once')
     ->everyMinute()

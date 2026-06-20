@@ -1,5 +1,8 @@
 # Console vs Mt5Service
 
+> **Full reference:** see [`routes/console.md`](../../routes/console.md) for complete documentation of `routes/console.php`.  
+> **Recommended production config:** see [`IDEAL_BOT_SETUP.md`](../../IDEAL_BOT_SETUP.md).
+
 ## Purpose
 
 This note explains the difference between:

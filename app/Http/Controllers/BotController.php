@@ -101,11 +101,12 @@ class BotController extends Controller
 
         $validated['bot_ai_confirm'] = $request->boolean('bot_ai_confirm');
         $validated['bot_strategies'] = $this->normalizeStrategies($validated['bot_strategies'] ?? null) ?? ['momentum'];
-        $validated['bot_signal_timeframes'] = $this->normalizeSignalTimeframes($validated['bot_signal_timeframes'] ?? null) ?? ['15m'];
+        $validated['bot_signal_timeframes'] = $this->normalizeSignalTimeframes($validated['bot_signal_timeframes'] ?? null) ?? ['1h', '4h'];
         $entryTimeframe = strtolower(trim((string) ($validated['bot_entry_timeframe'] ?? '')));
-        $validated['bot_entry_timeframe'] = in_array($entryTimeframe, $validated['bot_signal_timeframes'], true)
+        $allowedEntryTimeframes = ['5m', '15m', '30m', '1h', '4h'];
+        $validated['bot_entry_timeframe'] = in_array($entryTimeframe, $allowedEntryTimeframes, true)
             ? $entryTimeframe
-            : $validated['bot_signal_timeframes'][0];
+            : '15m';
         $validated['bot_strategy'] = $validated['bot_strategies'][0] ?? 'momentum';
 
         $settings = AppSetting::singleton();
@@ -253,17 +254,17 @@ class BotController extends Controller
         $timeframeSource = $botProfile['signal_timeframes']
             ?? (isset($botProfile['signal_timeframe']) ? [(string) $botProfile['signal_timeframe']] : null)
             ?? $settings->bot_signal_timeframes
-            ?? ['15m'];
+            ?? ['1h', '4h'];
         $signalTimeframes = array_values(array_unique(array_filter(array_map(
             static fn ($value) => strtolower(trim((string) $value)),
             is_array($timeframeSource) ? $timeframeSource : []
         ), static fn ($value) => in_array($value, $allowedSignalTimeframes, true))));
         if (empty($signalTimeframes)) {
-            $signalTimeframes = ['15m'];
+            $signalTimeframes = ['1h', '4h'];
         }
-        $entryTimeframe = strtolower(trim((string) ($botProfile['entry_timeframe'] ?? $settings->bot_entry_timeframe ?? '')));
-        if (!in_array($entryTimeframe, $signalTimeframes, true)) {
-            $entryTimeframe = $signalTimeframes[0];
+        $entryTimeframe = strtolower(trim((string) ($botProfile['entry_timeframe'] ?? $settings->bot_entry_timeframe ?? '15m')));
+        if (!in_array($entryTimeframe, $allowedSignalTimeframes, true)) {
+            $entryTimeframe = '15m';
         }
         $currentHourUtc = (int) now('UTC')->format('G');
         $inSession = $sessionStartUtc <= $sessionEndUtc

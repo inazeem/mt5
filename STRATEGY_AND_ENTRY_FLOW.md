@@ -144,6 +144,8 @@ Common reasons:
 
 ## 10. Practical Starter Setup
 
+See **[IDEAL_BOT_SETUP.md](IDEAL_BOT_SETUP.md)** for a full recommended forex trend-following profile (strategies, timeframes, guardrails, cron command).
+
 If you want a balanced start:
 1. Select 2 strategies (for example `ema_cross` + `vwap_reversion`).
 2. Keep trend filter on with `15m,30m`.

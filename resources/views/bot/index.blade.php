@@ -26,13 +26,14 @@
             </div>
 
             @php
-                $selectedSignalTimeframes = old('bot_signal_timeframes', $settings->bot_signal_timeframes ?? ['15m']);
+                $allTimeframes = ['5m', '15m', '30m', '1h', '4h'];
+                $selectedSignalTimeframes = old('bot_signal_timeframes', $settings->bot_signal_timeframes ?? ['1h', '4h']);
                 if (!is_array($selectedSignalTimeframes) || empty($selectedSignalTimeframes)) {
-                    $selectedSignalTimeframes = ['15m'];
+                    $selectedSignalTimeframes = ['1h', '4h'];
                 }
-                $selectedEntryTimeframe = old('bot_entry_timeframe', $settings->bot_entry_timeframe ?? ($selectedSignalTimeframes[0] ?? '15m'));
-                if (!in_array($selectedEntryTimeframe, $selectedSignalTimeframes, true)) {
-                    $selectedEntryTimeframe = $selectedSignalTimeframes[0] ?? '15m';
+                $selectedEntryTimeframe = old('bot_entry_timeframe', $settings->bot_entry_timeframe ?? '15m');
+                if (!in_array($selectedEntryTimeframe, $allTimeframes, true)) {
+                    $selectedEntryTimeframe = '15m';
                 }
                 $selectedStrategies = old('bot_strategies', $settings->bot_strategies ?? ['momentum']);
                 if (!is_array($selectedStrategies) || empty($selectedStrategies)) {
@@ -131,25 +132,26 @@
                     </div>
 
                     <div class="md:col-span-3">
-                        <label class="block text-sm font-medium text-gray-700">Trend Timeframes (must all align)</label>
+                        <label class="block text-sm font-medium text-gray-700">Trend Timeframes (higher-TF context: 1h, 4h)</label>
                         <div class="mt-2 flex flex-wrap gap-4">
-                            @foreach (['5m', '15m', '30m', '1h', '4h'] as $timeframe)
+                            @foreach ($allTimeframes as $timeframe)
                                 <label class="inline-flex items-center gap-2">
                                     <input type="checkbox" name="bot_signal_timeframes[]" value="{{ $timeframe }}" {{ in_array($timeframe, $selectedSignalTimeframes, true) ? 'checked' : '' }} class="rounded border-gray-300" />
                                     <span class="text-sm text-gray-700">{{ strtoupper($timeframe) }}</span>
                                 </label>
                             @endforeach
                         </div>
+                        <p class="text-xs text-gray-500 mt-1">Used for trend-filter direction checks. Entry timeframe is configured separately below.</p>
                     </div>
 
                     <div class="md:col-span-2">
-                        <label class="block text-sm font-medium text-gray-700">Entry Timeframe (final trigger)</label>
+                        <label class="block text-sm font-medium text-gray-700">Entry Timeframe (strategy + trigger)</label>
                         <select name="bot_entry_timeframe" class="mt-1 block w-full rounded border-gray-300">
-                            @foreach ($selectedSignalTimeframes as $timeframe)
+                            @foreach ($allTimeframes as $timeframe)
                                 <option value="{{ $timeframe }}" {{ $selectedEntryTimeframe === $timeframe ? 'selected' : '' }}>{{ strtoupper($timeframe) }}</option>
                             @endforeach
                         </select>
-                        <p class="text-xs text-gray-500 mt-1">Trade waits for this timeframe trigger after all selected timeframes confirm direction.</p>
+                        <p class="text-xs text-gray-500 mt-1">Strategies run on this timeframe; trend filter waits for this candle to align after 1h/4h context.</p>
                         @error('bot_entry_timeframe')
                             <p class="text-xs text-rose-600 mt-1">{{ $message }}</p>
                         @enderror

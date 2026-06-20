@@ -101,15 +101,10 @@ class BotProfileController extends Controller
         );
         $entryTimeframe = $this->normalizeSignalTimeframe($validated['entry_timeframe'] ?? null);
         if ($entryTimeframe !== null && empty($signalTimeframes)) {
-            $signalTimeframes = [$entryTimeframe];
-        }
-        if ($entryTimeframe !== null && !in_array($entryTimeframe, $signalTimeframes ?? [], true)) {
-            throw ValidationException::withMessages([
-                'entry_timeframe' => 'Entry timeframe must be one of the selected trend timeframes.',
-            ]);
+            $signalTimeframes = ['1h', '4h'];
         }
         if ($entryTimeframe === null) {
-            $entryTimeframe = !empty($signalTimeframes) ? $signalTimeframes[0] : null;
+            $entryTimeframe = '15m';
         }
         $strategies = $this->normalizeStrategies($validated['strategies'] ?? null);
         if ($strategies === null && !empty($validated['strategy'])) {
@@ -248,15 +243,10 @@ class BotProfileController extends Controller
         );
         $entryTimeframe = $this->normalizeSignalTimeframe($validated['entry_timeframe'] ?? null);
         if ($entryTimeframe !== null && empty($signalTimeframes)) {
-            $signalTimeframes = [$entryTimeframe];
-        }
-        if ($entryTimeframe !== null && !in_array($entryTimeframe, $signalTimeframes ?? [], true)) {
-            throw ValidationException::withMessages([
-                'entry_timeframe' => 'Entry timeframe must be one of the selected trend timeframes.',
-            ]);
+            $signalTimeframes = ['1h', '4h'];
         }
         if ($entryTimeframe === null) {
-            $entryTimeframe = !empty($signalTimeframes) ? $signalTimeframes[0] : null;
+            $entryTimeframe = '15m';
         }
         $strategies = $this->normalizeStrategies($validated['strategies'] ?? null);
         if ($strategies === null && !empty($validated['strategy'])) {

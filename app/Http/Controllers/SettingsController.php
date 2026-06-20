@@ -169,9 +169,9 @@ class SettingsController extends Controller
                 ?? $this->normalizeSignalTimeframes(isset($profile['signal_timeframe']) ? [(string) $profile['signal_timeframe']] : null);
             $entryTimeframe = in_array(strtolower(trim((string) ($profile['entry_timeframe'] ?? ''))), self::ALLOWED_SIGNAL_TIMEFRAMES, true)
                 ? strtolower(trim((string) ($profile['entry_timeframe'] ?? '')))
-                : null;
-            if (!empty($signalTimeframes) && !in_array($entryTimeframe, $signalTimeframes, true)) {
-                $entryTimeframe = $signalTimeframes[0];
+                : '15m';
+            if (empty($signalTimeframes)) {
+                $signalTimeframes = ['1h', '4h'];
             }
 
             $profiles[] = [
