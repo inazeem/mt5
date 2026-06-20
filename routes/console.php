@@ -4,6 +4,8 @@ use App\Models\AppSetting;
 use App\Models\BotTradeLog;
 use App\Models\Ticker;
 use App\Services\AiService;
+use App\Services\AlpacaService;
+use App\Services\Brokers\BrokerResolver;
 use App\Services\Mt5Service;
 use App\Services\TradingStrategies\StrategyFactory;
 use Illuminate\Foundation\Inspiring;
@@ -60,7 +62,7 @@ Artisan::command('mt5:auto-forex
     {--bot= : Run only one bot profile key/name from settings bot_profiles JSON}
     {--test-mode : Bypass ALL filters and AI — trade the first --max-symbols symbols at market for testing only}
     {--once : Run one cycle only}
-', function (Mt5Service $mt5Service, AiService $aiService, StrategyFactory $strategyFactory) {
+', function (Mt5Service $mt5Service, AlpacaService $alpacaService, BrokerResolver $brokerResolver, AiService $aiService, StrategyFactory $strategyFactory) {
     $resolveProfiles = function (): array {
         $db = AppSetting::singleton();
         $rawProfiles = is_array($db->bot_profiles) ? $db->bot_profiles : [];
@@ -112,6 +114,8 @@ Artisan::command('mt5:auto-forex
     };
 
     $runCycle = function (array $botProfile) use ($mt5Service, $aiService, $strategyFactory) {
+        $brokerResolver = app(BrokerResolver::class);
+        $alpacaService = app(AlpacaService::class);
         $db = AppSetting::singleton();
         $botKey = (string) ($botProfile['key'] ?? 'default');
         $botName = (string) ($botProfile['name'] ?? $botKey);
@@ -325,10 +329,12 @@ Artisan::command('mt5:auto-forex
                 }
                 if (
                     str_contains($rawCategory, 'index') ||
-                    str_contains($rawCategory, 'indice') ||
-                    str_contains($rawCategory, 'crypto')
+                    str_contains($rawCategory, 'indice')
                 ) {
                     return 'other';
+                }
+                if (str_contains($rawCategory, 'crypto')) {
+                    return 'crypto';
                 }
                 if (
                     str_contains($rawCategory, 'major') ||
@@ -404,6 +410,7 @@ Artisan::command('mt5:auto-forex
                 'forex' => $tpPips,
                 'stock' => max($tpPips, 160.0),
                 'commodity' => max($tpPips, 80.0),
+                'crypto' => max($tpPips, 150.0),
                 'other' => max($tpPips, 60.0),
                 'default' => $tpPips,
             ];
@@ -421,6 +428,7 @@ Artisan::command('mt5:auto-forex
                 'forex' => $slPips,
                 'stock' => max($slPips, 80.0),
                 'commodity' => max($slPips, 40.0),
+                'crypto' => max($slPips, 100.0),
                 'other' => max($slPips, 30.0),
                 'default' => $slPips,
             ];
@@ -438,6 +446,7 @@ Artisan::command('mt5:auto-forex
                 'forex' => $maxSpreadPips,
                 'stock' => max($maxSpreadPips, 40.0),
                 'commodity' => max($maxSpreadPips, 15.0),
+                'crypto' => max($maxSpreadPips, 50.0),
                 'other' => max($maxSpreadPips, 10.0),
                 'default' => $maxSpreadPips,
             ];
@@ -526,7 +535,12 @@ Artisan::command('mt5:auto-forex
         $sessionEndUtc     = (int) $optionOrProfileOrSetting('session-end-utc', $botProfile['session_end_utc'] ?? null, $db->bot_session_end_utc ?? null, 20);
         $maxTradesPerDay   = max(1, (int) $optionOrProfileOrSetting('max-trades-per-day', $botProfile['max_trades_per_day'] ?? null, $db->bot_max_trades_per_day ?? null, 20));
         $maxDailyLossPercent = (float) $optionOrProfileOrSetting('max-daily-loss-percent', $botProfile['max_daily_loss_percent'] ?? null, $db->bot_max_daily_loss_percent ?? null, 2);
-        $aiConfirmSetting = $optionOrProfileOrSetting('ai-confirm', $botProfile['ai_confirm'] ?? null, $db->bot_ai_confirm ?? true, true);
+        $aiConfirmSetting = $optionOrProfileOrSetting(
+            'ai-confirm',
+            array_key_exists('ai_confirm', $botProfile) ? $botProfile['ai_confirm'] : null,
+            $db->bot_ai_confirm ?? true,
+            true
+        );
         $useAiConfirm      = (string) $aiConfirmSetting !== '0' && (bool) $aiConfirmSetting;
         $aiMinConfidence   = (int) $optionOrProfileOrSetting('ai-min-confidence', $botProfile['ai_min_confidence'] ?? null, $db->bot_ai_min_confidence ?? null, 70);
         $minBotScore       = max(0, min(100, (int) $optionOrProfileOrSetting('min-bot-score', $botProfile['min_bot_score'] ?? null, null, 70)));
@@ -597,8 +611,43 @@ Artisan::command('mt5:auto-forex
         $maxOpenPositions     = max(1, (int) $optionOrProfileOrSetting('max-open-positions', $botProfile['max_open_positions'] ?? null, $db->bot_max_open_positions ?? null, 10));
         $maxPerCycle          = max(1, (int) $optionOrProfileOrSetting('max-per-cycle', $botProfile['max_per_cycle'] ?? null, $db->bot_max_per_cycle ?? null, 5));
         $testMode             = (bool) $this->option('test-mode');
+        $profileTickerCategories = isset($botProfile['ticker_categories']) && is_array($botProfile['ticker_categories'])
+            ? array_values(array_unique(array_filter(array_map(static fn ($value) => strtolower(trim((string) $value)), $botProfile['ticker_categories']), static fn ($value) => $value !== '')))
+            : [];
+        $cycleBroker = $brokerResolver->forProfile($profileTickerCategories, $botProfile);
+        $usesAlpacaCycle = $brokerResolver->usesAlpaca($cycleBroker);
+
+        $minEffectiveVolumeExplicit = $optionProvided('min-effective-volume')
+            || ($botProfile['min_effective_volume'] ?? null) !== null;
+        if ($usesAlpacaCycle && !$minEffectiveVolumeExplicit) {
+            // Alpaca crypto qty is not MT5 lots; don't block 0.001 BTC with a 0.01 floor.
+            $minEffectiveVolume = min($minEffectiveVolume, max(0.0001, $lotSize * $volumeMultiplier));
+        }
+        if ($usesAlpacaCycle && !$optionProvided('scalper') && ($botProfile['scalper'] ?? null) === null) {
+            $scalperMode = false;
+        }
+
+        if ($usesAlpacaCycle) {
+            try {
+                $alpacaService->assertConfigured();
+            } catch (\Throwable $e) {
+                $this->error('Alpaca crypto profile cannot run: '.$e->getMessage());
+                BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                    'event_type' => 'guardrail',
+                    'status' => 'broker_config_error',
+                    'message' => $e->getMessage(),
+                ]));
+
+                return 1;
+            }
+        }
 
         $this->info('Running bot: '.$botName.' ('.$botKey.')');
+        if ($usesAlpacaCycle) {
+            $this->line('Broker: Alpaca paper crypto');
+        } else {
+            $this->line('Broker: MetaApi / MT5');
+        }
 
         if ($scalperMode) {
             // Scalper defaults: 1:3 R:R (SL=10pip, TP=30pip).
@@ -682,6 +731,7 @@ Artisan::command('mt5:auto-forex
         $this->line('Cycle credit budget '.($maxCycleCredits > 0 ? $maxCycleCredits : 'OFF'));
         $this->line('Strategies '.strtoupper(implode(',', $selectedStrategyKeys)).' on '.strtoupper($entryTimeframe));
         $this->line('Reverse strategy '.($reverseStrategy ? 'ON' : 'OFF'));
+        $this->line('AI confirmation '.($useAiConfirm ? 'ON' : 'OFF'));
 
         // Force UTC timezone to ensure correct time comparison
         date_default_timezone_set('UTC');
@@ -777,7 +827,7 @@ Artisan::command('mt5:auto-forex
         }
 
         try {
-            $accountInfo = $mt5Service->getAccountInformation();
+            $accountInfo = $cycleBroker->getAccountInformation();
             $equity = (float) ($accountInfo['equity'] ?? $accountInfo['balance'] ?? 0);
             $baselineKey = 'auto_bot_day_start_equity_'.preg_replace('/[^a-z0-9_]/', '_', strtolower($botKey)).'_'.now()->format('Ymd');
             $dayStartEquity = Cache::get($baselineKey);
@@ -831,31 +881,35 @@ Artisan::command('mt5:auto-forex
             ];
         };
 
-        $this->info('Running trailing stop updates...');
-        $trailResult = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier, $resolveTrailingParamsForSymbol);
-        $this->line('Trailing updated: '.$trailResult['updated'].', skipped: '.$trailResult['skipped']);
-        if ($trailResult['updated'] > 0) {
-            BotTradeLog::query()->create(array_merge($botLogDefaults, [
-                'event_type' => 'trailing_update',
-                'status' => 'success',
-                'message' => 'Trailing stop updated on '.$trailResult['updated'].' positions.',
-            ]));
-        }
-
-        if (!empty($trailResult['errors'])) {
-            foreach ($trailResult['errors'] as $error) {
-                $this->warn('Trailing error '.$error['symbol'].' #'.$error['position_id'].': '.$error['error']);
+        if (!$usesAlpacaCycle) {
+            $this->info('Running trailing stop updates...');
+            $trailResult = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier, $resolveTrailingParamsForSymbol);
+            $this->line('Trailing updated: '.$trailResult['updated'].', skipped: '.$trailResult['skipped']);
+            if ($trailResult['updated'] > 0) {
                 BotTradeLog::query()->create(array_merge($botLogDefaults, [
                     'event_type' => 'trailing_update',
-                    'status' => 'failed',
-                    'symbol' => $error['symbol'] ?? null,
-                    'message' => 'Trailing stop update failed.',
-                    'error_message' => $error['error'] ?? null,
+                    'status' => 'success',
+                    'message' => 'Trailing stop updated on '.$trailResult['updated'].' positions.',
                 ]));
             }
+
+            if (!empty($trailResult['errors'])) {
+                foreach ($trailResult['errors'] as $error) {
+                    $this->warn('Trailing error '.$error['symbol'].' #'.$error['position_id'].': '.$error['error']);
+                    BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                        'event_type' => 'trailing_update',
+                        'status' => 'failed',
+                        'symbol' => $error['symbol'] ?? null,
+                        'message' => 'Trailing stop update failed.',
+                        'error_message' => $error['error'] ?? null,
+                    ]));
+                }
+            }
+        } else {
+            $this->line('Skipping MT5 trailing updates (Alpaca bracket orders manage TP/SL).');
         }
 
-        $openSnapshot = $mt5Service->getOpenTradeSnapshot();
+        $openSnapshot = $cycleBroker->getOpenTradeSnapshot();
         $positionsPayload = $openSnapshot['positions'] ?? null;
         $positions = (is_array($positionsPayload) && array_is_list($positionsPayload)) ? $positionsPayload : [];
         if (!$testMode && count($positions) >= $maxOpenPositions) {
@@ -877,7 +931,7 @@ Artisan::command('mt5:auto-forex
                 $openBySymbol[$sym] = true;
                 // Also index by base symbol so a plain symbol like "EURUSD" matches
                 // a broker-suffixed open position like "EURUSD.a".
-                $openBySymbol[$mt5Service->baseSymbol($sym)] = true;
+                $openBySymbol[$cycleBroker->baseSymbol($sym)] = true;
             }
         }
 
@@ -885,9 +939,6 @@ Artisan::command('mt5:auto-forex
         $dbTickers = Ticker::query()->active()->orderBy('symbol')->get()->keyBy(fn ($t) => strtoupper($t->symbol));
         $profileSymbols = isset($botProfile['symbols']) && is_array($botProfile['symbols'])
             ? array_values(array_filter(array_map(static fn ($s) => strtoupper(trim((string) $s)), $botProfile['symbols']), static fn ($s) => $s !== ''))
-            : [];
-        $profileTickerCategories = isset($botProfile['ticker_categories']) && is_array($botProfile['ticker_categories'])
-            ? array_values(array_unique(array_filter(array_map(static fn ($value) => strtolower(trim((string) $value)), $botProfile['ticker_categories']), static fn ($value) => $value !== '')))
             : [];
 
         if (!empty($profileSymbols)) {
@@ -897,9 +948,14 @@ Artisan::command('mt5:auto-forex
             $symbols = $dbTickers->keys()->all();
             $this->line('Using '.count($symbols).' symbol(s) from tickers table.');
         } else {
-            $symbols = $mt5Service->getForexSymbols();
-            $dbTickers = collect();
-            $this->line('No tickers in DB — discovered '.count($symbols).' symbol(s) from MetaAPI.');
+            if ($usesAlpacaCycle) {
+                $symbols = ['BTC/USD'];
+                $this->line('No crypto tickers in DB — defaulting to BTC/USD. Add tickers for more symbols.');
+            } else {
+                $symbols = $mt5Service->getForexSymbols();
+                $dbTickers = collect();
+                $this->line('No tickers in DB — discovered '.count($symbols).' symbol(s) from MetaAPI.');
+            }
         }
 
         if (!empty($preferredSymbols)) {
@@ -1068,7 +1124,10 @@ Artisan::command('mt5:auto-forex
             ], $data));
         };
 
-        $reserveCycleCredits = function (int $cost, string $phase, string $symbol) use (&$cycleCreditsUsed, $maxCycleCredits, &$stoppedByCreditBudget, $botLogDefaults): bool {
+        $reserveCycleCredits = function (int $cost, string $phase, string $symbol) use (&$cycleCreditsUsed, $maxCycleCredits, &$stoppedByCreditBudget, $botLogDefaults, $usesAlpacaCycle): bool {
+            if ($usesAlpacaCycle) {
+                return true;
+            }
             if ($maxCycleCredits <= 0) {
                 $cycleCreditsUsed += $cost;
 
@@ -1149,9 +1208,9 @@ Artisan::command('mt5:auto-forex
             }
 
             $symbol = strtoupper((string) $symbol);
-            $quoteSymbol = preg_match('/^[A-Z]{6}$/', $symbol) === 1
-                ? $symbol.'_SB'
-                : $symbol;
+            $quoteSymbol = $usesAlpacaCycle
+                ? $symbol
+                : (preg_match('/^[A-Z]{6}$/', $symbol) === 1 ? $symbol.'_SB' : $symbol);
             $scanned++;
             $this->line("  SCANNED: {$quoteSymbol}");
 
@@ -1160,7 +1219,7 @@ Artisan::command('mt5:auto-forex
             }
 
             try {
-                $quote = $mt5Service->getTickerPrice($quoteSymbol);
+                $quote = $cycleBroker->getTickerPrice($quoteSymbol);
             } catch (\Throwable $e) {
                 $errorMessage = $e->getMessage();
                 Log::warning('Auto bot quote failed', ['symbol' => $symbol, 'error' => $errorMessage]);
@@ -1179,7 +1238,7 @@ Artisan::command('mt5:auto-forex
                     break;
                 }
 
-                if ($isMetaApiOutageError($errorMessage)) {
+                if (!$usesAlpacaCycle && $isMetaApiOutageError($errorMessage)) {
                     $pauseUntil = now()->addMinutes($metaApiPauseMinutes);
                     Cache::put($metaApiPauseKey, $pauseUntil->toIso8601String(), $pauseUntil);
                     $this->warn('  MetaApi connectivity outage detected; pausing scans for '.$metaApiPauseMinutes.' minutes.');
@@ -1205,6 +1264,7 @@ Artisan::command('mt5:auto-forex
             $spreadCategory = $classifySpreadCategory($symbol, $tickerCategory);
             $defaultPipSize = match ($spreadCategory) {
                 'stock' => 0.01,
+                'crypto' => 1.0,
                 'commodity', 'other' => 0.01,
                 default => (str_ends_with($base, 'JPY') ? 0.01 : 0.0001),
             };
@@ -1251,7 +1311,7 @@ Artisan::command('mt5:auto-forex
                 }
 
                 try {
-                    $candlesForStrategy = $mt5Service->getCandles($symbol, $primaryTimeframe, $requiredCandleCount);
+                    $candlesForStrategy = $cycleBroker->getCandles($symbol, $primaryTimeframe, $requiredCandleCount);
                 } catch (\Throwable $e) {
                     $skippedNoMove++;
                     $logSignal([
@@ -1401,9 +1461,6 @@ Artisan::command('mt5:auto-forex
                     : 0.0;
             }
 
-            if ($reverseStrategy) {
-                $side = $side === 'buy' ? 'sell' : 'buy';
-            }
             $effectiveVolume = $lotSize * $volumeMultiplier;
             $botScore = $calculateBotScore($signalDeltaPips, $spreadPips, $effectiveVolume, $minEffectiveVolume);
 
@@ -1530,7 +1587,7 @@ Artisan::command('mt5:auto-forex
                             break 2;
                         }
 
-                        $candles = $mt5Service->getCandles($symbol, $timeframe, 1);
+                        $candles = $cycleBroker->getCandles($symbol, $timeframe, 1);
                         $trendByTimeframe[$timeframe] = $resolveTrendSide($candles);
                     }
 
@@ -1558,7 +1615,7 @@ Artisan::command('mt5:auto-forex
                         break;
                     }
 
-                    $entryCandles = $mt5Service->getCandles($symbol, $entryTimeframe, 1);
+                    $entryCandles = $cycleBroker->getCandles($symbol, $entryTimeframe, 1);
                     $entryTrendSide = $resolveTrendSide($entryCandles);
                     if ($entryTrendSide !== $side) {
                         $logSignal([
@@ -1602,9 +1659,11 @@ Artisan::command('mt5:auto-forex
             }
 
             $recommendedSide = $side;
-            $executionSide = $recommendedSide === 'buy' ? 'sell' : 'buy';
+            $executionSide = $reverseStrategy
+                ? ($recommendedSide === 'buy' ? 'sell' : 'buy')
+                : $recommendedSide;
 
-            $this->line("  {$symbol}: signal {$recommendedSide} => executing {$executionSide} — move=".number_format($signalDeltaPips,2)."pip spread=".number_format($spreadPips,2)."pip bid={$bid} ask={$ask}");
+            $this->line("  {$symbol}: signal {$recommendedSide}".($executionSide !== $recommendedSide ? " => executing {$executionSide}" : '').' — move='.number_format($signalDeltaPips, 2).'pip spread='.number_format($spreadPips, 2)."pip bid={$bid} ask={$ask}");
 
             if ($executionSide === 'buy') {
                 $entry = $ask;
@@ -1649,7 +1708,7 @@ Artisan::command('mt5:auto-forex
                                 break 2;
                             }
 
-                            $candles = $mt5Service->getCandles($symbol, $timeframe, $limit);
+                            $candles = $cycleBroker->getCandles($symbol, $timeframe, $limit);
                             if (!empty($candles)) {
                                 $candleContext .= "\n\nLast ".count($candles)." x ".strtoupper($timeframe)." candles (oldest first):\n".$formatCandles($candles);
                             }
@@ -1756,7 +1815,7 @@ Artisan::command('mt5:auto-forex
             ]);
 
             try {
-                $result = $mt5Service->placeOrder($symbol, $lotSize, $executionSide, [[
+                $result = $cycleBroker->placeOrder($symbol, $lotSize, $executionSide, [[
                     'close_percent' => 100,
                     'take_profit' => $takeProfit,
                     'stop_loss' => $stopLoss,
@@ -1823,6 +1882,7 @@ Artisan::command('mt5:auto-forex
                     break;
                 }
             } catch (\Throwable $e) {
+                $this->warn("  {$symbol}: trade failed — ".$e->getMessage());
                 Log::warning('Auto bot trade failed', [
                     'symbol' => $symbol,
                     'recommended_side' => $recommendedSide,

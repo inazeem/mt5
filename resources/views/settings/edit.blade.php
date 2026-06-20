@@ -138,6 +138,44 @@
                     </div>
                 </section>
 
+                <section>
+                    <h2 class="text-lg font-medium text-gray-900">Alpaca Crypto (Paper)</h2>
+                    <p class="mt-1 text-sm text-gray-600">
+                        Used when a bot profile trades only <strong>Crypto</strong> tickers (e.g. BTC/USD).
+                        Create paper keys at <a href="https://app.alpaca.markets/paper/dashboard/overview" target="_blank" class="text-indigo-600 hover:underline">Alpaca Paper</a>.
+                    </p>
+                    <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Alpaca API Key ID</label>
+                            <input name="alpaca_api_key_id" type="text"
+                                   value="{{ old('alpaca_api_key_id', $settings->alpaca_api_key_id) }}"
+                                   placeholder="PK..."
+                                   class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Alpaca API Secret</label>
+                            <div class="mt-1 flex items-center gap-2">
+                                <input id="alpaca_api_secret" name="alpaca_api_secret" type="password"
+                                       value="{{ old('alpaca_api_secret', $settings->alpaca_api_secret) }}"
+                                       placeholder="Leave blank to keep existing secret"
+                                       class="block w-full rounded border-gray-300" />
+                                <button type="button" data-toggle-password="alpaca_api_secret" class="inline-flex items-center justify-center rounded border border-gray-300 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50" aria-label="Toggle Alpaca secret visibility" title="Show/Hide">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path d="M10 4C5 4 1.73 7.11.46 9.02a1.75 1.75 0 0 0 0 1.96C1.73 12.89 5 16 10 16s8.27-3.11 9.54-5.02a1.75 1.75 0 0 0 0-1.96C18.27 7.11 15 4 10 4Zm0 9a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="inline-flex items-center gap-2">
+                                <input type="checkbox" name="alpaca_paper" value="1" {{ old('alpaca_paper', $settings->alpaca_paper ?? true) ? 'checked' : '' }} class="rounded border-gray-300" />
+                                <span class="text-sm text-gray-700">Use Alpaca paper endpoint (recommended)</span>
+                            </label>
+                            <p class="text-xs text-gray-500 mt-1">When demo-only mode is on, Alpaca always uses paper regardless of this checkbox.</p>
+                        </div>
+                    </div>
+                </section>
+
                 @php
                     $botProfilesText = old('bot_profiles');
                     if ($botProfilesText === null) {

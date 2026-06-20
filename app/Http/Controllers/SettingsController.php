@@ -33,6 +33,9 @@ class SettingsController extends Controller
             'metaapi_token'       => ['nullable', 'string', 'max:4096'],
             'metaapi_account_id'  => ['nullable', 'string', 'max:255'],
             'metaapi_region'      => ['nullable', 'string', 'max:100'],
+            'alpaca_api_key_id'   => ['nullable', 'string', 'max:255'],
+            'alpaca_api_secret'   => ['nullable', 'string', 'max:4096'],
+            'alpaca_paper'        => ['nullable', 'boolean'],
             // Auto-bot
             'bot_lot'                  => ['nullable', 'numeric', 'min:0.001', 'max:1000'],
             'bot_tp_pips'              => ['nullable', 'numeric', 'min:0.1'],
@@ -59,11 +62,12 @@ class SettingsController extends Controller
 
         $validated['demo_only'] = $request->boolean('demo_only');
         $validated['bot_ai_confirm'] = $request->boolean('bot_ai_confirm');
+        $validated['alpaca_paper'] = $request->boolean('alpaca_paper');
         $validated['bot_strategies'] = $this->normalizeStrategies($validated['bot_strategies'] ?? null) ?? ['momentum'];
         $validated['bot_signal_timeframes'] = $this->normalizeSignalTimeframes($validated['bot_signal_timeframes'] ?? null);
         $validated['bot_profiles'] = $this->normalizeBotProfiles($validated['bot_profiles'] ?? null);
 
-        foreach (['claude_api_key', 'perplexity_api_key', 'metaapi_token'] as $secretField) {
+        foreach (['claude_api_key', 'perplexity_api_key', 'metaapi_token', 'alpaca_api_secret'] as $secretField) {
             if (empty($validated[$secretField])) {
                 unset($validated[$secretField]);
             }

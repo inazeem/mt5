@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\AppSetting;
+use App\Services\Brokers\MarketBrokerInterface;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\RequestException;
@@ -18,7 +19,7 @@ use RuntimeException;
  * - Fetch account, market, and history data.
  * - Apply protective trailing-stop updates.
  */
-class Mt5Service
+class Mt5Service implements MarketBrokerInterface
 {
     private const BASE_URL = 'https://mt-client-api-v1.{region}.agiliumtrade.ai';
     private const MARKET_DATA_BASE_URL = 'https://mt-market-data-client-api-v1.{region}.agiliumtrade.ai';
