@@ -15,6 +15,8 @@ class AlpacaService implements MarketBrokerInterface
     private const DATA_URL = 'https://data.alpaca.markets';
     private const TIMEOUT_SECONDS = 12;
     private const CONNECT_TIMEOUT_SECONDS = 5;
+    /** Alpaca crypto rejects orders below this USD notional (cost basis). */
+    private const MIN_ORDER_NOTIONAL_USD = 10.0;
 
     public function assertConfigured(): void
     {
@@ -101,8 +103,19 @@ class AlpacaService implements MarketBrokerInterface
         }
 
         $alpacaSymbol = $this->toAlpacaSymbol($symbol);
-        $qty = $this->normalizeQty($lotSize);
         $orderSide = strtolower($side) === 'sell' ? 'sell' : 'buy';
+        $maxQty = null;
+        if ($orderSide === 'sell') {
+            $maxQty = $this->positionQtyForSymbol($alpacaSymbol);
+            if ($maxQty <= 0) {
+                throw new RuntimeException('Cannot sell '.$alpacaSymbol.': no holdings on Alpaca (spot crypto is long-only).');
+            }
+        }
+
+        $qty = $this->resolveOrderQty($symbol, $lotSize, $orderSide, null, $maxQty);
+        if ($qty <= 0) {
+            throw new RuntimeException('Order quantity for '.$alpacaSymbol.' is below Alpaca minimum notional.');
+        }
         $leg = is_array($exitLegs[0] ?? null) ? $exitLegs[0] : [];
         $takeProfit = isset($leg['take_profit']) ? (float) $leg['take_profit'] : null;
         $stopLoss = isset($leg['stop_loss']) ? (float) $leg['stop_loss'] : null;
@@ -200,8 +213,66 @@ class AlpacaService implements MarketBrokerInterface
             'mode' => 'multi-leg',
             'symbol' => $alpacaSymbol,
             'broker' => 'alpaca',
+            'requested_qty' => $this->normalizeQty($lotSize),
+            'order_qty' => $qty,
             'orders' => $orders,
         ];
+    }
+
+    /**
+     * Resolve crypto order quantity, bumping above Alpaca's minimum USD notional when needed.
+     */
+    public function resolveOrderQty(string $symbol, float $lotSize, string $side, ?float $referencePrice = null, ?float $maxQty = null): float
+    {
+        $qty = $this->normalizeQty($lotSize);
+        $side = strtolower($side);
+        $price = $referencePrice;
+        if ($price === null || $price <= 0) {
+            $quote = $this->getTickerPrice($symbol);
+            $price = $side === 'sell'
+                ? (float) ($quote['bid'] ?? 0)
+                : (float) ($quote['ask'] ?? 0);
+            if ($price <= 0) {
+                $price = (float) ($quote['last'] ?? 0);
+            }
+        }
+
+        if ($side === 'sell') {
+            if ($maxQty !== null) {
+                if ($maxQty <= 0) {
+                    return 0.0;
+                }
+
+                $qty = min($qty, $maxQty);
+            }
+
+            if ($price > 0 && ($qty * $price) < self::MIN_ORDER_NOTIONAL_USD) {
+                if ($maxQty !== null && ($maxQty * $price) >= self::MIN_ORDER_NOTIONAL_USD) {
+                    return $this->normalizeQty($maxQty);
+                }
+
+                return 0.0;
+            }
+
+            return $qty;
+        }
+
+        return $this->ensureMinNotionalQty($qty, $price);
+    }
+
+    public function estimateBuyNotionalUsd(string $symbol, float $lotSize, ?float $askPrice = null): float
+    {
+        $price = $askPrice;
+        if ($price === null || $price <= 0) {
+            $quote = $this->getTickerPrice($symbol);
+            $price = (float) ($quote['ask'] ?? $quote['last'] ?? 0);
+        }
+
+        if ($price <= 0) {
+            return 0.0;
+        }
+
+        return $this->resolveOrderQty($symbol, $lotSize, 'buy', $price) * $price;
     }
 
     /**
@@ -248,6 +319,29 @@ class AlpacaService implements MarketBrokerInterface
             'fetched_at' => now()->toDateTimeString(),
             'broker' => 'alpaca',
         ];
+    }
+
+    public function positionQtyForSymbol(string $symbol): float
+    {
+        $target = strtoupper($this->toAlpacaSymbol($symbol));
+        $snapshot = $this->getOpenTradeSnapshot();
+
+        foreach ($snapshot['positions'] as $position) {
+            if (!is_array($position)) {
+                continue;
+            }
+
+            $positionSymbol = strtoupper((string) ($position['symbol'] ?? ''));
+            if ($positionSymbol !== $target && $this->baseSymbol($positionSymbol) !== $this->baseSymbol($target)) {
+                continue;
+            }
+
+            $qty = isset($position['qty']) ? (float) $position['qty'] : 0.0;
+
+            return max(0.0, abs($qty));
+        }
+
+        return 0.0;
     }
 
     public function getAccountInformation(): array
@@ -341,6 +435,21 @@ class AlpacaService implements MarketBrokerInterface
         $qty = max(0.0001, round($lotSize, 8));
 
         return $qty;
+    }
+
+    private function ensureMinNotionalQty(float $qty, float $price): float
+    {
+        if ($price <= 0) {
+            return $qty;
+        }
+
+        if (($qty * $price) >= self::MIN_ORDER_NOTIONAL_USD) {
+            return $qty;
+        }
+
+        $requiredQty = (self::MIN_ORDER_NOTIONAL_USD / $price) * 1.002;
+
+        return max($qty, ceil($requiredQty * 100000000) / 100000000);
     }
 
     private function formatQty(float $qty): string

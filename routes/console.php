@@ -1082,6 +1082,7 @@ Artisan::command('mt5:auto-forex
         try {
             $accountInfo = $cycleBroker->getAccountInformation();
             $equity = (float) ($accountInfo['equity'] ?? $accountInfo['balance'] ?? 0);
+            $accountCash = (float) ($accountInfo['balance'] ?? $accountInfo['cash'] ?? $equity);
             $baselineKey = 'auto_bot_day_start_equity_'.preg_replace('/[^a-z0-9_]/', '_', strtolower($botKey)).'_'.now()->format('Ymd');
             $dayStartEquity = Cache::get($baselineKey);
             if (!is_numeric($dayStartEquity) && $equity > 0) {
@@ -1105,6 +1106,11 @@ Artisan::command('mt5:auto-forex
             }
         } catch (\Throwable $e) {
             $this->warn('Account info unavailable, skipping daily loss guard: '.$e->getMessage());
+            $accountCash = null;
+        }
+
+        if (!isset($accountCash)) {
+            $accountCash = null;
         }
 
         // ── §12 TRAILING STOPS (pre-scan + category-aware params) ───────────────────
@@ -1180,13 +1186,18 @@ Artisan::command('mt5:auto-forex
         }
 
         $openBySymbol = [];
+        $openQtyBySymbol = [];
         foreach ($positions as $position) {
             if (is_array($position) && !empty($position['symbol'])) {
                 $sym = strtoupper((string) $position['symbol']);
+                $positionQty = isset($position['qty']) ? abs((float) $position['qty']) : 0.0;
                 $openBySymbol[$sym] = true;
+                $openQtyBySymbol[$sym] = $positionQty;
                 // Also index by base symbol so a plain symbol like "EURUSD" matches
                 // a broker-suffixed open position like "EURUSD.a".
-                $openBySymbol[$cycleBroker->baseSymbol($sym)] = true;
+                $baseSym = $cycleBroker->baseSymbol($sym);
+                $openBySymbol[$baseSym] = true;
+                $openQtyBySymbol[$baseSym] = max((float) ($openQtyBySymbol[$baseSym] ?? 0), $positionQty);
             }
         }
 
@@ -1634,6 +1645,12 @@ Artisan::command('mt5:auto-forex
             if ($testMode) {
                 $delta = isset($lastBid) && is_numeric($lastBid) ? ($bid - (float) $lastBid) : 0.0;
                 $side = $delta >= 0 ? 'buy' : 'sell';
+                if ($usesAlpacaCycle) {
+                    $heldQty = (float) ($openQtyBySymbol[strtoupper($symbol)] ?? $openQtyBySymbol[$cycleBroker->baseSymbol($symbol)] ?? 0);
+                    if ($side === 'sell' && $heldQty <= 0) {
+                        $side = 'buy';
+                    }
+                }
                 $signalDeltaPips = $pipSize > 0 ? abs($delta / $pipSize) : 0.0;
             } else {
                 // ── §15 STRATEGY EVALUATION (all selected strategies must agree) ─────
@@ -2218,6 +2235,55 @@ Artisan::command('mt5:auto-forex
                 'message' => 'Signal passed all filters and AI confirmation.',
             ]);
 
+            if ($usesAlpacaCycle) {
+                $heldQty = (float) ($openQtyBySymbol[strtoupper($symbol)] ?? $openQtyBySymbol[$cycleBroker->baseSymbol($symbol)] ?? 0);
+                if ($executionSide === 'sell' && $heldQty <= 0) {
+                    $this->line("  {$symbol}: SELL skipped — Alpaca spot crypto cannot short without holdings.");
+                    $logSignal([
+                        'status' => 'alpaca_short_not_supported',
+                        'symbol' => $symbol,
+                        'side' => $executionSide,
+                        'spread_pips' => $spreadPips,
+                        'signal_delta_pips' => $signalDeltaPips,
+                        'meta_payload' => array_merge($scoreMetaPayload(), [
+                            'recommended_side' => $recommendedSide,
+                            'execution_side' => $executionSide,
+                        ]),
+                        'message' => 'Sell signal skipped because Alpaca spot crypto cannot open a short without existing holdings.',
+                    ]);
+                    continue;
+                }
+
+                if ($executionSide === 'buy') {
+                    $requiredNotional = $alpacaService->estimateBuyNotionalUsd($symbol, $lotSize, $ask);
+                    $availableCash = (float) ($accountCash ?? 0);
+                    if ($requiredNotional > 0 && $availableCash > 0 && $requiredNotional > ($availableCash * 0.995)) {
+                        $this->line(
+                            "  {$symbol}: BUY skipped — insufficient cash (need ~$"
+                            .number_format($requiredNotional, 2)
+                            .', have ~$'
+                            .number_format($availableCash, 2)
+                            .').'
+                        );
+                        $logSignal([
+                            'status' => 'insufficient_balance',
+                            'symbol' => $symbol,
+                            'side' => $executionSide,
+                            'spread_pips' => $spreadPips,
+                            'signal_delta_pips' => $signalDeltaPips,
+                            'meta_payload' => array_merge($scoreMetaPayload(), [
+                                'recommended_side' => $recommendedSide,
+                                'execution_side' => $executionSide,
+                                'required_notional_usd' => round($requiredNotional, 2),
+                                'available_cash_usd' => round($availableCash, 2),
+                            ]),
+                            'message' => 'Buy skipped because Alpaca account cash is below required order notional.',
+                        ]);
+                        continue;
+                    }
+                }
+            }
+
             try {
                 // ── §20 TRADE EXECUTION (broker placeOrder) ───────────────────────────
                 $result = $cycleBroker->placeOrder($symbol, $lotSize, $executionSide, [[
@@ -2233,8 +2299,13 @@ Artisan::command('mt5:auto-forex
                 $orderId = trim((string) ($firstResponse['orderId'] ?? ''));
                 $positionId = trim((string) ($firstResponse['positionId'] ?? ''));
                 $tradeRef = $positionId !== '' ? $positionId : ($orderId !== '' ? $orderId : (string) $symbol);
+                $executedLotSize = is_numeric($result['order_qty'] ?? null) ? (float) $result['order_qty'] : $lotSize;
 
-                $this->info('Opened '.$executionSide.' '.$symbol.' (recommended '.$recommendedSide.') TP='.$takeProfit.' SL='.$stopLoss);
+                $openMessage = 'Opened '.$executionSide.' '.$symbol.' (recommended '.$recommendedSide.') TP='.$takeProfit.' SL='.$stopLoss;
+                if ($executedLotSize > $lotSize) {
+                    $openMessage .= ' qty='.$executedLotSize.' (profile lot '.$lotSize.' bumped for Alpaca $10 min notional)';
+                }
+                $this->info($openMessage);
                 Log::info('Auto bot opened trade', [
                     'symbol' => $symbol,
                     'recommended_side' => $recommendedSide,
@@ -2250,7 +2321,7 @@ Artisan::command('mt5:auto-forex
                     'position_id' => $positionId !== '' ? $positionId : null,
                     'linked_trade' => 'TRADE #'.$tradeRef,
                     'trade_outcome' => 'PENDING',
-                    'lot_size' => $lotSize,
+                    'lot_size' => $executedLotSize,
                     'entry_price' => $entry,
                     'take_profit' => $takeProfit,
                     'stop_loss' => $stopLoss,
