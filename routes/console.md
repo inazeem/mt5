@@ -170,7 +170,7 @@ Profiles live in `app_settings.bot_profiles` (JSON array). Each profile can over
 
 Supported in UI and JSON (non-exhaustive):
 
-`key`, `name`, `enabled`, `lot`, `tp_pips`, `sl_pips`, `trail_*`, `min_move_pips`, `max_spread_pips`, `cooldown_minutes`, `session_start_utc`, `session_end_utc`, `max_trades_per_day`, `max_trades_per_asset_per_day`, `max_daily_loss_percent`, `ai_confirm`, `ai_min_confidence`, `max_symbols`, `max_open_positions`, `max_per_cycle`, `min_bot_score`, `use_adx_score`, `use_rsi_score`, `adx_min_floor`, `min_effective_volume`, `scalper`, `strategy` / `strategies`, `strategy_params`, `symbols`, `signal_timeframe` / `signal_timeframes`, `entry_timeframe`, `trend_filter`, `reverse_strategy`, `cooldown_override_ratio`, `preferred_hours_utc`, `blocked_hours_utc`, `preferred_symbols`, `ticker_categories`, category override maps (`tp_pips_by_category`, etc.)
+`key`, `name`, `enabled`, `lot`, `tp_pips`, `sl_pips`, `trail_*`, `min_move_pips`, `max_spread_pips`, `cooldown_minutes`, `session_start_utc`, `session_end_utc`, `max_trades_per_day`, `max_trades_per_asset_per_day`, `max_daily_loss_percent`, `ai_confirm`, `ai_min_confidence`, `max_symbols`, `max_open_positions`, `max_per_cycle`, `min_bot_score`, `use_adx_score`, `use_rsi_score`, `adx_min_floor`, `min_effective_volume`, `enable_max_hold`, `max_hold_minutes`, `scalper`, `strategy` / `strategies`, `strategy_params`, `symbols`, `signal_timeframe` / `signal_timeframes`, `entry_timeframe`, `trend_filter`, `reverse_strategy`, `cooldown_override_ratio`, `preferred_hours_utc`, `blocked_hours_utc`, `preferred_symbols`, `ticker_categories`, category override maps (`tp_pips_by_category`, etc.)
 
 Every log row for a cycle includes `bot_key` and `bot_name` from `$botLogDefaults`.
 

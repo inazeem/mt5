@@ -229,6 +229,14 @@
                                    value="{{ old('min_effective_volume', isset($profile['min_effective_volume']) ? $profile['min_effective_volume'] : '') }}" placeholder="e.g. 0.01"
                                    class="mt-1 block w-full rounded border-gray-300" />
                         </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Max Hold Minutes</label>
+                            <input type="number" name="max_hold_minutes" min="1" max="1440"
+                                   value="{{ old('max_hold_minutes', isset($profile['max_hold_minutes']) ? $profile['max_hold_minutes'] : '') }}" placeholder="e.g. 60"
+                                   class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="mt-1 text-xs text-gray-500">MT5 only. Open trades older than this are closed on the next bot cycle when enabled below.</p>
+                        </div>
                     </div>
                     </div>
 
@@ -252,6 +260,10 @@
                         <label class="flex items-center gap-2">
                             <input type="checkbox" id="use_rsi_score" name="use_rsi_score" value="1" {{ old('use_rsi_score', array_key_exists('use_rsi_score', $profile) ? (bool) $profile['use_rsi_score'] : true) ? 'checked' : '' }} class="rounded border-gray-300" />
                             <span class="text-sm text-gray-700">Include RSI in bot score (trend alignment)</span>
+                        </label>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" id="enable_max_hold" name="enable_max_hold" value="1" {{ old('enable_max_hold', (bool) ($profile['enable_max_hold'] ?? false)) ? 'checked' : '' }} class="rounded border-gray-300" />
+                            <span class="text-sm text-gray-700">Enable max hold time auto-close (MT5 only)</span>
                         </label>
                     </div>
 

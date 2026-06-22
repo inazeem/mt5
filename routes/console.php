@@ -771,6 +771,12 @@ Artisan::command('mt5:auto-forex
         $volumeMultiplier  = max(1, (int) ($db->mt5_volume_multiplier ?? 1));
         $defaultMinEffectiveVolume = 0.01 * $volumeMultiplier;
         $minEffectiveVolume = (float) $optionOrProfileOrSetting('min-effective-volume', $botProfile['min_effective_volume'] ?? null, null, $defaultMinEffectiveVolume);
+        $enableMaxHoldSetting = $optionOrProfileOrSetting('enable-max-hold', $botProfile['enable_max_hold'] ?? null, null, 0);
+        $enableMaxHold = (string) $enableMaxHoldSetting !== '0' && (bool) $enableMaxHoldSetting;
+        $maxHoldMinutesRaw = $optionOrProfileOrSetting('max-hold-minutes', $botProfile['max_hold_minutes'] ?? null, null, null);
+        $maxHoldMinutes = is_numeric($maxHoldMinutesRaw) && (int) $maxHoldMinutesRaw > 0
+            ? (int) $maxHoldMinutesRaw
+            : null;
         $maxSymbols        = max(1, (int) $optionOrProfileOrSetting('max-symbols', $botProfile['max_symbols'] ?? null, $db->bot_max_symbols ?? null, 200));
         $scanDelayMs       = max(0, (int) $optionOrProfileOrSetting('scan-delay-ms', $botProfile['scan_delay_ms'] ?? null, null, 0));
         $maxCycleCredits   = max(0, (int) $optionOrProfileOrSetting('max-cycle-credits', $botProfile['max_cycle_credits'] ?? null, $db->bot_max_cycle_credits ?? null, 900));
@@ -1163,6 +1169,88 @@ Artisan::command('mt5:auto-forex
                         'message' => 'Trailing stop update failed.',
                         'error_message' => $error['error'] ?? null,
                     ]));
+                }
+            }
+
+            if (!$testMode && $enableMaxHold && $maxHoldMinutes !== null) {
+                $this->info('Running max-hold close pass...');
+                $holdCutoff = now()->subMinutes($maxHoldMinutes);
+                $alreadyClosedByMaxHold = BotTradeLog::query()
+                    ->where('bot_key', $botKey)
+                    ->where('event_type', 'guardrail')
+                    ->where('status', 'max_hold_closed')
+                    ->whereNotNull('position_id')
+                    ->pluck('position_id')
+                    ->filter()
+                    ->values()
+                    ->all();
+                $expiredTrades = BotTradeLog::query()
+                    ->where('bot_key', $botKey)
+                    ->where('event_type', 'trade_open')
+                    ->where('status', 'success')
+                    ->where('trade_outcome', 'PENDING')
+                    ->whereNotNull('position_id')
+                    ->where('created_at', '<=', $holdCutoff)
+                    ->when(
+                        !empty($alreadyClosedByMaxHold),
+                        static fn ($query) => $query->whereNotIn('position_id', $alreadyClosedByMaxHold)
+                    )
+                    ->orderBy('created_at')
+                    ->get();
+
+                $closedByMaxHold = 0;
+                foreach ($expiredTrades as $tradeLog) {
+                    $positionId = trim((string) ($tradeLog->position_id ?? ''));
+                    if ($positionId === '') {
+                        continue;
+                    }
+
+                    try {
+                        $mt5CloseResult = $mt5Service->closePosition($positionId);
+                        $closedByMaxHold++;
+                        $symbol = $tradeLog->symbol ? strtoupper((string) $tradeLog->symbol) : null;
+                        $this->line('Max hold closed '.$positionId.($symbol ? ' '.$symbol : '').' after '.$maxHoldMinutes.' minute(s).');
+                        BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                            'event_type' => 'guardrail',
+                            'status' => 'max_hold_closed',
+                            'symbol' => $tradeLog->symbol,
+                            'side' => $tradeLog->side,
+                            'position_id' => $positionId,
+                            'linked_trade' => $tradeLog->linked_trade,
+                            'lot_size' => $tradeLog->lot_size,
+                            'entry_price' => $tradeLog->entry_price,
+                            'take_profit' => $tradeLog->take_profit,
+                            'stop_loss' => $tradeLog->stop_loss,
+                            'message' => 'Trade closed because max hold time was reached.',
+                            'meta_payload' => [
+                                'max_hold_minutes' => $maxHoldMinutes,
+                                'opened_at' => optional($tradeLog->created_at)->toDateTimeString(),
+                                'closed_by' => 'max_hold_minutes',
+                            ],
+                            'meta_response' => $mt5CloseResult,
+                        ]));
+                    } catch (\Throwable $e) {
+                        $this->warn('Max hold close failed #'.$positionId.': '.$e->getMessage());
+                        BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                            'event_type' => 'guardrail',
+                            'status' => 'max_hold_close_failed',
+                            'symbol' => $tradeLog->symbol,
+                            'side' => $tradeLog->side,
+                            'position_id' => $positionId,
+                            'linked_trade' => $tradeLog->linked_trade,
+                            'message' => 'Trade close failed after max hold time was reached.',
+                            'error_message' => $e->getMessage(),
+                            'meta_payload' => [
+                                'max_hold_minutes' => $maxHoldMinutes,
+                                'opened_at' => optional($tradeLog->created_at)->toDateTimeString(),
+                                'close_failed_by' => 'max_hold_minutes',
+                            ],
+                        ]));
+                    }
+                }
+
+                if ($closedByMaxHold > 0) {
+                    $this->line('Max hold closed: '.$closedByMaxHold);
                 }
             }
         } else {

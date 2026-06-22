@@ -206,6 +206,8 @@ class SettingsController extends Controller
                 'max_per_cycle' => isset($profile['max_per_cycle']) ? (int) $profile['max_per_cycle'] : null,
                 'min_bot_score' => isset($profile['min_bot_score']) ? (int) $profile['min_bot_score'] : null,
                 'min_effective_volume' => isset($profile['min_effective_volume']) ? (float) $profile['min_effective_volume'] : null,
+                'enable_max_hold' => isset($profile['enable_max_hold']) ? (bool) $profile['enable_max_hold'] : null,
+                'max_hold_minutes' => isset($profile['max_hold_minutes']) ? (int) $profile['max_hold_minutes'] : null,
                 'scalper' => isset($profile['scalper']) ? (bool) $profile['scalper'] : null,
                 'symbols' => isset($profile['symbols']) && is_array($profile['symbols'])
                     ? array_values(array_filter(array_map(static fn ($s) => strtoupper(trim((string) $s)), $profile['symbols']), static fn ($s) => $s !== ''))
