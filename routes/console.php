@@ -5,8 +5,10 @@ use App\Models\BotTradeLog;
 use App\Models\Ticker;
 use App\Services\AiService;
 use App\Services\AlpacaService;
+use App\Services\BotScoreCalculator;
 use App\Services\Brokers\BrokerResolver;
 use App\Services\Mt5Service;
+use App\Services\TradingStrategies\IndicatorMath;
 use App\Services\TradingStrategies\StrategyFactory;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -238,6 +240,9 @@ Artisan::command('mt5:auto-forex
     {--ai-confirm=1 : 1 requires AI approval before entry, 0 bypasses AI confirmation}
     {--ai-min-confidence=70 : Minimum AI confidence percentage (0-100) required to approve a trade}
     {--min-bot-score=70 : Minimum bot score (0-100) required to log/execute a signal}
+    {--use-adx-score=1 : 1 includes ADX trend-strength in bot score (hard-rejects below floor)}
+    {--use-rsi-score=1 : 1 includes RSI trend-alignment in bot score}
+    {--adx-min-floor= : Minimum ADX to allow entry (category default when omitted)}
     {--min-effective-volume= : Minimum effective volume required to place a trade (default: 0.01 x volume multiplier)}
     {--max-symbols=200 : Max symbols to scan per cycle (round-robin when total symbols exceed this value)}
     {--scan-delay-ms=0 : Milliseconds to wait between symbol scans to reduce API burst rate}
@@ -258,7 +263,7 @@ Artisan::command('mt5:auto-forex
     {--bot= : Run only one bot profile key/name from settings bot_profiles JSON}
     {--test-mode : Bypass ALL filters and AI — trade the first --max-symbols symbols at market for testing only}
     {--once : Run one cycle only}
-', function (Mt5Service $mt5Service, AlpacaService $alpacaService, BrokerResolver $brokerResolver, AiService $aiService, StrategyFactory $strategyFactory) {
+', function (Mt5Service $mt5Service, AlpacaService $alpacaService, BrokerResolver $brokerResolver, AiService $aiService, StrategyFactory $strategyFactory, BotScoreCalculator $botScoreCalculator) {
     // ── $resolveProfiles — load/normalize bot_profiles; filter by --bot ──────────
     $resolveProfiles = function (): array {
         $db = AppSetting::singleton();
@@ -311,7 +316,7 @@ Artisan::command('mt5:auto-forex
     };
 
     // ── $runCycle — one full scan/trade cycle (see file header docblock) ─────────
-    $runCycle = function (array $botProfile) use ($mt5Service, $aiService, $strategyFactory) {
+    $runCycle = function (array $botProfile) use ($mt5Service, $aiService, $strategyFactory, $botScoreCalculator) {
         $brokerResolver = app(BrokerResolver::class);
         $alpacaService = app(AlpacaService::class);
         $db = AppSetting::singleton();
@@ -795,6 +800,24 @@ Artisan::command('mt5:auto-forex
         $reverseStrategy = (string) $reverseStrategySetting !== '0' && (bool) $reverseStrategySetting;
         $trendFilterSetting = $optionOrProfileOrSetting('trend-filter', $botProfile['trend_filter'] ?? null, null, 0);
         $useTrendFilter = (string) $trendFilterSetting !== '0' && (bool) $trendFilterSetting;
+        $useAdxScoreSetting = $optionOrProfileOrSetting(
+            'use-adx-score',
+            array_key_exists('use_adx_score', $botProfile) ? $botProfile['use_adx_score'] : null,
+            null,
+            1
+        );
+        $useAdxScore = (string) $useAdxScoreSetting !== '0' && (bool) $useAdxScoreSetting;
+        $useRsiScoreSetting = $optionOrProfileOrSetting(
+            'use-rsi-score',
+            array_key_exists('use_rsi_score', $botProfile) ? $botProfile['use_rsi_score'] : null,
+            null,
+            1
+        );
+        $useRsiScore = (string) $useRsiScoreSetting !== '0' && (bool) $useRsiScoreSetting;
+        $adxMinFloorRaw = $optionOrProfileOrSetting('adx-min-floor', $botProfile['adx_min_floor'] ?? null, null, null);
+        $adxMinFloor = is_numeric($adxMinFloorRaw) && (float) $adxMinFloorRaw > 0
+            ? (float) $adxMinFloorRaw
+            : null;
         $trendTimeframes = $normalizeTimeframeList($optionOrProfileOrSetting(
             'signal-timeframes',
             $botProfile['signal_timeframes'] ?? (isset($botProfile['signal_timeframe']) ? [(string) $botProfile['signal_timeframe']] : null),
@@ -1250,6 +1273,7 @@ Artisan::command('mt5:auto-forex
         $skippedAssetDailyLimit = 0;
         $skippedOpen = 0;
         $skippedLowScore = 0;
+        $skippedAdxRejected = 0;
         $skippedLowVolume = 0;
         $stoppedByRateLimit = false;
         $stoppedByCreditBudget = false;
@@ -1257,12 +1281,31 @@ Artisan::command('mt5:auto-forex
         $creditCostQuote = 50;
         $creditCostCandle = 50;
 
-        $calculateBotScore = static function (float $signalDeltaPips, float $spreadPips, float $effectiveVolume, float $minEffectiveVolume): int {
-            $signalStrengthScore = min(100.0, (abs($signalDeltaPips) / 10.0) * 100.0);
-            $spreadScore = max(0.0, min(100.0, (1 - ($spreadPips / 3.0)) * 100.0));
-            $volumeScore = max(0.0, min(100.0, ($effectiveVolume / $minEffectiveVolume) * 100.0));
-
-            return (int) round(($signalStrengthScore * 0.6) + ($spreadScore * 0.25) + ($volumeScore * 0.15));
+        $calculateBotScore = static function (
+            float $signalDeltaPips,
+            float $spreadPips,
+            string $spreadCategory,
+            float $maxSpreadForSymbol,
+            ?float $slPipsForSymbol = null,
+            ?string $side = null,
+            ?float $adx = null,
+            ?float $rsiHtf = null,
+            ?float $rsiEntry = null,
+        ) use ($botScoreCalculator, $useAdxScore, $useRsiScore, $adxMinFloor): array {
+            return $botScoreCalculator->calculate(
+                $signalDeltaPips,
+                $spreadPips,
+                $spreadCategory,
+                $maxSpreadForSymbol,
+                $slPipsForSymbol,
+                $side,
+                $adx,
+                $rsiHtf,
+                $rsiEntry,
+                $useAdxScore,
+                $useRsiScore,
+                $adxMinFloor,
+            );
         };
 
         $extractConfidence = static function (?string $summary): ?int {
@@ -1311,14 +1354,44 @@ Artisan::command('mt5:auto-forex
             if (is_numeric($payload['bot_score'] ?? null)) {
                 $resolvedBotScore = (int) $payload['bot_score'];
             } elseif (is_numeric($data['signal_delta_pips'] ?? null) && is_numeric($data['spread_pips'] ?? null)) {
-                $baseLotForScore = is_numeric($data['lot_size'] ?? null) ? (float) $data['lot_size'] : $lotSize;
-                $effectiveVolumeForScore = $baseLotForScore * $volumeMultiplier;
-                $resolvedBotScore = $calculateBotScore((float) $data['signal_delta_pips'], (float) $data['spread_pips'], $effectiveVolumeForScore, $minEffectiveVolume);
+                $spreadCategoryForScore = (string) ($payload['spread_category'] ?? 'forex');
+                $maxSpreadForScore = (float) (
+                    $payload['max_spread_pips_for_symbol']
+                    ?? $payload['max_spread_for_symbol']
+                    ?? 2.5
+                );
+                $slForScore = isset($payload['sl_pips_for_symbol']) && is_numeric($payload['sl_pips_for_symbol'])
+                    ? (float) $payload['sl_pips_for_symbol']
+                    : null;
+                $components = is_array($payload['score_components'] ?? null) ? $payload['score_components'] : [];
+                $sideForScore = isset($data['side']) ? (string) $data['side'] : null;
+                $adxForScore = is_numeric($components['adx'] ?? null)
+                    ? (float) $components['adx']
+                    : (is_numeric($payload['adx'] ?? null) ? (float) $payload['adx'] : null);
+                $rsiHtfForScore = is_numeric($components['rsi_htf'] ?? null)
+                    ? (float) $components['rsi_htf']
+                    : (is_numeric($payload['rsi_htf'] ?? null) ? (float) $payload['rsi_htf'] : null);
+                $rsiEntryForScore = is_numeric($components['rsi_entry'] ?? null)
+                    ? (float) $components['rsi_entry']
+                    : (is_numeric($payload['rsi_entry'] ?? null) ? (float) $payload['rsi_entry'] : null);
+                $scoreResult = $calculateBotScore(
+                    (float) $data['signal_delta_pips'],
+                    (float) $data['spread_pips'],
+                    $spreadCategoryForScore,
+                    $maxSpreadForScore,
+                    $slForScore,
+                    $sideForScore,
+                    $adxForScore,
+                    $rsiHtfForScore,
+                    $rsiEntryForScore,
+                );
+                $resolvedBotScore = $scoreResult['score'];
+                $payload['score_components'] = $scoreResult['components'];
             } else {
                 $resolvedBotScore = 0;
             }
 
-            $alertLogMinScore = max(70, (int) $minBotScore);
+            $alertLogMinScore = (int) $minBotScore;
             if (!$testMode && $resolvedBotScore < $alertLogMinScore) {
                 return;
             }
@@ -1690,8 +1763,105 @@ Artisan::command('mt5:auto-forex
                     : 0.0;
             }
 
+            $adxValue = null;
+            $rsiHtfValue = null;
+            $rsiEntryValue = null;
+            $indicatorPeriod = 14;
+            $adxMinBars = 60;
+            $rsiMinBars = 30;
+
+            if (!$testMode && ($useAdxScore || $useRsiScore)) {
+                if ($useAdxScore) {
+                    $adxCandles = count($candlesForStrategy) >= ($indicatorPeriod * 2)
+                        ? $candlesForStrategy
+                        : [];
+
+                    if (count($adxCandles) < $adxMinBars) {
+                        if ($reserveCycleCredits($creditCostCandle, 'adx_entry_'.$entryTimeframe, $symbol)) {
+                            try {
+                                $adxCandles = $cycleBroker->getCandles($symbol, $entryTimeframe, $adxMinBars);
+                            } catch (\Throwable $e) {
+                                Log::warning('Auto bot ADX candle fetch failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
+                                $adxCandles = [];
+                            }
+                        }
+                    }
+
+                    if (!empty($adxCandles)) {
+                        $adxValue = IndicatorMath::adx($adxCandles, $indicatorPeriod);
+                    }
+                }
+
+                if ($useRsiScore) {
+                    $rsiHtfTimeframe = $trendContextTimeframes[0] ?? '1h';
+                    if ($reserveCycleCredits($creditCostCandle, 'rsi_htf_'.$rsiHtfTimeframe, $symbol)) {
+                        try {
+                            $rsiHtfCandles = $cycleBroker->getCandles($symbol, $rsiHtfTimeframe, $rsiMinBars);
+                            $rsiHtfValue = IndicatorMath::rsi(IndicatorMath::closeSeries($rsiHtfCandles), $indicatorPeriod);
+                        } catch (\Throwable $e) {
+                            Log::warning('Auto bot RSI HTF candle fetch failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
+                        }
+                    }
+
+                    $rsiEntryCandles = count($candlesForStrategy) >= ($indicatorPeriod + 1)
+                        ? $candlesForStrategy
+                        : [];
+                    if (count($rsiEntryCandles) < $rsiMinBars) {
+                        if ($reserveCycleCredits($creditCostCandle, 'rsi_entry_'.$entryTimeframe, $symbol)) {
+                            try {
+                                $rsiEntryCandles = $cycleBroker->getCandles($symbol, $entryTimeframe, $rsiMinBars);
+                            } catch (\Throwable $e) {
+                                Log::warning('Auto bot RSI entry candle fetch failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
+                                $rsiEntryCandles = [];
+                            }
+                        }
+                    }
+
+                    if (!empty($rsiEntryCandles)) {
+                        $rsiEntryValue = IndicatorMath::rsi(IndicatorMath::closeSeries($rsiEntryCandles), $indicatorPeriod);
+                    }
+                }
+            }
+
             $effectiveVolume = $lotSize * $volumeMultiplier;
-            $botScore = $calculateBotScore($signalDeltaPips, $spreadPips, $effectiveVolume, $minEffectiveVolume);
+            $scoreResult = $calculateBotScore(
+                $signalDeltaPips,
+                $spreadPips,
+                $spreadCategory,
+                $maxSpreadForSymbol,
+                $slPipsForSymbol,
+                $side,
+                $adxValue,
+                $rsiHtfValue,
+                $rsiEntryValue,
+            );
+            $botScore = $scoreResult['score'];
+            $scoreMetaPayload = static fn () => [
+                'bot_score' => $botScore,
+                'min_bot_score' => $minBotScore,
+                'score_components' => $scoreResult['components'],
+                'spread_category' => $spreadCategory,
+                'max_spread_pips_for_symbol' => $maxSpreadForSymbol,
+                'sl_pips_for_symbol' => $slPipsForSymbol,
+                'volume_multiplier' => $volumeMultiplier,
+                'effective_volume' => $effectiveVolume,
+                'min_effective_volume' => $minEffectiveVolume,
+            ];
+
+            if (!$testMode && $scoreResult['hard_reject']) {
+                $this->line("  {$symbol}: ADX ".($adxValue !== null ? number_format($adxValue, 1) : 'n/a').' below floor — skipped');
+                $skippedAdxRejected++;
+                $logSignal([
+                    'status' => 'adx_rejected',
+                    'symbol' => $symbol,
+                    'side' => $side,
+                    'spread_pips' => $spreadPips,
+                    'signal_delta_pips' => $signalDeltaPips,
+                    'meta_payload' => $scoreMetaPayload(),
+                    'message' => 'Signal rejected because ADX is below the minimum trend-strength floor.',
+                ]);
+                continue;
+            }
 
             if (!$testMode && $effectiveVolume < $minEffectiveVolume) {
                 $this->line("  {$symbol}: VOLUME {$effectiveVolume} < min {$minEffectiveVolume} — skipped");
@@ -1703,14 +1873,7 @@ Artisan::command('mt5:auto-forex
                     'lot_size' => $lotSize,
                     'spread_pips' => $spreadPips,
                     'signal_delta_pips' => $signalDeltaPips,
-                    'meta_payload' => [
-                        'bot_score' => $botScore,
-                        'min_bot_score' => $minBotScore,
-                        'volume_multiplier' => $volumeMultiplier,
-                        'effective_volume' => $effectiveVolume,
-                        'min_effective_volume' => $minEffectiveVolume,
-                    ],
-                    'message' => 'Signal rejected because effective volume is below minimum threshold.',
+                    'meta_payload' => $scoreMetaPayload(),
                 ]);
                 continue;
             }
@@ -1724,13 +1887,7 @@ Artisan::command('mt5:auto-forex
                         'side' => $side,
                         'spread_pips' => $spreadPips,
                         'signal_delta_pips' => $signalDeltaPips,
-                        'meta_payload' => [
-                            'bot_score' => $botScore,
-                            'min_bot_score' => $minBotScore,
-                            'volume_multiplier' => $volumeMultiplier,
-                            'effective_volume' => $effectiveVolume,
-                            'min_effective_volume' => $minEffectiveVolume,
-                        ],
+                        'meta_payload' => $scoreMetaPayload(),
                         'message' => 'Signal skipped because symbol already has an open position.',
                     ]);
                 }
@@ -1740,6 +1897,15 @@ Artisan::command('mt5:auto-forex
             if (!$testMode && $botScore < $minBotScore) {
                 $this->line("  {$symbol}: SCORE {$botScore}% < min {$minBotScore}% — skipped");
                 $skippedLowScore++;
+                $logSignal([
+                    'status' => 'low_score_rejected',
+                    'symbol' => $symbol,
+                    'side' => $side,
+                    'spread_pips' => $spreadPips,
+                    'signal_delta_pips' => $signalDeltaPips,
+                    'meta_payload' => $scoreMetaPayload(),
+                    'message' => 'Signal rejected because bot score is below minimum threshold.',
+                ]);
                 continue;
             }
 
@@ -1752,15 +1918,13 @@ Artisan::command('mt5:auto-forex
                     'side' => $side,
                     'spread_pips' => $spreadPips,
                     'signal_delta_pips' => $signalDeltaPips,
-                    'meta_payload' => [
+                    'meta_payload' => array_merge($scoreMetaPayload(), [
                         'ticker_category' => $tickerCategory,
                         'ticker_spread_override' => is_numeric($tickerSpreadOverride) ? (float) $tickerSpreadOverride : null,
                         'ticker_tp_override' => is_numeric($tickerTpOverride) ? (float) $tickerTpOverride : null,
                         'ticker_sl_override' => is_numeric($tickerSlOverride) ? (float) $tickerSlOverride : null,
-                        'spread_category' => $spreadCategory,
-                        'max_spread_pips_for_symbol' => $maxSpreadForSymbol,
                         'max_spread_pips_by_category' => $maxSpreadByCategory,
-                    ],
+                    ]),
                     'message' => 'Signal rejected due to spread filter.',
                 ]);
                 continue;
@@ -2020,18 +2184,12 @@ Artisan::command('mt5:auto-forex
                     'ai_decision' => $aiDecision,
                     'ai_confidence' => $aiConfidence,
                     'ai_summary' => $aiSummary,
-                    'meta_payload' => [
-                        'bot_score' => $botScore,
-                        'min_bot_score' => $minBotScore,
-                        'volume_multiplier' => $volumeMultiplier,
-                        'effective_volume' => $effectiveVolume,
-                        'min_effective_volume' => $minEffectiveVolume,
+                    'meta_payload' => array_merge($scoreMetaPayload(), [
                         'recommended_side' => $recommendedSide,
                         'execution_side' => $executionSide,
                         'ticker_category' => $tickerCategory,
                         'tp_pips_for_symbol' => $tpPipsForSymbol,
-                        'sl_pips_for_symbol' => $slPipsForSymbol,
-                    ],
+                    ]),
                     'message' => 'Signal rejected by AI confirmation.',
                 ]);
                 continue;
@@ -2051,18 +2209,12 @@ Artisan::command('mt5:auto-forex
                 'ai_decision' => $aiDecision,
                 'ai_confidence' => $aiConfidence,
                 'ai_summary' => $aiSummary,
-                'meta_payload' => [
-                    'bot_score' => $botScore,
-                    'min_bot_score' => $minBotScore,
-                    'volume_multiplier' => $volumeMultiplier,
-                    'effective_volume' => $effectiveVolume,
-                    'min_effective_volume' => $minEffectiveVolume,
+                'meta_payload' => array_merge($scoreMetaPayload(), [
                     'recommended_side' => $recommendedSide,
                     'execution_side' => $executionSide,
                     'ticker_category' => $tickerCategory,
                     'tp_pips_for_symbol' => $tpPipsForSymbol,
-                    'sl_pips_for_symbol' => $slPipsForSymbol,
-                ],
+                ]),
                 'message' => 'Signal passed all filters and AI confirmation.',
             ]);
 
@@ -2108,16 +2260,10 @@ Artisan::command('mt5:auto-forex
                     'ai_decision' => $aiDecision,
                     'ai_confidence' => $aiConfidence,
                     'ai_summary' => $aiSummary,
-                    'meta_payload' => [
-                        'bot_score' => $botScore,
-                        'min_bot_score' => $minBotScore,
-                        'volume_multiplier' => $volumeMultiplier,
-                        'effective_volume' => $effectiveVolume,
-                        'min_effective_volume' => $minEffectiveVolume,
+                    'meta_payload' => array_merge($scoreMetaPayload(), [
                         'recommended_side' => $recommendedSide,
                         'execution_side' => $executionSide,
-                    ],
-                    'message' => 'Trade opened successfully.',
+                    ]),
                     'meta_response' => $result,
                 ]));
 
@@ -2163,15 +2309,10 @@ Artisan::command('mt5:auto-forex
                     'ai_decision' => $aiDecision,
                     'ai_confidence' => $aiConfidence,
                     'ai_summary' => $aiSummary,
-                    'meta_payload' => [
-                        'bot_score' => $botScore,
-                        'min_bot_score' => $minBotScore,
-                        'volume_multiplier' => $volumeMultiplier,
-                        'effective_volume' => $effectiveVolume,
-                        'min_effective_volume' => $minEffectiveVolume,
+                    'meta_payload' => array_merge($scoreMetaPayload(), [
                         'recommended_side' => $recommendedSide,
                         'execution_side' => $executionSide,
-                    ],
+                    ]),
                     'message' => 'Trade open failed.',
                     'error_message' => $e->getMessage(),
                 ]));
@@ -2185,6 +2326,7 @@ Artisan::command('mt5:auto-forex
             .' noMove='.$skippedNoMove
             .' spread='.$skippedSpread
             .' lowScore='.$skippedLowScore
+            .' adxRejected='.$skippedAdxRejected
             .' lowVolume='.$skippedLowVolume
             .' cooldown='.$skippedCooldown
             .' assetDailyLimit='.$skippedAssetDailyLimit
@@ -2205,6 +2347,7 @@ Artisan::command('mt5:auto-forex
                 'skipped_no_move' => $skippedNoMove,
                 'skipped_spread' => $skippedSpread,
                 'skipped_low_score' => $skippedLowScore,
+                'skipped_adx_rejected' => $skippedAdxRejected,
                 'skipped_low_volume' => $skippedLowVolume,
                 'skipped_cooldown' => $skippedCooldown,
                 'skipped_asset_daily_limit' => $skippedAssetDailyLimit,

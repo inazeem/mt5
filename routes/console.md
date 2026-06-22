@@ -170,7 +170,7 @@ Profiles live in `app_settings.bot_profiles` (JSON array). Each profile can over
 
 Supported in UI and JSON (non-exhaustive):
 
-`key`, `name`, `enabled`, `lot`, `tp_pips`, `sl_pips`, `trail_*`, `min_move_pips`, `max_spread_pips`, `cooldown_minutes`, `session_start_utc`, `session_end_utc`, `max_trades_per_day`, `max_trades_per_asset_per_day`, `max_daily_loss_percent`, `ai_confirm`, `ai_min_confidence`, `max_symbols`, `max_open_positions`, `max_per_cycle`, `min_bot_score`, `min_effective_volume`, `scalper`, `strategy` / `strategies`, `strategy_params`, `symbols`, `signal_timeframe` / `signal_timeframes`, `entry_timeframe`, `trend_filter`, `reverse_strategy`, `cooldown_override_ratio`, `preferred_hours_utc`, `blocked_hours_utc`, `preferred_symbols`, `ticker_categories`, category override maps (`tp_pips_by_category`, etc.)
+`key`, `name`, `enabled`, `lot`, `tp_pips`, `sl_pips`, `trail_*`, `min_move_pips`, `max_spread_pips`, `cooldown_minutes`, `session_start_utc`, `session_end_utc`, `max_trades_per_day`, `max_trades_per_asset_per_day`, `max_daily_loss_percent`, `ai_confirm`, `ai_min_confidence`, `max_symbols`, `max_open_positions`, `max_per_cycle`, `min_bot_score`, `use_adx_score`, `use_rsi_score`, `adx_min_floor`, `min_effective_volume`, `scalper`, `strategy` / `strategies`, `strategy_params`, `symbols`, `signal_timeframe` / `signal_timeframes`, `entry_timeframe`, `trend_filter`, `reverse_strategy`, `cooldown_override_ratio`, `preferred_hours_utc`, `blocked_hours_utc`, `preferred_symbols`, `ticker_categories`, category override maps (`tp_pips_by_category`, etc.)
 
 Every log row for a cycle includes `bot_key` and `bot_name` from `$botLogDefaults`.
 
@@ -219,7 +219,7 @@ Every log row for a cycle includes `bot_key` and `bot_name` from `$botLogDefault
 |--------|---------|-------------|
 | `--ai-confirm` | `1` | `1` = require AI approval; `0` = skip AI |
 | `--ai-min-confidence` | `70` | Minimum parsed confidence % from AI reply |
-| `--min-bot-score` | `70` | Minimum composite score to execute (and to log signals ≥ max(70, min_bot_score)) |
+| `--min-bot-score` | `70` | Minimum composite score to execute and log signals |
 
 ### Scanning & capacity
 
@@ -497,22 +497,46 @@ Logs and AI prompts include both `recommended_side` and `execution_side`. Entry/
 
 ## 17. Bot score
 
-```php
-$signalStrengthScore = min(100, (abs($signalDeltaPips) / 10) * 100);   // 60% weight
-$spreadScore         = max(0, min(100, (1 - ($spreadPips / 3)) * 100)); // 25% weight
-$volumeScore         = max(0, min(100, ($effectiveVolume / $minEffectiveVolume) * 100)); // 15% weight
+Implemented in `App\Services\BotScoreCalculator`. Volume is **not** part of the score (enforced separately via `min_effective_volume`).
 
-$botScore = round($signalStrengthScore * 0.6 + $spreadScore * 0.25 + $volumeScore * 0.15);
+### Base weights (ADX/RSI disabled)
+
+```php
+// Signal strength (70%) — category-aware full-score reference pips:
+// forex: 10 | crypto: 120 | stock: 30 | commodity: 50 | other: 25
+$signalStrengthScore = min(100, (abs($signalDeltaPips) / $signalReferencePips) * 100);
+
+// Spread (30%) — relative to max_spread_pips_for_symbol
+$spreadScore = max(0, min(100, (1 - ($spreadPips / $maxSpreadForSymbol)) * 100));
+
+// Penalty when spread > 25% of SL for the symbol
+if ($spreadPips > $slPipsForSymbol * 0.25) { $spreadScore *= 0.5; }
 ```
 
-Where `$effectiveVolume = $lotSize * $volumeMultiplier` and `$volumeMultiplier` comes from `AppSetting.mt5_volume_multiplier`.
+### With ADX + RSI enabled (profile/CLI default: on)
+
+| Component | Weight | Source |
+|-----------|--------|--------|
+| Signal | 45% | Strategy strength (pips) |
+| Spread | 25% | vs `max_spread_pips_for_symbol` |
+| ADX | 15% | Wilder ADX(14) on **entry timeframe** (~60 bars) |
+| RSI | 15% | Trend alignment: RSI(14) on first **HTF context** TF + entry TF |
+
+**ADX hard floor** (reject before score threshold): forex 22, crypto 18, stock/commodity 20 — override via `adx_min_floor` on profile or `--adx-min-floor`. Status: `adx_rejected`.
+
+**RSI** scores trend alignment (buy: HTF RSI > 50, entry not overbought; sell inverse). Not mean-reversion oversold/overbought entries.
+
+`meta_payload.score_components` stores `adx`, `rsi_htf`, `rsi_entry`, weights, and sub-scores.
 
 | Check | Threshold |
 |-------|-----------|
+| ADX floor | `adx >= adx_min_floor` (when `use_adx_score`) |
 | Execute trade | `$botScore >= $minBotScore` |
-| Write signal log | `$botScore >= max(70, $minBotScore)` |
+| Write signal log | `$botScore >= $minBotScore` |
 
-Low-score signals are silently skipped (no DB row) unless test mode.
+Low-score signals are silently skipped (no DB row) unless test mode. Status `low_score_rejected` when score fails after strategies agree.
+
+Profile keys: `use_adx_score`, `use_rsi_score`, `adx_min_floor`. CLI: `--use-adx-score=1`, `--use-rsi-score=1`, `--adx-min-floor=`.
 
 ---
 
@@ -788,7 +812,7 @@ Check `reverse-strategy=1` (contrarian mode). With `reverse-strategy=0`, executi
 Per-symbol check against `$openedTodayBySymbol` before cooldown; default `--max-trades-per-asset-per-day=2`.
 
 **Why no signal rows for weak setups?**  
-`$logSignal` returns early when bot score < `max(70, min_bot_score)`.
+`$logSignal` returns early when bot score < `min_bot_score`.
 
 **Who resolves WIN/LOSS after close?**  
 Not `console.php` — see `BotController` reconciliation on analytics/alerts load and history sync.

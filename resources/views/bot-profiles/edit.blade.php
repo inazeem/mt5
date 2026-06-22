@@ -202,6 +202,14 @@
                         </div>
 
                         <div>
+                            <label class="block text-sm font-medium text-gray-700">ADX Min Floor</label>
+                            <input type="number" name="adx_min_floor" step="0.1" min="1" max="100"
+                                   value="{{ old('adx_min_floor', isset($profile['adx_min_floor']) ? $profile['adx_min_floor'] : '') }}" placeholder="e.g. 22 (forex default)"
+                                   class="mt-1 block w-full rounded border-gray-300" />
+                            <p class="mt-1 text-xs text-gray-500">Hard-reject entries when ADX is below this. Leave blank for category defaults (forex 22, crypto 18).</p>
+                        </div>
+
+                        <div>
                             <label class="block text-sm font-medium text-gray-700">Max Open Positions</label>
                             <input type="number" name="max_open_positions" min="1"
                                    value="{{ old('max_open_positions', isset($profile['max_open_positions']) ? $profile['max_open_positions'] : '') }}" placeholder="e.g. 10"
@@ -236,6 +244,14 @@
                         <label class="flex items-center gap-2">
                             <input type="checkbox" id="reverse_strategy" name="reverse_strategy" value="1" {{ old('reverse_strategy', (bool) ($profile['reverse_strategy'] ?? false)) ? 'checked' : '' }} class="rounded border-gray-300" />
                             <span class="text-sm text-gray-700">Reverse strategy side (buy/sell inversion)</span>
+                        </label>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" id="use_adx_score" name="use_adx_score" value="1" {{ old('use_adx_score', array_key_exists('use_adx_score', $profile) ? (bool) $profile['use_adx_score'] : true) ? 'checked' : '' }} class="rounded border-gray-300" />
+                            <span class="text-sm text-gray-700">Include ADX in bot score (trend strength)</span>
+                        </label>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" id="use_rsi_score" name="use_rsi_score" value="1" {{ old('use_rsi_score', array_key_exists('use_rsi_score', $profile) ? (bool) $profile['use_rsi_score'] : true) ? 'checked' : '' }} class="rounded border-gray-300" />
+                            <span class="text-sm text-gray-700">Include RSI in bot score (trend alignment)</span>
                         </label>
                     </div>
 
