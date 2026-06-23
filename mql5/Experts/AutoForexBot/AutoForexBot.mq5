@@ -3,13 +3,14 @@
 //| MT5 port of the Laravel mt5:auto-forex bot (console.php core).   |
 //|                                                                  |
 //| Implements: SMA+EMA consensus, HTF trend filter, spread/session  |
-//| guardrails, TP/SL, trailing stop, max-hold auto-close, cooldown.  |
+//| guardrails, TP/SL, trailing stop, max-hold auto-close, cooldown,   |
+//| max trades per symbol/day, max daily loss %.                        |
 //|                                                                  |
 //| Not ported: AI confirm, multi-profile JSON, learn-policy,        |
 //| MetaAPI, BotTradeLog, Alpaca, web UI.                            |
 //+------------------------------------------------------------------+
 #property copyright "mt5 project"
-#property version   "1.00"
+#property version   "1.01"
 
 #include <Trade/Trade.mqh>
 
@@ -39,6 +40,8 @@ input int    InpSessionStartUtc   = 6;
 input int    InpSessionEndUtc     = 20;
 input int    InpMaxOpenPositions  = 3;
 input int    InpMaxTradesPerDay   = 20;
+input int    InpMaxTradesPerSymbolPerDay = 2;
+input double InpMaxDailyLossPercent = 2.0;
 
 //--- scalper caps (console.php scalper mode)
 input group "Mode"
@@ -78,6 +81,9 @@ CTrade g_trade;
 datetime g_lastCooldown[];
 string   g_cooldownSymbols[];
 bool     g_tpAdjusted[];
+double   g_dayStartEquity = 0.0;
+int      g_dayStartYmd = 0;
+int      g_dailyLossLoggedYmd = 0;
 
 int OnInit()
 {
@@ -121,6 +127,18 @@ void RunCycle()
    if(TradesOpenedToday() >= EffectiveMaxTradesPerDay())
       return;
 
+   double dailyDrawdownPct = 0.0;
+   if(DailyLossLimitHit(dailyDrawdownPct))
+   {
+      if(g_dailyLossLoggedYmd != CurrentDayYmd())
+      {
+         g_dailyLossLoggedYmd = CurrentDayYmd();
+         Print("Daily loss guard: drawdown ", DoubleToString(dailyDrawdownPct, 2),
+               "% >= limit ", DoubleToString(InpMaxDailyLossPercent, 2), "% — new entries blocked.");
+      }
+      return;
+   }
+
    string symbols[];
    BuildSymbolList(symbols);
 
@@ -134,6 +152,9 @@ void RunCycle()
          continue;
 
       if(InCooldown(sym))
+         continue;
+
+      if(TradesOpenedTodayForSymbol(sym) >= EffectiveMaxTradesPerSymbolPerDay())
          continue;
 
       if(!SpreadOk(sym))
@@ -243,6 +264,56 @@ int EffectiveMaxOpen()
 int EffectiveMaxTradesPerDay()
 {
    return MathMax(1, InpMaxTradesPerDay);
+}
+
+int EffectiveMaxTradesPerSymbolPerDay()
+{
+   return MathMax(1, InpMaxTradesPerSymbolPerDay);
+}
+
+//+------------------------------------------------------------------+
+int CurrentDayYmd()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   return dt.year * 10000 + dt.mon * 100 + dt.day;
+}
+
+//+------------------------------------------------------------------+
+void EnsureDayStartEquityBaseline()
+{
+   int ymd = CurrentDayYmd();
+   if(ymd == g_dayStartYmd && g_dayStartEquity > 0.0)
+      return;
+
+   g_dayStartYmd = ymd;
+   g_dayStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(g_dayStartEquity <= 0.0)
+      g_dayStartEquity = AccountInfoDouble(ACCOUNT_BALANCE);
+}
+
+//+------------------------------------------------------------------+
+bool DailyLossLimitHit(double &drawdownPercent)
+{
+   drawdownPercent = 0.0;
+   if(InpMaxDailyLossPercent <= 0.0)
+      return false;
+
+   EnsureDayStartEquityBaseline();
+   if(g_dayStartEquity <= 0.0)
+      return false;
+
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(equity <= 0.0)
+      equity = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(equity <= 0.0)
+      return false;
+
+   drawdownPercent = ((g_dayStartEquity - equity) / g_dayStartEquity) * 100.0;
+   if(drawdownPercent < 0.0)
+      drawdownPercent = 0.0;
+
+   return drawdownPercent >= InpMaxDailyLossPercent;
 }
 
 //+------------------------------------------------------------------+
@@ -437,6 +508,28 @@ int TradesOpenedToday()
       if(HistoryDealGetInteger(deal, DEAL_MAGIC) != (long)InpMagic)
          continue;
       if(HistoryDealGetInteger(deal, DEAL_ENTRY) != DEAL_ENTRY_IN)
+         continue;
+      count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+int TradesOpenedTodayForSymbol(const string symbol)
+{
+   datetime dayStart = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
+   if(!HistorySelect(dayStart, TimeCurrent()))
+      return 0;
+
+   int count = 0;
+   for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(HistoryDealGetInteger(deal, DEAL_MAGIC) != (long)InpMagic)
+         continue;
+      if(HistoryDealGetInteger(deal, DEAL_ENTRY) != DEAL_ENTRY_IN)
+         continue;
+      if(HistoryDealGetString(deal, DEAL_SYMBOL) != symbol)
          continue;
       count++;
    }
