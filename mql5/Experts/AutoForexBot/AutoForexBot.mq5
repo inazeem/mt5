@@ -3,14 +3,14 @@
 //| MT5 port of the Laravel mt5:auto-forex bot (console.php core).   |
 //|                                                                  |
 //| Implements: SMA+EMA consensus, HTF trend filter, spread/session  |
-//| guardrails, TP/SL, trailing stop, max-hold auto-close, cooldown,   |
-//| max trades per symbol/day, max daily loss %.                        |
+//| guardrails, TP/SL, trailing stop, cooldown,                        |
+//| max trades per symbol/day, max daily loss %, prop floating guard.  |
 //|                                                                  |
 //| Not ported: AI confirm, multi-profile JSON, learn-policy,        |
 //| MetaAPI, BotTradeLog, Alpaca, web UI.                            |
 //+------------------------------------------------------------------+
 #property copyright "mt5 project"
-#property version   "1.01"
+#property version   "1.04"
 
 #include <Trade/Trade.mqh>
 
@@ -27,11 +27,6 @@ input int    InpTrailStartPips    = 10;
 input int    InpTrailPips         = 8;
 input double InpTrailTpMultiplier = 2.0;
 
-//--- max hold (profile enable_max_hold + max_hold_minutes)
-input group "Max hold"
-input bool   InpEnableMaxHold      = false;
-input int    InpMaxHoldMinutes    = 60;
-
 //--- entry filters
 input group "Entry filters"
 input double InpMaxSpreadPips     = 2.5;
@@ -42,6 +37,14 @@ input int    InpMaxOpenPositions  = 3;
 input int    InpMaxTradesPerDay   = 20;
 input int    InpMaxTradesPerSymbolPerDay = 2;
 input double InpMaxDailyLossPercent = 2.0;
+
+//--- prop firm floating loss guard (e.g. FTUK -2% account protector buffer)
+input group "Prop floating loss guard"
+input bool   InpEnableFloatingLossGuard = true;
+input double InpFloatingLossClosePercent = 1.8;
+input double InpFloatingLossHardLimitPercent = 2.0;
+input double InpFloatingReferenceBalance = 0.0;
+input bool   InpCloseAllIfStillBelow = true;
 
 //--- scalper caps (console.php scalper mode)
 input group "Mode"
@@ -73,7 +76,6 @@ input int    InpAdxPeriod         = 14;
 
 //--- scan
 input group "Scanner"
-input int    InpTimerSeconds      = 60;
 input bool   InpTradeChartSymbol  = true;
 input string InpSymbolList        = "EURUSD,GBPUSD,USDJPY,AUDUSD";
 
@@ -84,6 +86,9 @@ bool     g_tpAdjusted[];
 double   g_dayStartEquity = 0.0;
 int      g_dayStartYmd = 0;
 int      g_dailyLossLoggedYmd = 0;
+datetime g_floatingGuardLastLog = 0;
+string   g_entryBarSymbols[];
+datetime g_entryBarTimes[];
 
 int OnInit()
 {
@@ -91,33 +96,24 @@ int OnInit()
    g_trade.SetDeviationInPoints(20);
    g_trade.SetTypeFillingBySymbol(_Symbol);
 
-   EventSetTimer(MathMax(5, InpTimerSeconds));
-   Print("AutoForexBot started. Timer=", InpTimerSeconds, "s magic=", InpMagic);
+   Print("AutoForexBot started (on-tick). magic=", InpMagic);
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason)
 {
-   EventKillTimer();
 }
 
 void OnTick()
 {
-   // Cycle runs on timer (like artisan schedule every minute).
-}
-
-void OnTimer()
-{
-   RunCycle();
+   ApplyTrailingStops();
+   ApplyFloatingLossGuard();
+   RunEntryScan();
 }
 
 //+------------------------------------------------------------------+
-void RunCycle()
+void RunEntryScan()
 {
-   ApplyTrailingStops();
-   if(InpEnableMaxHold)
-      CloseExpiredPositions();
-
    if(!InSessionUtc())
       return;
 
@@ -139,6 +135,18 @@ void RunCycle()
       return;
    }
 
+   double floatingPct = 0.0;
+   if(FloatingLossBlocksEntries(floatingPct))
+   {
+      LogFloatingGuardMessage(
+         "Floating loss guard: open PnL ",
+         floatingPct,
+         " — new entries blocked until floating recovers above -",
+         InpFloatingLossClosePercent
+      );
+      return;
+   }
+
    string symbols[];
    BuildSymbolList(symbols);
 
@@ -146,6 +154,9 @@ void RunCycle()
    {
       string sym = symbols[i];
       if(sym == "")
+         continue;
+
+      if(!IsNewEntryBar(sym))
          continue;
 
       if(HasOurPosition(sym))
@@ -173,6 +184,40 @@ void RunCycle()
 
       OpenTrade(sym, side);
    }
+}
+
+//+------------------------------------------------------------------+
+int FindEntryBarIndex(const string symbol)
+{
+   for(int i = 0; i < ArraySize(g_entryBarSymbols); i++)
+      if(g_entryBarSymbols[i] == symbol)
+         return i;
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+bool IsNewEntryBar(const string symbol)
+{
+   datetime barTime = iTime(symbol, InpEntryTf, 0);
+   if(barTime == 0)
+      return false;
+
+   int idx = FindEntryBarIndex(symbol);
+   if(idx < 0)
+   {
+      idx = ArraySize(g_entryBarSymbols);
+      ArrayResize(g_entryBarSymbols, idx + 1);
+      ArrayResize(g_entryBarTimes, idx + 1);
+      g_entryBarSymbols[idx] = symbol;
+      g_entryBarTimes[idx] = barTime;
+      return true;
+   }
+
+   if(g_entryBarTimes[idx] == barTime)
+      return false;
+
+   g_entryBarTimes[idx] = barTime;
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -314,6 +359,178 @@ bool DailyLossLimitHit(double &drawdownPercent)
       drawdownPercent = 0.0;
 
    return drawdownPercent >= InpMaxDailyLossPercent;
+}
+
+//+------------------------------------------------------------------+
+double FloatingReferenceBalance()
+{
+   if(InpFloatingReferenceBalance > 0.0)
+      return InpFloatingReferenceBalance;
+
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(balance > 0.0)
+      return balance;
+
+   return AccountInfoDouble(ACCOUNT_EQUITY);
+}
+
+//+------------------------------------------------------------------+
+double TotalOurFloatingProfit()
+{
+   double total = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)InpMagic)
+         continue;
+
+      total += PositionGetDouble(POSITION_PROFIT)
+            + PositionGetDouble(POSITION_SWAP)
+            + PositionGetDouble(POSITION_COMMISSION);
+   }
+   return total;
+}
+
+//+------------------------------------------------------------------+
+bool FloatingLossPercent(double &floatingPercent)
+{
+   floatingPercent = 0.0;
+   double referenceBalance = FloatingReferenceBalance();
+   if(referenceBalance <= 0.0)
+      return false;
+
+   floatingPercent = (TotalOurFloatingProfit() / referenceBalance) * 100.0;
+   return true;
+}
+
+//+------------------------------------------------------------------+
+bool FloatingLossBlocksEntries(double &floatingPercent)
+{
+   if(!InpEnableFloatingLossGuard)
+      return false;
+   if(!FloatingLossPercent(floatingPercent))
+      return false;
+
+   return floatingPercent <= (-1.0 * InpFloatingLossClosePercent);
+}
+
+//+------------------------------------------------------------------+
+void LogFloatingGuardMessage(string prefix, double floatingPercent, string suffix, double thresholdPercent)
+{
+   if((TimeCurrent() - g_floatingGuardLastLog) < 300)
+      return;
+
+   g_floatingGuardLastLog = TimeCurrent();
+   Print(prefix,
+         DoubleToString(floatingPercent, 2),
+         "%",
+         suffix,
+         DoubleToString(thresholdPercent, 2),
+         "% (broker hard limit reference ",
+         DoubleToString(InpFloatingLossHardLimitPercent, 2),
+         "%).");
+}
+
+//+------------------------------------------------------------------+
+int CloseLosingOurPositions()
+{
+   int closed = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)InpMagic)
+         continue;
+
+      double profit = PositionGetDouble(POSITION_PROFIT)
+                    + PositionGetDouble(POSITION_SWAP)
+                    + PositionGetDouble(POSITION_COMMISSION);
+      if(profit >= 0.0)
+         continue;
+
+      if(g_trade.PositionClose(ticket))
+      {
+         closed++;
+         Print("Floating guard closed losing position #", ticket,
+               " profit=", DoubleToString(profit, 2));
+      }
+      else
+      {
+         Print("Floating guard failed to close losing #", ticket,
+               " ", g_trade.ResultRetcodeDescription());
+      }
+   }
+   return closed;
+}
+
+//+------------------------------------------------------------------+
+int CloseAllOurPositions()
+{
+   int closed = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)InpMagic)
+         continue;
+
+      if(g_trade.PositionClose(ticket))
+      {
+         closed++;
+         Print("Floating guard closed position #", ticket);
+      }
+      else
+      {
+         Print("Floating guard failed to close #", ticket,
+               " ", g_trade.ResultRetcodeDescription());
+      }
+   }
+   return closed;
+}
+
+//+------------------------------------------------------------------+
+void ApplyFloatingLossGuard()
+{
+   if(!InpEnableFloatingLossGuard)
+      return;
+
+   double floatingPct = 0.0;
+   if(!FloatingLossPercent(floatingPct))
+      return;
+
+   if(floatingPct > (-1.0 * InpFloatingLossClosePercent))
+      return;
+
+   LogFloatingGuardMessage(
+      "PROP floating guard triggered: open PnL ",
+      floatingPct,
+      "% <= close threshold -",
+      InpFloatingLossClosePercent
+   );
+
+   int closedLosers = CloseLosingOurPositions();
+   if(closedLosers > 0)
+      Print("Floating guard closed ", closedLosers, " losing position(s).");
+
+   if(!InpCloseAllIfStillBelow)
+      return;
+
+   if(!FloatingLossPercent(floatingPct))
+      return;
+
+   if(floatingPct > (-1.0 * InpFloatingLossClosePercent))
+      return;
+
+   int closedAll = CloseAllOurPositions();
+   if(closedAll > 0)
+   {
+      Print("Floating guard still below -", DoubleToString(InpFloatingLossClosePercent, 2),
+            "% after closing losers — closed remaining ", closedAll, " position(s).");
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -684,31 +901,4 @@ void MarkTpAdjusted(ulong ticket)
    string key = IntegerToString((long)ticket);
    if(StringFind(g_tpAdjustedKeys, key) < 0)
       g_tpAdjustedKeys = g_tpAdjustedKeys + key + ",";
-}
-
-//+------------------------------------------------------------------+
-void CloseExpiredPositions()
-{
-   if(InpMaxHoldMinutes <= 0)
-      return;
-
-   datetime cutoff = TimeCurrent() - InpMaxHoldMinutes * 60;
-
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(!PositionSelectByTicket(ticket))
-         continue;
-      if(PositionGetInteger(POSITION_MAGIC) != (long)InpMagic)
-         continue;
-
-      datetime opened = (datetime)PositionGetInteger(POSITION_TIME);
-      if(opened > cutoff)
-         continue;
-
-      if(g_trade.PositionClose(ticket))
-         Print("Max hold closed #", ticket, " after ", InpMaxHoldMinutes, " min");
-      else
-         Print("Max hold close failed #", ticket, " ", g_trade.ResultRetcodeDescription());
-   }
 }
