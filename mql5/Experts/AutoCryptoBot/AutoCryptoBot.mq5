@@ -1,35 +1,37 @@
 //+------------------------------------------------------------------+
-//| AutoForexBot.mq5                                                 |
-//| Forex EA — console.php category defaults (forex).                |
-//| TP/SL/spread/trail/min-move match mt5:auto-forex forex maps.       |
+//| AutoCryptoBot.mq5                                                |
+//| Crypto/BTC EA — console.php category defaults (crypto).            |
+//| Pip size = 1 price point (matches Mt5Service::resolvePipSize).   |
 //+------------------------------------------------------------------+
 #property copyright "mt5 project"
-#property version   "1.05"
-#property description "Forex pairs — console.php forex category defaults"
+#property version   "1.00"
+#property description "Crypto/BTC — console.php crypto category defaults"
 
-input string InpTradeLabel        = "AutoForexBot";
+#define AFB_PIP_IS_PRICE_POINT
 
-//--- trade sizing (forex: tp 25 / sl 15)
+input string InpTradeLabel        = "AutoCryptoBot";
+
+//--- trade sizing (crypto: tp 150 / sl 100)
 input group "Trade sizing"
 input double InpLot               = 0.01;
-input int    InpTpPips            = 25;
-input int    InpSlPips            = 15;
+input int    InpTpPips            = 150;
+input int    InpSlPips            = 100;
 input double InpPipSizeOverride   = 0.0;
-input ulong  InpMagic             = 20250622;
+input ulong  InpMagic             = 20250623;
 
-//--- trailing (forex: start 10 / trail 8 / tp x2)
+//--- trailing (crypto uses console default trail map: 10 / 8 / x2)
 input group "Trailing stop"
 input int    InpTrailStartPips    = 10;
 input int    InpTrailPips         = 8;
 input double InpTrailTpMultiplier = 2.0;
 
-//--- entry filters (forex: spread 2.5 / min-move 3)
+//--- entry filters (crypto: spread 50 / min-move 3)
 input group "Entry filters"
-input double InpMaxSpreadPips     = 2.5;
+input double InpMaxSpreadPips     = 50.0;
 input double InpMinMovePips       = 3.0;
 input int    InpCooldownMinutes   = 30;
-input int    InpSessionStartUtc   = 6;
-input int    InpSessionEndUtc     = 20;
+input int    InpSessionStartUtc   = 0;
+input int    InpSessionEndUtc     = 23;
 input int    InpMaxOpenPositions  = 3;
 input int    InpMaxTradesPerDay   = 20;
 input int    InpMaxTradesPerSymbolPerDay = 2;
@@ -74,6 +76,6 @@ input int    InpAdxPeriod         = 14;
 //--- scan
 input group "Scanner"
 input bool   InpTradeChartSymbol  = true;
-input string InpSymbolList        = "EURUSD,GBPUSD,USDJPY,AUDUSD";
+input string InpSymbolList        = "BTCUSD,ETHUSD";
 
 #include <AutoForexBot/AutoForexBotCore.mqh>
