@@ -2,6 +2,15 @@
 #define AUTO_FOREX_BOT_SCORE_MQH
 
 // Bot score + debug helpers (port of App\Services\BotScoreCalculator).
+// Included directly from each .mq5 after AutoForexBotInputs.mqh.
+
+// Forward declarations (implemented in AutoForexBotCore.mqh).
+double PipSize(const string symbol);
+double SpreadPips(const string symbol);
+bool   UsePercentSizing();
+double DistanceFromPercent(const string symbol, double percent);
+double EffectiveMaxSpread();
+int    EffectiveSlPips();
 
 datetime g_debugLastGlobalLog = 0;
 string   g_debugLastGlobalKey = "";

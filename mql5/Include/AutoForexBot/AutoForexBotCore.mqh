@@ -5,7 +5,6 @@
 // Define AFB_PIP_IS_PRICE_POINT before include for crypto/commodity/stock (console.php pip=1.0).
 
 #include <Trade/Trade.mqh>
-#include <AutoForexBot/AutoForexBotScore.mqh>
 
 CTrade g_trade;
 datetime g_lastCooldown[];
@@ -48,148 +47,7 @@ void OnTick()
    RunEntryScan();
 }
 
-//+------------------------------------------------------------------+
-void RunEntryScan()
-{
-   if(!InSessionUtc())
-   {
-      DebugOnce("session", "Outside UTC session window — entry scan skipped");
-      return;
-   }
-
-   if(CountOurPositions() >= EffectiveMaxOpen())
-   {
-      DebugOnce("max_open", "Max open positions reached — entry scan skipped");
-      return;
-   }
-
-   if(TradesOpenedToday() >= EffectiveMaxTradesPerDay())
-   {
-      DebugOnce("max_trades_day", "Max trades per day reached — entry scan skipped");
-      return;
-   }
-
-   double dailyDrawdownPct = 0.0;
-   if(DailyLossLimitHit(dailyDrawdownPct))
-   {
-      if(g_dailyLossLoggedYmd != CurrentDayYmd())
-      {
-         g_dailyLossLoggedYmd = CurrentDayYmd();
-         Print("Daily loss guard: drawdown ", DoubleToString(dailyDrawdownPct, 2),
-               "% >= limit ", DoubleToString(InpMaxDailyLossPercent, 2), "% - new entries blocked.");
-      }
-      DebugOnce("daily_loss", "Daily loss guard active — entry scan skipped");
-      return;
-   }
-
-   double floatingPct = 0.0;
-   if(FloatingLossBlocksEntries(floatingPct))
-   {
-      LogFloatingGuardMessage(
-         "Floating loss guard: open PnL ",
-         floatingPct,
-         " - new entries blocked until floating recovers above -",
-         InpFloatingLossClosePercent
-      );
-      DebugOnce("floating_loss", "Floating loss guard active — entry scan skipped");
-      return;
-   }
-
-   string symbols[];
-   BuildSymbolList(symbols);
-
-   for(int i = 0; i < ArraySize(symbols); i++)
-   {
-      string sym = symbols[i];
-      if(sym == "")
-         continue;
-
-      if(!IsNewEntryBar(sym))
-         continue;
-
-      DebugPrint(sym + " new " + EnumToString(InpEntryTf) + " bar — evaluating signal");
-
-      if(HasOurPosition(sym))
-      {
-         DebugSkip(sym, "has_position");
-         continue;
-      }
-
-      if(InCooldown(sym))
-      {
-         DebugSkip(sym, "cooldown");
-         continue;
-      }
-
-      if(TradesOpenedTodayForSymbol(sym) >= EffectiveMaxTradesPerSymbolPerDay())
-      {
-         DebugSkip(sym, "max_trades_symbol_day");
-         continue;
-      }
-
-      if(!SpreadOk(sym))
-      {
-         DebugSkip(sym, "spread", "spread=" + DoubleToString(SpreadPips(sym), 2)
-            + " max=" + DoubleToString(MaxSpreadReferencePips(sym), 2));
-         continue;
-      }
-
-      int side = 0;
-      double signalPips = 0.0;
-      if(!EvaluateConsensus(sym, side, signalPips))
-      {
-         DebugSkip(sym, "no_consensus", "SMA/EMA do not agree or no cross");
-         continue;
-      }
-
-      string sideStr = (side > 0) ? "BUY" : "SELL";
-      DebugPrint(sym + " consensus " + sideStr + " strength=" + DoubleToString(signalPips, 2));
-
-      if(!MinSignalMoveOk(sym, signalPips))
-      {
-         DebugSkip(sym, "min_move", "strength=" + DoubleToString(signalPips, 2));
-         continue;
-      }
-
-      if(InpTrendFilter && !TrendAligned(sym, side))
-      {
-         DebugSkip(sym, "trend_filter", sideStr + " not aligned on HTF/entry candles");
-         continue;
-      }
-
-      if(InpUseAdxFloor && !AdxOk(sym))
-      {
-         DebugSkip(sym, "adx_floor", "ADX < " + DoubleToString(InpAdxMinFloor, 1));
-         continue;
-      }
-
-      if(InpUseBotScore)
-      {
-         BotScoreResult scoreResult = CalculateBotScore(sym, side, signalPips);
-         DebugPrint(sym + " " + FormatBotScore(scoreResult));
-
-         if(scoreResult.hard_reject)
-         {
-            DebugSkip(sym, scoreResult.reject_reason, FormatBotScore(scoreResult));
-            continue;
-         }
-         if(scoreResult.score < InpMinBotScore)
-         {
-            DebugSkip(sym, "low_score", FormatBotScore(scoreResult)
-               + " min=" + IntegerToString(InpMinBotScore));
-            continue;
-         }
-
-         DebugPrint(sym + " PASS " + sideStr + " " + FormatBotScore(scoreResult));
-      }
-      else if(InpDebugMode)
-      {
-         DebugPrint(sym + " PASS " + sideStr + " (bot score disabled)");
-      }
-
-      OpenTrade(sym, side);
-   }
-}
+void RunEntryScan();
 
 //+------------------------------------------------------------------+
 int FindEntryBarIndex(const string symbol)
@@ -1064,6 +922,149 @@ void MarkTpAdjusted(ulong ticket)
    string key = IntegerToString((long)ticket);
    if(StringFind(g_tpAdjustedKeys, key) < 0)
       g_tpAdjustedKeys = g_tpAdjustedKeys + key + ",";
+}
+
+//+------------------------------------------------------------------+
+void RunEntryScan()
+{
+   if(!InSessionUtc())
+   {
+      DebugOnce("session", "Outside UTC session window - entry scan skipped");
+      return;
+   }
+
+   if(CountOurPositions() >= EffectiveMaxOpen())
+   {
+      DebugOnce("max_open", "Max open positions reached - entry scan skipped");
+      return;
+   }
+
+   if(TradesOpenedToday() >= EffectiveMaxTradesPerDay())
+   {
+      DebugOnce("max_trades_day", "Max trades per day reached - entry scan skipped");
+      return;
+   }
+
+   double dailyDrawdownPct = 0.0;
+   if(DailyLossLimitHit(dailyDrawdownPct))
+   {
+      if(g_dailyLossLoggedYmd != CurrentDayYmd())
+      {
+         g_dailyLossLoggedYmd = CurrentDayYmd();
+         Print("Daily loss guard: drawdown ", DoubleToString(dailyDrawdownPct, 2),
+               "% >= limit ", DoubleToString(InpMaxDailyLossPercent, 2), "% - new entries blocked.");
+      }
+      DebugOnce("daily_loss", "Daily loss guard active - entry scan skipped");
+      return;
+   }
+
+   double floatingPct = 0.0;
+   if(FloatingLossBlocksEntries(floatingPct))
+   {
+      LogFloatingGuardMessage(
+         "Floating loss guard: open PnL ",
+         floatingPct,
+         " - new entries blocked until floating recovers above -",
+         InpFloatingLossClosePercent
+      );
+      DebugOnce("floating_loss", "Floating loss guard active - entry scan skipped");
+      return;
+   }
+
+   string symbols[];
+   BuildSymbolList(symbols);
+
+   for(int i = 0; i < ArraySize(symbols); i++)
+   {
+      string sym = symbols[i];
+      if(sym == "")
+         continue;
+
+      if(!IsNewEntryBar(sym))
+         continue;
+
+      DebugPrint(sym + " new " + EnumToString(InpEntryTf) + " bar - evaluating signal");
+
+      if(HasOurPosition(sym))
+      {
+         DebugSkip(sym, "has_position");
+         continue;
+      }
+
+      if(InCooldown(sym))
+      {
+         DebugSkip(sym, "cooldown");
+         continue;
+      }
+
+      if(TradesOpenedTodayForSymbol(sym) >= EffectiveMaxTradesPerSymbolPerDay())
+      {
+         DebugSkip(sym, "max_trades_symbol_day");
+         continue;
+      }
+
+      if(!SpreadOk(sym))
+      {
+         DebugSkip(sym, "spread", "spread=" + DoubleToString(SpreadPips(sym), 2)
+            + " max=" + DoubleToString(MaxSpreadReferencePips(sym), 2));
+         continue;
+      }
+
+      int side = 0;
+      double signalPips = 0.0;
+      if(!EvaluateConsensus(sym, side, signalPips))
+      {
+         DebugSkip(sym, "no_consensus", "SMA/EMA do not agree or no cross");
+         continue;
+      }
+
+      string sideStr = (side > 0) ? "BUY" : "SELL";
+      DebugPrint(sym + " consensus " + sideStr + " strength=" + DoubleToString(signalPips, 2));
+
+      if(!MinSignalMoveOk(sym, signalPips))
+      {
+         DebugSkip(sym, "min_move", "strength=" + DoubleToString(signalPips, 2));
+         continue;
+      }
+
+      if(InpTrendFilter && !TrendAligned(sym, side))
+      {
+         DebugSkip(sym, "trend_filter", sideStr + " not aligned on HTF/entry candles");
+         continue;
+      }
+
+      if(InpUseAdxFloor && !AdxOk(sym))
+      {
+         DebugSkip(sym, "adx_floor", "ADX < " + DoubleToString(InpAdxMinFloor, 1));
+         continue;
+      }
+
+      if(InpUseBotScore)
+      {
+         BotScoreResult scoreResult = CalculateBotScore(sym, side, signalPips);
+         DebugPrint(sym + " " + FormatBotScore(scoreResult));
+
+         if(scoreResult.hard_reject)
+         {
+            DebugSkip(sym, scoreResult.reject_reason, FormatBotScore(scoreResult));
+            continue;
+         }
+         if(scoreResult.score < InpMinBotScore)
+         {
+            DebugSkip(sym, "low_score", FormatBotScore(scoreResult)
+               + " min=" + IntegerToString(InpMinBotScore));
+            continue;
+         }
+
+         DebugPrint(sym + " PASS " + sideStr + " " + FormatBotScore(scoreResult));
+      }
+      else if(InpDebugMode)
+      {
+         DebugPrint(sym + " PASS " + sideStr + " (bot score disabled)");
+      }
+
+      OpenTrade(sym, side);
+   }
 }
 
 #endif // AUTO_FOREX_BOT_CORE_MQH
