@@ -19,6 +19,16 @@ input int    InpSlPips            = 40;
 input double InpPipSizeOverride   = 0.0;
 input ulong  InpMagic             = 20250624;
 
+//--- percent sizing (off for commodities — uses pips above)
+input group "Percent sizing"
+input bool   InpUsePercentSizing  = false;
+input double InpTpPercent         = 0.0;
+input double InpSlPercent         = 0.0;
+input double InpTrailStartPercent = 0.0;
+input double InpTrailPercent      = 0.0;
+input double InpMinMovePercent    = 0.0;
+input double InpMaxSpreadPercent  = 0.0;
+
 //--- trailing (commodity: start 30 / trail 15 / tp x2.5)
 input group "Trailing stop"
 input int    InpTrailStartPips    = 30;
@@ -72,6 +82,17 @@ input group "ADX filter"
 input bool   InpUseAdxFloor       = true;
 input double InpAdxMinFloor       = 22.0;
 input int    InpAdxPeriod         = 14;
+
+//--- debug & bot score
+input group "Debug & bot score"
+input bool   InpDebugMode         = false;
+input bool   InpUseBotScore       = true;
+input int    InpMinBotScore       = 70;
+input double InpScoreSignalRefPips = 50.0;
+input string InpScoreCategory     = "commodity";
+input bool   InpUseAdxScore       = true;
+input bool   InpUseRsiScore       = true;
+input int    InpRsiPeriod         = 14;
 
 //--- scan
 input group "Scanner"

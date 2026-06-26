@@ -1,17 +1,17 @@
 //+------------------------------------------------------------------+
 //| AutoCryptoBot.mq5                                                |
-//| Crypto/BTC EA — console.php category defaults (crypto).            |
-//| Pip size = 1 price point (matches Mt5Service::resolvePipSize).   |
+//| Crypto EA — percent-based TP/SL scales with each coin's price.   |
+//| Same % on BTC, ETH, alts = similar relative risk per trade.      |
 //+------------------------------------------------------------------+
 #property copyright "mt5 project"
-#property version   "1.00"
-#property description "Crypto/BTC — console.php crypto category defaults"
+#property version   "1.02"
+#property description "Crypto — percent TP/SL (scales BTC vs ETH automatically)"
 
 #define AFB_PIP_IS_PRICE_POINT
 
 input string InpTradeLabel        = "AutoCryptoBot";
 
-//--- trade sizing (crypto: tp 150 / sl 100)
+//--- trade sizing (fallback fixed $ distance when percent mode off)
 input group "Trade sizing"
 input double InpLot               = 0.01;
 input int    InpTpPips            = 150;
@@ -19,13 +19,23 @@ input int    InpSlPips            = 100;
 input double InpPipSizeOverride   = 0.0;
 input ulong  InpMagic             = 20250623;
 
-//--- trailing (crypto uses console default trail map: 10 / 8 / x2)
+//--- percent sizing (recommended for crypto — ON by default)
+input group "Percent sizing"
+input bool   InpUsePercentSizing  = true;
+input double InpTpPercent         = 0.15;
+input double InpSlPercent         = 0.10;
+input double InpTrailStartPercent = 0.01;
+input double InpTrailPercent      = 0.008;
+input double InpMinMovePercent    = 0.003;
+input double InpMaxSpreadPercent  = 0.05;
+
+//--- trailing (used only when percent mode off)
 input group "Trailing stop"
 input int    InpTrailStartPips    = 10;
 input int    InpTrailPips         = 8;
 input double InpTrailTpMultiplier = 2.0;
 
-//--- entry filters (crypto: spread 50 / min-move 3)
+//--- entry filters (pips used only when percent mode off)
 input group "Entry filters"
 input double InpMaxSpreadPips     = 50.0;
 input double InpMinMovePips       = 3.0;
@@ -72,6 +82,17 @@ input group "ADX filter"
 input bool   InpUseAdxFloor       = true;
 input double InpAdxMinFloor       = 22.0;
 input int    InpAdxPeriod         = 14;
+
+//--- debug & bot score
+input group "Debug & bot score"
+input bool   InpDebugMode         = false;
+input bool   InpUseBotScore       = true;
+input int    InpMinBotScore       = 70;
+input double InpScoreSignalRefPips = 120.0;
+input string InpScoreCategory     = "crypto";
+input bool   InpUseAdxScore       = true;
+input bool   InpUseRsiScore       = true;
+input int    InpRsiPeriod         = 14;
 
 //--- scan
 input group "Scanner"

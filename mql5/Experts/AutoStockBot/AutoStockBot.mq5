@@ -19,6 +19,16 @@ input int    InpSlPips            = 80;
 input double InpPipSizeOverride   = 0.0;
 input ulong  InpMagic             = 20250625;
 
+//--- percent sizing (off for stocks — uses pips above)
+input group "Percent sizing"
+input bool   InpUsePercentSizing  = false;
+input double InpTpPercent         = 0.0;
+input double InpSlPercent         = 0.0;
+input double InpTrailStartPercent = 0.0;
+input double InpTrailPercent      = 0.0;
+input double InpMinMovePercent    = 0.0;
+input double InpMaxSpreadPercent  = 0.0;
+
 //--- trailing (stock: start 50 / trail 25 / tp x3)
 input group "Trailing stop"
 input int    InpTrailStartPips    = 50;
@@ -72,6 +82,17 @@ input group "ADX filter"
 input bool   InpUseAdxFloor       = true;
 input double InpAdxMinFloor       = 22.0;
 input int    InpAdxPeriod         = 14;
+
+//--- debug & bot score
+input group "Debug & bot score"
+input bool   InpDebugMode         = false;
+input bool   InpUseBotScore       = true;
+input int    InpMinBotScore       = 70;
+input double InpScoreSignalRefPips = 30.0;
+input string InpScoreCategory     = "stock";
+input bool   InpUseAdxScore       = true;
+input bool   InpUseRsiScore       = true;
+input int    InpRsiPeriod         = 14;
 
 //--- scan
 input group "Scanner"

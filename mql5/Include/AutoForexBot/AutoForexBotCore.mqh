@@ -5,6 +5,7 @@
 // Define AFB_PIP_IS_PRICE_POINT before include for crypto/commodity/stock (console.php pip=1.0).
 
 #include <Trade/Trade.mqh>
+#include <AutoForexBot/AutoForexBotScore.mqh>
 
 CTrade g_trade;
 datetime g_lastCooldown[];
@@ -24,6 +25,15 @@ int OnInit()
    g_trade.SetTypeFillingBySymbol(_Symbol);
 
    Print(InpTradeLabel, " started (on-tick). magic=", InpMagic);
+   if(InpDebugMode)
+   {
+      Print(InpTradeLabel, " DEBUG ON | minScore=", InpMinBotScore,
+            "% useScore=", (InpUseBotScore ? "yes" : "no"),
+            " signalRef=", DoubleToString(InpScoreSignalRefPips, 1),
+            " category=", InpScoreCategory,
+            " adxScore=", (InpUseAdxScore ? "yes" : "no"),
+            " rsiScore=", (InpUseRsiScore ? "yes" : "no"));
+   }
    return INIT_SUCCEEDED;
 }
 
@@ -42,13 +52,22 @@ void OnTick()
 void RunEntryScan()
 {
    if(!InSessionUtc())
+   {
+      DebugOnce("session", "Outside UTC session window — entry scan skipped");
       return;
+   }
 
    if(CountOurPositions() >= EffectiveMaxOpen())
+   {
+      DebugOnce("max_open", "Max open positions reached — entry scan skipped");
       return;
+   }
 
    if(TradesOpenedToday() >= EffectiveMaxTradesPerDay())
+   {
+      DebugOnce("max_trades_day", "Max trades per day reached — entry scan skipped");
       return;
+   }
 
    double dailyDrawdownPct = 0.0;
    if(DailyLossLimitHit(dailyDrawdownPct))
@@ -57,8 +76,9 @@ void RunEntryScan()
       {
          g_dailyLossLoggedYmd = CurrentDayYmd();
          Print("Daily loss guard: drawdown ", DoubleToString(dailyDrawdownPct, 2),
-               "% >= limit ", DoubleToString(InpMaxDailyLossPercent, 2), "% â€” new entries blocked.");
+               "% >= limit ", DoubleToString(InpMaxDailyLossPercent, 2), "% - new entries blocked.");
       }
+      DebugOnce("daily_loss", "Daily loss guard active — entry scan skipped");
       return;
    }
 
@@ -68,9 +88,10 @@ void RunEntryScan()
       LogFloatingGuardMessage(
          "Floating loss guard: open PnL ",
          floatingPct,
-         " â€” new entries blocked until floating recovers above -",
+         " - new entries blocked until floating recovers above -",
          InpFloatingLossClosePercent
       );
+      DebugOnce("floating_loss", "Floating loss guard active — entry scan skipped");
       return;
    }
 
@@ -86,31 +107,85 @@ void RunEntryScan()
       if(!IsNewEntryBar(sym))
          continue;
 
+      DebugPrint(sym + " new " + EnumToString(InpEntryTf) + " bar — evaluating signal");
+
       if(HasOurPosition(sym))
+      {
+         DebugSkip(sym, "has_position");
          continue;
+      }
 
       if(InCooldown(sym))
+      {
+         DebugSkip(sym, "cooldown");
          continue;
+      }
 
       if(TradesOpenedTodayForSymbol(sym) >= EffectiveMaxTradesPerSymbolPerDay())
+      {
+         DebugSkip(sym, "max_trades_symbol_day");
          continue;
+      }
 
       if(!SpreadOk(sym))
+      {
+         DebugSkip(sym, "spread", "spread=" + DoubleToString(SpreadPips(sym), 2)
+            + " max=" + DoubleToString(MaxSpreadReferencePips(sym), 2));
          continue;
+      }
 
-      int side = 0; // 1=buy -1=sell
+      int side = 0;
       double signalPips = 0.0;
       if(!EvaluateConsensus(sym, side, signalPips))
+      {
+         DebugSkip(sym, "no_consensus", "SMA/EMA do not agree or no cross");
          continue;
+      }
 
-      if(signalPips < EffectiveMinMovePips())
+      string sideStr = (side > 0) ? "BUY" : "SELL";
+      DebugPrint(sym + " consensus " + sideStr + " strength=" + DoubleToString(signalPips, 2));
+
+      if(!MinSignalMoveOk(sym, signalPips))
+      {
+         DebugSkip(sym, "min_move", "strength=" + DoubleToString(signalPips, 2));
          continue;
+      }
 
       if(InpTrendFilter && !TrendAligned(sym, side))
+      {
+         DebugSkip(sym, "trend_filter", sideStr + " not aligned on HTF/entry candles");
          continue;
+      }
 
       if(InpUseAdxFloor && !AdxOk(sym))
+      {
+         DebugSkip(sym, "adx_floor", "ADX < " + DoubleToString(InpAdxMinFloor, 1));
          continue;
+      }
+
+      if(InpUseBotScore)
+      {
+         BotScoreResult scoreResult = CalculateBotScore(sym, side, signalPips);
+         DebugPrint(sym + " " + FormatBotScore(scoreResult));
+
+         if(scoreResult.hard_reject)
+         {
+            DebugSkip(sym, scoreResult.reject_reason, FormatBotScore(scoreResult));
+            continue;
+         }
+         if(scoreResult.score < InpMinBotScore)
+         {
+            DebugSkip(sym, "low_score", FormatBotScore(scoreResult)
+               + " min=" + IntegerToString(InpMinBotScore));
+            continue;
+         }
+
+         DebugPrint(sym + " PASS " + sideStr + " " + FormatBotScore(scoreResult));
+      }
+      else if(InpDebugMode)
+      {
+         DebugPrint(sym + " PASS " + sideStr + " (bot score disabled)");
+      }
 
       OpenTrade(sym, side);
    }
@@ -173,6 +248,35 @@ void BuildSymbolList(string &symbols[])
 }
 
 //+------------------------------------------------------------------+
+double ReferencePrice(const string symbol)
+{
+   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   if(bid > 0.0 && ask > 0.0)
+      return (bid + ask) / 2.0;
+   if(bid > 0.0)
+      return bid;
+   return ask;
+}
+
+//+------------------------------------------------------------------+
+bool UsePercentSizing()
+{
+   return InpUsePercentSizing && InpTpPercent > 0.0 && InpSlPercent > 0.0;
+}
+
+//+------------------------------------------------------------------+
+double DistanceFromPercent(const string symbol, double percent)
+{
+   if(percent <= 0.0)
+      return 0.0;
+   double price = ReferencePrice(symbol);
+   if(price <= 0.0)
+      return 0.0;
+   return price * (percent / 100.0);
+}
+
+//+------------------------------------------------------------------+
 double PipSize(const string symbol)
 {
 #ifdef AFB_PIP_IS_PRICE_POINT
@@ -205,7 +309,23 @@ double SpreadPips(const string symbol)
 //+------------------------------------------------------------------+
 bool SpreadOk(const string symbol)
 {
+   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+   if(ask <= 0.0 || bid <= 0.0)
+      return false;
+
+   if(UsePercentSizing() && InpMaxSpreadPercent > 0.0)
+      return (ask - bid) <= DistanceFromPercent(symbol, InpMaxSpreadPercent);
+
    return SpreadPips(symbol) <= EffectiveMaxSpread();
+}
+
+//+------------------------------------------------------------------+
+bool MinSignalMoveOk(const string symbol, double signalStrength)
+{
+   if(UsePercentSizing() && InpMinMovePercent > 0.0)
+      return signalStrength >= DistanceFromPercent(symbol, InpMinMovePercent);
+   return signalStrength >= EffectiveMinMovePips();
 }
 
 //+------------------------------------------------------------------+
@@ -807,15 +927,26 @@ void SetCooldown(const string symbol)
 void OpenTrade(const string symbol, int side)
 {
    double pip = PipSize(symbol);
-   int tpPips = EffectiveTpPips();
-   int slPips = EffectiveSlPips();
+   double tpDist = 0.0;
+   double slDist = 0.0;
+
+   if(UsePercentSizing())
+   {
+      tpDist = DistanceFromPercent(symbol, InpTpPercent);
+      slDist = DistanceFromPercent(symbol, InpSlPercent);
+   }
+   else
+   {
+      tpDist = EffectiveTpPips() * pip;
+      slDist = EffectiveSlPips() * pip;
+   }
 
    double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
    double price = (side > 0) ? ask : bid;
 
-   double sl = (side > 0) ? price - slPips * pip : price + slPips * pip;
-   double tp = (side > 0) ? price + tpPips * pip : price - tpPips * pip;
+   double sl = (side > 0) ? price - slDist : price + slDist;
+   double tp = (side > 0) ? price + tpDist : price - tpDist;
 
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    sl = NormalizeDouble(sl, digits);
@@ -831,7 +962,12 @@ void OpenTrade(const string symbol, int side)
    if(ok)
    {
       SetCooldown(symbol);
-      Print("Opened ", (side > 0 ? "BUY" : "SELL"), " ", symbol, " TP=", tp, " SL=", sl);
+      if(UsePercentSizing())
+         Print("Opened ", (side > 0 ? "BUY" : "SELL"), " ", symbol,
+               " TP=", tp, " (", DoubleToString(InpTpPercent, 3), "%)",
+               " SL=", sl, " (", DoubleToString(InpSlPercent, 3), "%)");
+      else
+         Print("Opened ", (side > 0 ? "BUY" : "SELL"), " ", symbol, " TP=", tp, " SL=", sl);
    }
    else
       Print("Open failed ", symbol, " err=", GetLastError(), " ret=", g_trade.ResultRetcodeDescription());
@@ -840,9 +976,7 @@ void OpenTrade(const string symbol, int side)
 //+------------------------------------------------------------------+
 void ApplyTrailingStops()
 {
-   int trailStart = EffectiveTrailStartPips();
-   int trailDist  = EffectiveTrailPips();
-   double tpMult  = EffectiveTrailTpMultiplier();
+   double tpMult = EffectiveTrailTpMultiplier();
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -863,16 +997,29 @@ void ApplyTrailingStops()
       double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
       double price = (type == POSITION_TYPE_BUY) ? bid : ask;
 
+      double trailStartDist = 0.0;
+      double trailDist = 0.0;
+      if(UsePercentSizing() && InpTrailStartPercent > 0.0 && InpTrailPercent > 0.0)
+      {
+         trailStartDist = DistanceFromPercent(symbol, InpTrailStartPercent);
+         trailDist = DistanceFromPercent(symbol, InpTrailPercent);
+      }
+      else
+      {
+         trailStartDist = EffectiveTrailStartPips() * pip;
+         trailDist = EffectiveTrailPips() * pip;
+      }
+
       double profitDist = (type == POSITION_TYPE_BUY)
          ? (price - openPrice)
          : (openPrice - price);
 
-      if(profitDist < trailStart * pip)
+      if(profitDist < trailStartDist)
          continue;
 
       double newSl = (type == POSITION_TYPE_BUY)
-         ? price - trailDist * pip
-         : price + trailDist * pip;
+         ? price - trailDist
+         : price + trailDist;
       newSl = NormalizeDouble(newSl, digits);
 
       if(type == POSITION_TYPE_BUY && currentSl > 0.0 && newSl <= currentSl)
