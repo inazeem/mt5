@@ -137,7 +137,11 @@ double DistanceFromPercent(const string symbol, double percent)
 //+------------------------------------------------------------------+
 double PipSize(const string symbol)
 {
-#ifdef AFB_PIP_IS_PRICE_POINT
+#ifdef AFB_CRYPTO_BOT
+   if(InpPipSizeOverride > 0.0)
+      return InpPipSizeOverride;
+   return 1.0;
+#elif defined(AFB_PIP_IS_PRICE_POINT)
    if(InpPipSizeOverride > 0.0)
       return InpPipSizeOverride;
    return 1.0;
@@ -820,12 +824,20 @@ void OpenTrade(const string symbol, int side)
    if(ok)
    {
       SetCooldown(symbol);
+      double pip = PipSize(symbol);
       if(UsePercentSizing())
          Print("Opened ", (side > 0 ? "BUY" : "SELL"), " ", symbol,
                " TP=", tp, " (", DoubleToString(InpTpPercent, 3), "%)",
                " SL=", sl, " (", DoubleToString(InpSlPercent, 3), "%)");
+#ifdef AFB_CRYPTO_BOT
+      else
+         Print("Opened ", (side > 0 ? "BUY" : "SELL"), " ", symbol,
+               " TP=", tp, " (", EffectiveTpPips(), " pips x ", DoubleToString(pip, 4), ")",
+               " SL=", sl, " (", EffectiveSlPips(), " pips)");
+#else
       else
          Print("Opened ", (side > 0 ? "BUY" : "SELL"), " ", symbol, " TP=", tp, " SL=", sl);
+#endif
    }
    else
       Print("Open failed ", symbol, " err=", GetLastError(), " ret=", g_trade.ResultRetcodeDescription());
