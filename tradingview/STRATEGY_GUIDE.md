@@ -299,3 +299,166 @@ Always check **List of trades** in Strategy Tester, not only win %.
 ---
 
 *Last updated to match: MA 9/21 consensus, H1+H4+15m trend, ADX floor, min move, pullback filter, bot score, session, spread, cooldown, daily loss, floating guard, TP/SL/trailing.*
+
+---
+
+## 12. Nice to have — few trades & how to test more activity
+
+### Why there are not many trades
+
+**This is normal.** The bot is built for **quality over quantity**. Every **closed 15m bar** is checked, but a trade only fires when **all** filters pass at once.
+
+Your BTC backtest (~10 trades in 2 months ≈ **5 per month**) is typical for this setup — not a bug.
+
+| Layer | What it blocks | How often |
+|-------|----------------|-----------|
+| **Pullback filter** | Chasing tops/bottoms | **Very often** — biggest reducer |
+| **1H + 4H + 15m** same direction | Mixed/choppy markets | Often |
+| **SMA + EMA** must agree | Weak or conflicting trend | Often |
+| **ADX** floor | Flat/choppy price | Sometimes |
+| **Min move** (e.g. 25 pts crypto) | MAs too close together | Sometimes |
+| **Bot score ≥ 70** | “Low quality” setups | Sometimes |
+| **Cooldown** (~28 min crypto) | Back-to-back entries | After each trade |
+| **One trade at a time** | New entry while position open | While waiting for TP/SL |
+
+Wide **TP/SL** (e.g. BTC 2000/1000) also keeps trades open **longer**, so fewer new entries per month.
+
+**Rough math (BTC, 15m):**
+
+- ~2,880 bars per month
+- Often only **1 valid setup every few days** after all filters
+- **5–15 trades/month** is typical
+- **10 in 2 months** is on the low side but still normal
+
+**More trades ≠ more profit.** A high win rate can still lose money if wins are small and losses hit full SL (see section 9).
+
+---
+
+### How to see what is blocking entries on the chart
+
+| What you see | Meaning |
+|--------------|---------|
+| **Orange background** | MAs/trend OK, but **pullback filter** blocked entry |
+| **Gray background** | Outside **session** — no new entries |
+| **WAIT** label | One or more rules failed |
+| **HUD Score red** | Bot score below minimum |
+| **HUD Cooldown WAIT** | Too soon after last trade |
+| **No label, flat MAs** | No consensus — most common in chop |
+
+---
+
+### If you want more trades — relax filters in this order
+
+Change **one thing at a time** in Strategy → **Inputs**, re-run Strategy Tester, and compare **trade count**, **profit factor**, and **avg win vs avg loss** — not win rate alone.
+
+| Step | Setting | Change | Expected effect |
+|------|---------|--------|-----------------|
+| **1** | Pullback filter | **OFF** | **Largest** increase (often 2–3× more signals). More bad entries at tops/bottoms. |
+| **2** | Min bot score | `70` → `60`, or Bot score **OFF** | More marginal setups |
+| **3** | Cooldown | `28` → `15` or `0` | Trades closer together |
+| **4** | ADX floor (crypto) | `18` → `15` | Trades in weaker trends |
+| **5** | Min move (crypto) | `25` → `15` points | Trades when MAs are closer |
+| **6** | TP / SL | e.g. 2000/1000 → 200/100 | Positions close faster → room for more entries (different risk) |
+
+**Turn off trailing** when testing wide TP/SL so exits match your targets (Filters → **Trailing stop = OFF**).
+
+---
+
+### Suggested testing presets
+
+Use these as starting points in TradingView Inputs. Always backtest **6+ months** before trusting results.
+
+#### Strict (default — fewest trades, highest quality)
+
+| Setting | Value |
+|---------|-------|
+| Pullback filter | ON |
+| Min bot score | 70 |
+| Cooldown | 28 min (crypto) / 30 (others) |
+| Trailing | OFF for wide TP/SL tests |
+
+#### Balanced (medium activity)
+
+| Setting | Value |
+|---------|-------|
+| Pullback filter | ON |
+| Min bot score | 60 |
+| Cooldown | 15 min |
+| Trailing | Match TP scale or OFF |
+
+#### More signals (most activity — test carefully)
+
+| Setting | Value |
+|---------|-------|
+| Pullback filter | **OFF** |
+| Min bot score | 60 or OFF |
+| Cooldown | 15 min or 0 |
+| Trailing | OFF until exits are profitable |
+
+---
+
+### Step-by-step test plan (nice to have)
+
+Run each step on the **same date range** and write down results in Strategy Tester → **Overview**:
+
+```
+1. Baseline     → Strict preset, note: trades, profit factor, net PnL
+2. + Pullback OFF → compare trade count (expect big jump)
+3. + Score 60   → compare profit factor (did quality drop?)
+4. + Cooldown 15 → compare trade count
+5. Pick the preset that keeps profit factor > 1.0 with acceptable drawdown
+```
+
+**Checklist per test run:**
+
+```
+☐ Same symbol and date range (e.g. BTCUSDT, 6 months)
+☐ Chart = 15m
+☐ Trailing OFF when using wide TP/SL
+☐ Note: Total trades, Profit factor, Avg win, Avg loss, Max drawdown
+☐ List of trades — confirm exits hit TP/SL, not tiny trail wins
+```
+
+---
+
+### What not to change (without heavy retesting)
+
+| Keep | Why |
+|------|-----|
+| **1H + 4H + 15m trend** | Core strategy — removing it changes what the bot is |
+| **SMA + EMA agreement** | Main signal engine |
+| **15m chart** | Entry timing is built for M15 bar close |
+
+Do not chase “50 trades/month” with every strict filter still ON — they work against each other.
+
+---
+
+### MT5 EA (same behavior)
+
+The EA uses the same filters. Few trades on MT5 demo is expected unless you change inputs:
+
+| Input | More trades |
+|-------|-------------|
+| `InpUsePullbackFilter` | `false` |
+| `InpMinBotScore` | `60` |
+| `InpCooldownMinutes` | `15` or lower |
+
+Enable **`InpDebugMode = true`** → Experts tab shows `SKIP: pullback_filter`, `SKIP: low_score`, etc.
+
+---
+
+### Optional future improvement
+
+A single **Trading mode** dropdown (`Strict` / `Balanced` / `More signals`) in Pine and MT5 could apply the preset table above automatically — one setting instead of tuning each filter by hand.
+
+---
+
+### Quick reference — trade frequency vs quality
+
+| Mode | Trades/month (typical BTC) | Quality | Best for |
+|------|----------------------------|---------|----------|
+| Strict | ~3–8 | Highest | Live / prop / careful testing |
+| Balanced | ~8–15 | Medium | Finding a middle ground |
+| More signals | ~15–30+ | Lower | Learning the chart, more samples |
+
+**Bottom line:** Few trades means filters are working. To get more activity, relax **pullback** and **bot score** first, then re-backtest and watch **profit factor** — not just trade count.
