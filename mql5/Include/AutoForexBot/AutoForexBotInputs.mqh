@@ -163,6 +163,14 @@ input bool   InpUseAdxFloor       = true;
 input double InpAdxMinFloor       = 22.0;
 input int    InpAdxPeriod         = 14;
 
+input group "Pullback filter"
+input bool   InpUsePullbackFilter    = true;
+input double InpPullbackRetraceAtrMult = 0.5;
+input double InpPullbackMaxExtAtrMult  = 1.2;
+input double InpPullbackRsiBuyMax      = 58.0;
+input double InpPullbackRsiSellMin     = 42.0;
+input int    InpPullbackLookbackBars   = 5;
+
 input group "Debug & bot score"
 input bool   InpDebugMode         = false;
 input bool   InpUseBotScore       = true;

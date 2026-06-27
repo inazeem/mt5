@@ -31,7 +31,8 @@ int OnInit()
             " signalRef=", DoubleToString(InpScoreSignalRefPips, 1),
             " category=", InpScoreCategory,
             " adxScore=", (InpUseAdxScore ? "yes" : "no"),
-            " rsiScore=", (InpUseRsiScore ? "yes" : "no"));
+            " rsiScore=", (InpUseRsiScore ? "yes" : "no"),
+            " pullback=", (InpUsePullbackFilter ? "yes" : "no"));
    }
    return INIT_SUCCEEDED;
 }
@@ -678,6 +679,220 @@ bool AdxOk(const string symbol)
 }
 
 //+------------------------------------------------------------------+
+bool ReadAtrAtShift(const string symbol, int shift, double &atrOut)
+{
+   atrOut = 0.0;
+   int handle = iATR(symbol, InpEntryTf, 14);
+   if(handle == INVALID_HANDLE)
+      return false;
+
+   double buf[];
+   ArraySetAsSeries(buf, true);
+   if(CopyBuffer(handle, 0, shift, 1, buf) < 1)
+   {
+      IndicatorRelease(handle);
+      return false;
+   }
+   IndicatorRelease(handle);
+   atrOut = buf[0];
+   return atrOut > 0.0;
+}
+
+//+------------------------------------------------------------------+
+bool ReadDiAtShift(const string symbol, int shift, double &diPlus, double &diMinus)
+{
+   diPlus = 0.0;
+   diMinus = 0.0;
+   int handle = iADX(symbol, InpEntryTf, InpAdxPeriod);
+   if(handle == INVALID_HANDLE)
+      return false;
+
+   double plus[];
+   double minus[];
+   ArraySetAsSeries(plus, true);
+   ArraySetAsSeries(minus, true);
+   if(CopyBuffer(handle, 1, shift, 1, plus) < 1 || CopyBuffer(handle, 2, shift, 1, minus) < 1)
+   {
+      IndicatorRelease(handle);
+      return false;
+   }
+   IndicatorRelease(handle);
+   diPlus = plus[0];
+   diMinus = minus[0];
+   return true;
+}
+
+//+------------------------------------------------------------------+
+bool ReadRsiAtShift(const string symbol, int shift, double &rsiOut)
+{
+   rsiOut = -1.0;
+   int handle = iRSI(symbol, InpEntryTf, InpRsiPeriod, PRICE_CLOSE);
+   if(handle == INVALID_HANDLE)
+      return false;
+
+   double buf[];
+   ArraySetAsSeries(buf, true);
+   if(CopyBuffer(handle, 0, shift, 1, buf) < 1)
+   {
+      IndicatorRelease(handle);
+      return false;
+   }
+   IndicatorRelease(handle);
+   rsiOut = buf[0];
+   return true;
+}
+
+//+------------------------------------------------------------------+
+bool MaRibbonAtShift(const string symbol, int shift,
+                     double &smaFast, double &smaSlow, double &emaFast, double &emaSlow)
+{
+   smaFast = 0.0;
+   smaSlow = 0.0;
+   emaFast = 0.0;
+   emaSlow = 0.0;
+
+   int needBars = MathMax(InpSmaSlow, InpEmaSlow) + shift + 5;
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   if(CopyRates(symbol, InpEntryTf, 0, needBars, rates) < needBars)
+      return false;
+
+   double closes[];
+   ArrayResize(closes, needBars);
+   for(int i = 0; i < needBars; i++)
+      closes[i] = rates[i].close;
+
+   if(InpUseSma)
+   {
+      smaFast = Sma(closes, InpSmaFast, shift);
+      smaSlow = Sma(closes, InpSmaSlow, shift);
+   }
+   if(InpUseEma)
+   {
+      emaFast = Ema(closes, InpEmaFast, shift);
+      emaSlow = Ema(closes, InpEmaSlow, shift);
+   }
+
+   if(InpUseSma && InpUseEma)
+      return smaFast > 0.0 && smaSlow > 0.0 && emaFast > 0.0 && emaSlow > 0.0;
+   if(InpUseSma)
+      return smaFast > 0.0 && smaSlow > 0.0;
+   return emaFast > 0.0 && emaSlow > 0.0;
+}
+
+//+------------------------------------------------------------------+
+// Hard pullback block — ports TradingView pullback filter (parity with Pine strategy).
+bool PullbackOk(const string symbol, int side, string &detail)
+{
+   detail = "";
+   if(!InpUsePullbackFilter)
+      return true;
+
+   const int sigShift = 1;
+   int lookback = MathMax(2, InpPullbackLookbackBars);
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   int needRates = lookback + sigShift + 2;
+   if(CopyRates(symbol, InpEntryTf, 0, needRates, rates) < needRates)
+   {
+      detail = "insufficient bars";
+      return false;
+   }
+
+   double smaFast = 0.0, smaSlow = 0.0, emaFast = 0.0, emaSlow = 0.0;
+   if(!MaRibbonAtShift(symbol, sigShift, smaFast, smaSlow, emaFast, emaSlow))
+   {
+      detail = "ma_ribbon_unavailable";
+      return false;
+   }
+
+   double maBandTop = smaFast;
+   double maBandBot = smaSlow;
+   if(InpUseSma && InpUseEma)
+   {
+      maBandTop = MathMax(emaFast, smaFast);
+      maBandBot = MathMin(emaSlow, smaSlow);
+   }
+   else if(InpUseEma)
+   {
+      maBandTop = MathMax(emaFast, emaSlow);
+      maBandBot = MathMin(emaFast, emaSlow);
+   }
+
+   double atr = 0.0;
+   if(!ReadAtrAtShift(symbol, sigShift, atr))
+   {
+      detail = "atr_unavailable";
+      return false;
+   }
+
+   double retraceBand = atr * InpPullbackRetraceAtrMult;
+   double extBand = atr * InpPullbackMaxExtAtrMult;
+   double closeSig = rates[sigShift].close;
+   double slowRef = InpUseSma ? smaSlow : emaSlow;
+
+   double rsiNow = -1.0;
+   double rsiPrev = -1.0;
+   if(!ReadRsiAtShift(symbol, sigShift, rsiNow) || !ReadRsiAtShift(symbol, sigShift + 1, rsiPrev))
+   {
+      detail = "rsi_unavailable";
+      return false;
+   }
+
+   double diPlus = 0.0;
+   double diMinus = 0.0;
+   if(!ReadDiAtShift(symbol, sigShift, diPlus, diMinus))
+   {
+      detail = "di_unavailable";
+      return false;
+   }
+
+   if(side > 0)
+   {
+      double lowestLow = rates[sigShift].low;
+      for(int b = sigShift; b < sigShift + lookback; b++)
+         lowestLow = MathMin(lowestLow, rates[b].low);
+
+      bool hadRetrace = (lowestLow <= maBandTop + retraceBand);
+      bool notChasing = (closeSig - slowRef <= extBand);
+      bool inZone = (closeSig >= slowRef && closeSig <= maBandTop + retraceBand);
+      bool rsiOk = (rsiPrev >= 35.0 && rsiPrev <= InpPullbackRsiBuyMax && rsiNow >= rsiPrev);
+      bool diOk = (diPlus > diMinus);
+
+      if(!hadRetrace)  { detail = "no_retrace_to_ma"; return false; }
+      if(!notChasing)  { detail = "extended_above_ma"; return false; }
+      if(!inZone)      { detail = "outside_ma_zone"; return false; }
+      if(!rsiOk)       { detail = "rsi_not_pullback_buy rsi=" + DoubleToString(rsiNow, 1); return false; }
+      if(!diOk)        { detail = "di_not_bullish"; return false; }
+      return true;
+   }
+
+   if(side < 0)
+   {
+      double highestHigh = rates[sigShift].high;
+      for(int b = sigShift; b < sigShift + lookback; b++)
+         highestHigh = MathMax(highestHigh, rates[b].high);
+
+      bool hadRetrace = (highestHigh >= maBandBot - retraceBand);
+      bool notChasing = (slowRef - closeSig <= extBand);
+      bool inZone = (closeSig <= slowRef && closeSig >= maBandBot - retraceBand);
+      bool rsiOk = (rsiPrev <= 65.0 && rsiPrev >= InpPullbackRsiSellMin && rsiNow <= rsiPrev);
+      bool diOk = (diMinus > diPlus);
+
+      if(!hadRetrace)  { detail = "no_retrace_to_ma"; return false; }
+      if(!notChasing)  { detail = "extended_below_ma"; return false; }
+      if(!inZone)      { detail = "outside_ma_zone"; return false; }
+      if(!rsiOk)       { detail = "rsi_not_pullback_sell rsi=" + DoubleToString(rsiNow, 1); return false; }
+      if(!diOk)        { detail = "di_not_bearish"; return false; }
+      return true;
+   }
+
+   detail = "invalid_side";
+   return false;
+}
+
+//+------------------------------------------------------------------+
 bool HasOurPosition(const string symbol)
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -1048,6 +1263,13 @@ void RunEntryScan()
       if(InpUseAdxFloor && !AdxOk(sym))
       {
          DebugSkip(sym, "adx_floor", "ADX < " + DoubleToString(InpAdxMinFloor, 1));
+         continue;
+      }
+
+      string pullbackDetail = "";
+      if(!PullbackOk(sym, side, pullbackDetail))
+      {
+         DebugSkip(sym, "pullback_filter", pullbackDetail);
          continue;
       }
 

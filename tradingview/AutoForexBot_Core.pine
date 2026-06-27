@@ -4,6 +4,7 @@
 indicator("AutoForexBot", shorttitle="AFB", overlay=true, max_labels_count=500)
 
 asset = input.string("Auto", "Asset", options=["Auto", "Forex", "Crypto", "Commodity", "Stock", "Index"])
+usePullbackFilter = input.bool(true, "Pullback filter", tooltip="Skip chasing extended moves — enter after retrace to MA zone")
 
 // ─── Per-asset entry thresholds (matches MT5 EAs) ─────────────────────────────
 isJpy = str.contains(syminfo.ticker, "JPY")
@@ -37,7 +38,9 @@ smaFast = ta.sma(close, 9)
 smaSlow = ta.sma(close, 21)
 emaFast = ta.ema(close, 9)
 emaSlow = ta.ema(close, 21)
-[_, _, adxVal] = ta.dmi(14, 14)
+[diPlus, diMinus, adxVal] = ta.dmi(14, 14)
+atr = ta.atr(14)
+rsi = ta.rsi(close, 14)
 
 smaSide = smaFast > smaSlow ? 1 : smaFast < smaSlow ? -1 : 0
 emaSide = emaFast > emaSlow ? 1 : emaFast < emaSlow ? -1 : 0
@@ -59,11 +62,28 @@ t2 = trendSide("240")
 t15 = close[1] > open[1] ? 1 : close[1] < open[1] ? -1 : 0
 trendOk(s) => t1 == s and t2 == s and t15 == s
 
+maBandTop = math.max(emaFast, smaFast)
+maBandBot = math.min(emaSlow, smaSlow)
+retraceBand = atr * 0.5
+extBand = atr * 1.2
+
+hadRetraceBuy  = ta.lowest(low, 5) <= maBandTop + retraceBand
+hadRetraceSell = ta.highest(high, 5) >= maBandBot - retraceBand
+notChasingBuy  = close - smaSlow <= extBand
+notChasingSell = smaSlow - close <= extBand
+inZoneBuy  = close >= smaSlow and close <= maBandTop + retraceBand
+inZoneSell = close <= smaSlow and close >= maBandBot - retraceBand
+rsiPullbackBuy  = rsi[1] >= 35 and rsi[1] <= 58 and rsi >= rsi[1]
+rsiPullbackSell = rsi[1] <= 65 and rsi[1] >= 42 and rsi <= rsi[1]
+pullbackBuyOk  = hadRetraceBuy and notChasingBuy and inZoneBuy and rsiPullbackBuy and diPlus > diMinus
+pullbackSellOk = hadRetraceSell and notChasingSell and inZoneSell and rsiPullbackSell and diMinus > diPlus
+pullbackOk(s) => not usePullbackFilter or (s > 0 ? pullbackBuyOk : pullbackSellOk)
+
 is15m = timeframe.period == "15"
 closed = barstate.isconfirmed
 
-buySignal  = closed and is15m and consensusOk and side == 1  and trendOk(1)  and adxOk and minMoveOk
-sellSignal = closed and is15m and consensusOk and side == -1 and trendOk(-1) and adxOk and minMoveOk
+buySignal  = closed and is15m and consensusOk and side == 1  and trendOk(1)  and adxOk and minMoveOk and pullbackOk(1)
+sellSignal = closed and is15m and consensusOk and side == -1 and trendOk(-1) and adxOk and minMoveOk and pullbackOk(-1)
 
 signalLine = (emaFast + smaFast) / 2.0
 plot(signalLine, "Signal line", color=color.yellow, linewidth=2)
