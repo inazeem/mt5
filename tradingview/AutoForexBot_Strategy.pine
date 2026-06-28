@@ -1,4 +1,5 @@
-// AutoForexBot Strategy — backtest with session filter + trailing (matches MT5 EAs). Use 15m chart.
+// AutoForexBot Strategy — full EA parity (session, pullback, spread, cooldown,
+// daily loss, bot score, floating guard). Use 15m chart.
 
 //@version=5
 strategy("AutoForexBot Strategy", shorttitle="AFB Strat", overlay=true,
@@ -13,26 +14,51 @@ strategy("AutoForexBot Strategy", shorttitle="AFB Strat", overlay=true,
      calc_on_every_tick=true,
      max_labels_count=500)
 
-// ─── Settings ─────────────────────────────────────────────────────────────────
+// ─── Asset ────────────────────────────────────────────────────────────────────
 asset = input.string("Auto", "Asset", options=["Auto", "Forex", "Crypto", "Commodity", "Stock", "Index"])
 
 grpRisk = "Risk (MT5 presets)"
-usePresetRisk   = input.bool(true, "Use preset TP/SL/trail/session", group=grpRisk)
+usePresetRisk   = input.bool(true, "Use preset TP/SL/trail/session/spread", group=grpRisk)
 tpPipsIn        = input.int(25,  "TP (pips/points)", group=grpRisk, minval=1)
 slPipsIn        = input.int(15,  "SL (pips/points)", group=grpRisk, minval=1)
 trailStartIn    = input.int(10,  "Trail start", group=grpRisk, minval=1)
 trailPipsIn     = input.int(8,   "Trail distance", group=grpRisk, minval=1)
 trailTpMultIn   = input.float(2.0, "Trail TP multiplier", group=grpRisk, minval=1.0, step=0.1)
-sessionStartIn  = input.int(6,   "Session start (UTC hour)", group=grpRisk, minval=0, maxval=23)
-sessionEndIn    = input.int(20,  "Session end (UTC hour)", group=grpRisk, minval=0, maxval=23)
+sessionStartIn  = input.int(6,   "Session start UTC", group=grpRisk, minval=0, maxval=23)
+sessionEndIn    = input.int(20,  "Session end UTC", group=grpRisk, minval=0, maxval=23)
+maxSpreadIn     = input.float(2.5, "Max spread (pips)", group=grpRisk, minval=0.1)
+cooldownIn      = input.int(30, "Cooldown (minutes)", group=grpRisk, minval=0)
+scoreRefIn      = input.float(10.0, "Score signal ref (pips)", group=grpRisk, minval=0.1)
 closeOnReverse  = input.bool(false, "Close on opposite signal", group=grpRisk)
 
 grpFilt = "Filters"
-useSessionFilter = input.bool(true, "Session filter (entries only)", group=grpFilt)
-useTrailing      = input.bool(true, "Trailing stop", group=grpFilt)
-useTrailTpMult   = input.bool(true, "Widen TP when trail starts", group=grpFilt)
+useSessionFilter  = input.bool(true, "Session filter", group=grpFilt)
+useTrailing       = input.bool(true, "Trailing stop", group=grpFilt)
+useTrailTpMult    = input.bool(true, "Widen TP when trail starts", group=grpFilt)
+useSpreadFilter   = input.bool(true, "Spread filter", group=grpFilt)
+simulatedSpread   = input.float(1.0, "Simulated spread (pips)", group=grpFilt, tooltip="TV has no historical spread — set typical broker spread for backtest")
+useCooldown       = input.bool(true, "Cooldown after entry", group=grpFilt)
+useDailyLossLimit = input.bool(true, "Daily loss limit", group=grpFilt)
+maxDailyLossPct   = input.float(2.0, "Max daily loss %", group=grpFilt, minval=0.1, step=0.1)
+useBotScore       = input.bool(true, "Bot score filter", group=grpFilt)
+minBotScore       = input.int(70, "Min bot score", group=grpFilt, minval=0, maxval=100)
+useAdxScore       = input.bool(true, "ADX in score", group=grpFilt)
+useRsiScore       = input.bool(true, "RSI in score", group=grpFilt)
 
-// ─── Asset detection ──────────────────────────────────────────────────────────
+grpFloat = "Floating loss guard"
+useFloatGuard     = input.bool(true, "Floating loss guard", group=grpFloat)
+floatClosePct     = input.float(1.8, "Close losers at %", group=grpFloat, minval=0.1, step=0.1)
+floatHardPct      = input.float(2.0, "Hard limit ref %", group=grpFloat, minval=0.1, step=0.1)
+closeAllIfBelow   = input.bool(true, "Close all if still below", group=grpFloat)
+
+grpPb = "Pullback filter"
+usePullbackFilter = input.bool(false, "Pullback filter", group=grpPb)
+retraceAtrMult    = input.float(0.5, "Retrace touch (ATR x)", group=grpPb, minval=0.1, step=0.1)
+maxExtAtrMult     = input.float(1.2, "Max extension (ATR x)", group=grpPb, minval=0.3, step=0.1)
+rsiBuyMax         = input.float(58.0, "RSI buy max", group=grpPb, minval=40, maxval=70)
+rsiSellMin        = input.float(42.0, "RSI sell min", group=grpPb, minval=30, maxval=60)
+
+// ─── Asset presets ────────────────────────────────────────────────────────────
 isJpy    = str.contains(syminfo.ticker, "JPY")
 isGold   = str.contains(syminfo.ticker, "XAU") or str.contains(syminfo.ticker, "GOLD")
 isSilver = str.contains(syminfo.ticker, "XAG") or str.contains(syminfo.ticker, "SILVER")
@@ -41,44 +67,54 @@ isIndex  = syminfo.type == "index" or str.contains(syminfo.ticker, "US30") or st
 
 detected = isIndex ? "Index" : syminfo.type == "crypto" ? "Crypto" : isGold or isSilver or isOil ? "Commodity" : syminfo.type == "forex" ? "Forex" : "Forex"
 kind = asset == "Auto" ? detected : asset
+isCrypto = kind == "Crypto"
 
 float adxFloor = 22.0
 float minMove  = 3.0
 float pipSize  = isJpy ? 0.01 : 0.0001
-int   tpPips   = 40
-int   slPips   = 20
-int   trailStartPips = 8
+int   tpPips   = 25
+int   slPips   = 15
+int   trailStartPips = 10
 int   trailPips = 8
 float trailTpMult = 2.0
 int   sessionStart = 6
 int   sessionEnd = 20
+float maxSpreadPips = 2.5
+int   cooldownMinutes = 30
+float scoreRefPips = 10.0
 
 if kind == "Crypto"
     adxFloor := 18.0
     minMove  := 25.0
     pipSize  := 1.0
-    tpPips   := 2000
-    slPips   := 1000
+    tpPips   := 200
+    slPips   := 100
     trailStartPips := 50
     trailPips := 50
     trailTpMult := 1.0
     sessionStart := 0
     sessionEnd := 23
+    maxSpreadPips := 50.0
+    cooldownMinutes := 28
+    scoreRefPips := 120.0
 else if kind == "Commodity"
     adxFloor := 22.0
     minMove  := 12.0
     pipSize  := 0.01
-    tpPips   := 100
-    slPips   := 50
-    trailStartPips := 20
+    tpPips   := 80
+    slPips   := 40
+    trailStartPips := 30
     trailPips := 15
     trailTpMult := 2.5
     sessionStart := 6
     sessionEnd := 20
+    maxSpreadPips := 15.0
+    cooldownMinutes := 30
+    scoreRefPips := 50.0
 else if kind == "Stock" or kind == "Index"
     adxFloor := 22.0
     minMove  := 25.0
-    pipSize  := 0.1
+    pipSize  := 1.0
     tpPips   := 160
     slPips   := 80
     trailStartPips := 50
@@ -86,6 +122,9 @@ else if kind == "Stock" or kind == "Index"
     trailTpMult := 3.0
     sessionStart := 14
     sessionEnd := 21
+    maxSpreadPips := 40.0
+    cooldownMinutes := 30
+    scoreRefPips := 30.0
 
 if not usePresetRisk
     tpPips := tpPipsIn
@@ -95,25 +134,62 @@ if not usePresetRisk
     trailTpMult := trailTpMultIn
     sessionStart := sessionStartIn
     sessionEnd := sessionEndIn
+    maxSpreadPips := maxSpreadIn
+    cooldownMinutes := cooldownIn
+    scoreRefPips := scoreRefIn
 
 tpDist = tpPips * pipSize
 slDist = slPips * pipSize
 trailStartDist = trailStartPips * pipSize
 trailDist = trailPips * pipSize
 
-// ─── Session (UTC) — matches InSessionUtc() in EA ─────────────────────────────
+// ─── Session ──────────────────────────────────────────────────────────────────
 inSessionUtc(startH, endH) =>
     int h = hour(time, "UTC")
     startH <= endH ? (h >= startH and h <= endH) : (h >= startH or h <= endH)
 
 sessionOk = not useSessionFilter or inSessionUtc(sessionStart, sessionEnd)
 
-// ─── Entry logic ──────────────────────────────────────────────────────────────
+// ─── Spread filter (EA: SpreadOk) ─────────────────────────────────────────────
+spreadOk = not useSpreadFilter or simulatedSpread <= maxSpreadPips
+
+// ─── Daily loss limit (EA: DailyLossLimitHit) ─────────────────────────────────
+var float dayStartEquity = na
+var int   dayStartKey = na
+
+dayKey = year(time, "UTC") * 10000 + month(time, "UTC") * 100 + dayofmonth(time, "UTC")
+if dayKey != dayStartKey
+    dayStartKey := dayKey
+    dayStartEquity := strategy.equity
+
+dailyDdPct = not na(dayStartEquity) and dayStartEquity > 0 ? math.max(0.0, (dayStartEquity - strategy.equity) / dayStartEquity * 100.0) : 0.0
+dailyLossHit = useDailyLossLimit and maxDailyLossPct > 0 and dailyDdPct >= maxDailyLossPct
+
+// ─── Cooldown (EA: InCooldown) ────────────────────────────────────────────────
+var int lastEntryTime = na
+msPerMin = 60 * 1000
+cooldownOk = not useCooldown or cooldownMinutes <= 0 or na(lastEntryTime) or (time_close - lastEntryTime >= cooldownMinutes * msPerMin)
+
+// ─── Floating loss guard (EA: ApplyFloatingLossGuard) ───────────────────────────
+balanceRef = strategy.equity - strategy.openprofit
+floatingPct = balanceRef > 0 ? strategy.openprofit / balanceRef * 100.0 : 0.0
+floatingBlocksEntry = useFloatGuard and floatingPct <= -floatClosePct
+
+if useFloatGuard and floatingPct <= -floatClosePct
+    if strategy.position_size != 0 and strategy.openprofit < 0
+        strategy.close_all(comment="FloatGuard")
+    if closeAllIfBelow and floatingPct <= -floatHardPct and strategy.position_size != 0
+        strategy.close_all(comment="FloatHard")
+
+// ─── Indicators ───────────────────────────────────────────────────────────────
 smaFast = ta.sma(close, 9)
 smaSlow = ta.sma(close, 21)
 emaFast = ta.ema(close, 9)
 emaSlow = ta.ema(close, 21)
-[_, _, adxVal] = ta.dmi(14, 14)
+[diPlus, diMinus, adxVal] = ta.dmi(14, 14)
+atr = ta.atr(14)
+rsi = ta.rsi(close, 14)
+rsiH1 = request.security(syminfo.tickerid, "60", ta.rsi(close, 14)[1], lookahead=barmerge.lookahead_off)
 
 smaSide = smaFast > smaSlow ? 1 : smaFast < smaSlow ? -1 : 0
 emaSide = emaFast > emaSlow ? 1 : emaFast < emaSlow ? -1 : 0
@@ -135,11 +211,95 @@ t2 = trendSide("240")
 t15 = close[1] > open[1] ? 1 : close[1] < open[1] ? -1 : 0
 trendOk(s) => t1 == s and t2 == s and t15 == s
 
+// ─── Pullback filter ──────────────────────────────────────────────────────────
+maBandTop = math.max(emaFast, smaFast)
+maBandBot = math.min(emaSlow, smaSlow)
+retraceBand = atr * retraceAtrMult
+extBand = atr * maxExtAtrMult
+
+hadRetraceBuy  = ta.lowest(low, 5) <= maBandTop + retraceBand
+hadRetraceSell = ta.highest(high, 5) >= maBandBot - retraceBand
+notChasingBuy  = close - smaSlow <= extBand
+notChasingSell = smaSlow - close <= extBand
+inZoneBuy  = close >= smaSlow and close <= maBandTop + retraceBand
+inZoneSell = close <= smaSlow and close >= maBandBot - retraceBand
+rsiPullbackBuy  = rsi[1] >= 35 and rsi[1] <= rsiBuyMax and rsi >= rsi[1]
+rsiPullbackSell = rsi[1] <= 65 and rsi[1] >= rsiSellMin and rsi <= rsi[1]
+pullbackBuyOk  = hadRetraceBuy and notChasingBuy and inZoneBuy and rsiPullbackBuy and diPlus > diMinus
+pullbackSellOk = hadRetraceSell and notChasingSell and inZoneSell and rsiPullbackSell and diMinus > diPlus
+pullbackOk(s) => not usePullbackFilter or (s > 0 ? pullbackBuyOk : pullbackSellOk)
+
+// ─── Bot score (EA: CalculateBotScore) ──────────────────────────────────────
+adxStrongThresh() =>
+    isCrypto ? 40.0 : kind == "Stock" or kind == "Index" ? 32.0 : kind == "Commodity" ? 32.0 : 35.0
+
+adxStrengthScore(adx) =>
+    float weak = adxFloor
+    float strong = adxStrongThresh()
+    strong <= weak ? 0.0 : math.min(100.0, math.max(0.0, (adx - weak) / (strong - weak) * 100.0))
+
+rsiBuyHtfScore(r) =>
+    r < 40.0 ? math.max(0.0, r / 40.0 * 40.0) : r < 50.0 ? 40.0 + (r - 40.0) / 10.0 * 30.0 : r <= 68.0 ? 70.0 + (r - 50.0) / 18.0 * 30.0 : 65.0
+
+rsiSellHtfScore(r) =>
+    r > 60.0 ? math.max(0.0, (100.0 - r) / 40.0 * 40.0) : r > 50.0 ? 40.0 + (60.0 - r) / 10.0 * 30.0 : r >= 32.0 ? 70.0 + (50.0 - r) / 18.0 * 30.0 : 65.0
+
+rsiBuyEntryScore(r, ob, os) =>
+    r >= ob ? 25.0 : r <= os ? 55.0 : r >= 50.0 ? 70.0 + math.min(30.0, (r - 50.0) / math.max(1.0, ob - 50.0) * 30.0) : 55.0 + (r - os) / math.max(1.0, 50.0 - os) * 15.0
+
+rsiSellEntryScore(r, ob, os) =>
+    r <= os ? 25.0 : r >= ob ? 55.0 : r <= 50.0 ? 70.0 + math.min(30.0, (50.0 - r) / math.max(1.0, 50.0 - os) * 30.0) : 55.0 + (ob - r) / math.max(1.0, ob - 50.0) * 15.0
+
+rsiTrendScore(s, rHtf, rEntry) =>
+    float ob = isCrypto ? 78.0 : 72.0
+    float os = isCrypto ? 22.0 : 28.0
+    float total = 0.0
+    int cnt = 0
+    if not na(rHtf)
+        total += s > 0 ? rsiBuyHtfScore(rHtf) : rsiSellHtfScore(rHtf)
+        cnt += 1
+    if not na(rEntry)
+        total += s > 0 ? rsiBuyEntryScore(rEntry, ob, os) : rsiSellEntryScore(rEntry, ob, os)
+        cnt += 1
+    cnt == 0 ? 50.0 : total / cnt
+
+calcBotScore(s, signalStrength) =>
+    float sigScore = math.min(100.0, math.abs(signalStrength) / math.max(0.1, scoreRefPips) * 100.0)
+    float sprScore = math.max(0.0, math.min(100.0, (1.0 - simulatedSpread / math.max(0.1, maxSpreadPips)) * 100.0))
+    if slPips > 0 and simulatedSpread > slPips * 0.25
+        sprScore *= 0.5
+    float adxSc = adxStrengthScore(adxVal[1])
+    float rsiSc = rsiTrendScore(s, rsiH1, rsi[1])
+    bool hasAdx = useAdxScore
+    bool hasRsi = useRsiScore
+    float wSig = hasAdx and hasRsi ? 0.45 : hasAdx or hasRsi ? 0.55 : 0.70
+    float wSpr = hasAdx and hasRsi ? 0.25 : 0.25
+    float wAdx = hasAdx and hasRsi ? 0.15 : hasAdx ? 0.20 : 0.0
+    float wRsi = hasAdx and hasRsi ? 0.15 : hasRsi ? 0.20 : 0.0
+    float total = sigScore * wSig + sprScore * wSpr
+    if hasAdx
+        total += adxSc * wAdx
+    if hasRsi
+        total += rsiSc * wRsi
+    int score = int(math.round(math.max(0.0, math.min(100.0, total))))
+  // hard reject if adx below floor in score path
+    bool reject = useAdxScore and adxVal[1] < adxFloor
+    [score, reject]
+
+// ─── Core signal ──────────────────────────────────────────────────────────────
 is15m = timeframe.period == "15"
 closed = barstate.isconfirmed
 
-buySignal  = closed and is15m and sessionOk and consensusOk and side == 1  and trendOk(1)  and adxOk and minMoveOk
-sellSignal = closed and is15m and sessionOk and consensusOk and side == -1 and trendOk(-1) and adxOk and minMoveOk
+[botScore, botReject] = calcBotScore(side, strength)
+scoreOk = not useBotScore or (not botReject and botScore >= minBotScore)
+
+riskOk = sessionOk and spreadOk and cooldownOk and not dailyLossHit and not floatingBlocksEntry
+
+rawBuy  = closed and is15m and riskOk and consensusOk and side == 1  and trendOk(1)  and adxOk and minMoveOk and pullbackOk(1)
+rawSell = closed and is15m and riskOk and consensusOk and side == -1 and trendOk(-1) and adxOk and minMoveOk and pullbackOk(-1)
+
+buySignal  = rawBuy  and scoreOk
+sellSignal = rawSell and scoreOk
 
 flat = strategy.position_size == 0
 inLong = strategy.position_size > 0
@@ -147,7 +307,7 @@ inShort = strategy.position_size < 0
 newLong = inLong and not inLong[1]
 newShort = inShort and not inShort[1]
 
-// ─── Trailing + TP/SL state (matches ApplyTrailingStops) ─────────────────────
+// ─── Trailing state ───────────────────────────────────────────────────────────
 var float longStop = na
 var float longLimit = na
 var bool  longTpWidened = false
@@ -183,10 +343,12 @@ canShort = sellSignal and (flat or (closeOnReverse and not inShort))
 
 if canLong
     strategy.entry("Long", strategy.long, comment="BUY")
+    lastEntryTime := time_close
 if canShort
     strategy.entry("Short", strategy.short, comment="SELL")
+    lastEntryTime := time_close
 
-// ─── Exits: initial SL/TP then trail (EA runs every tick; we update each calc) ─
+// ─── Exits ────────────────────────────────────────────────────────────────────
 if inLong
     float avg = strategy.position_avg_price
     float profitDist = close - avg
@@ -224,4 +386,22 @@ plot(inLong ? longStop : inShort ? shortStop : na, "Active SL", color=color.new(
 plot(inLong ? longLimit : inShort ? shortLimit : na, "Active TP", color=color.new(color.lime, 30), style=plot.style_linebr, linewidth=1)
 plotshape(canLong and flat,  title="Buy",  style=shape.labelup,   location=location.belowbar, color=color.lime, text="BUY",  textcolor=color.black, size=size.small)
 plotshape(canShort and flat, title="Sell", style=shape.labeldown, location=location.abovebar, color=color.red,  text="SELL", textcolor=color.white, size=size.small)
-bgcolor(not sessionOk and useSessionFilter ? color.new(color.gray, 90) : na, title="Outside session")
+
+blocked = dailyLossHit or floatingBlocksEntry or not cooldownOk or not spreadOk
+bgcolor(dailyLossHit ? color.new(color.red, 88) : floatingBlocksEntry ? color.new(color.maroon, 88) : blocked ? color.new(color.orange, 90) : not sessionOk and useSessionFilter ? color.new(color.gray, 92) : na)
+
+var table hud = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 75), border_width=1)
+if barstate.islast
+    table.cell(hud, 0, 0, "Score", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 0, useBotScore ? str.tostring(botScore) : "off", text_color=scoreOk ? color.lime : color.red, text_size=size.small)
+    table.cell(hud, 0, 1, "Daily DD", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 1, str.tostring(dailyDdPct, "#.##") + "%", text_color=dailyLossHit ? color.red : color.white, text_size=size.small)
+    table.cell(hud, 0, 2, "Float", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 2, str.tostring(floatingPct, "#.##") + "%", text_color=floatingBlocksEntry ? color.red : color.white, text_size=size.small)
+    table.cell(hud, 0, 3, "Spread", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 3, spreadOk ? "OK" : "HIGH", text_color=spreadOk ? color.lime : color.red, text_size=size.small)
+    table.cell(hud, 0, 4, "Cooldown", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 4, cooldownOk ? "OK" : "WAIT", text_color=cooldownOk ? color.lime : color.orange, text_size=size.small)
+
+alertcondition(canLong and flat,  "AFB Buy",  "AutoForexBot BUY {{ticker}}")
+alertcondition(canShort and flat, "AFB Sell", "AutoForexBot SELL {{ticker}}")

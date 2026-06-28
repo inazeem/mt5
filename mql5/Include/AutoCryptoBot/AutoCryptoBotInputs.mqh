@@ -19,7 +19,7 @@ input group "Trade sizing"
 input double InpLot               = 0.001;
 input ulong  InpMagic             = 20250623;
 
-input group "Percent sizing (off — use profile pips above)"
+input group "Percent sizing (off - use profile pips above)"
 input bool   InpUsePercentSizing  = false;
 input double InpTpPercent         = 0.0;
 input double InpSlPercent         = 0.0;
@@ -29,6 +29,7 @@ input double InpMinMovePercent    = 0.0;
 input double InpMaxSpreadPercent  = 0.0;
 
 input group "Trailing stop"
+input bool   InpUseTrailing       = true;
 input int    InpTrailStartPips    = 50;
 input int    InpTrailPips         = 50;
 input double InpTrailTpMultiplier = 1.0;
@@ -74,15 +75,14 @@ input double InpAdxMinFloor       = 18.0;
 input int    InpAdxPeriod         = 14;
 
 input group "Pullback filter"
-input bool   InpUsePullbackFilter    = true;
+input bool   InpUsePullbackFilter    = false;
 input double InpPullbackRetraceAtrMult = 0.5;
 input double InpPullbackMaxExtAtrMult  = 1.2;
 input double InpPullbackRsiBuyMax      = 58.0;
 input double InpPullbackRsiSellMin     = 42.0;
 input int    InpPullbackLookbackBars   = 5;
 
-input group "Debug & bot score"
-input bool   InpDebugMode         = false;
+input group "Bot score"
 input bool   InpUseBotScore       = true;
 input int    InpMinBotScore       = 70;
 input double InpScoreSignalRefPips = 120.0;
@@ -90,6 +90,9 @@ input string InpScoreCategory     = "crypto";
 input bool   InpUseAdxScore       = true;
 input bool   InpUseRsiScore       = true;
 input int    InpRsiPeriod         = 14;
+
+input group "Debug"
+input bool   InpDebugMode         = false;
 
 input group "Scanner"
 input bool   InpTradeChartSymbol  = true;

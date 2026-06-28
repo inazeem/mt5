@@ -4,7 +4,7 @@
 indicator("AutoForexBot", shorttitle="AFB", overlay=true, max_labels_count=500)
 
 asset = input.string("Auto", "Asset", options=["Auto", "Forex", "Crypto", "Commodity", "Stock", "Index"])
-usePullbackFilter = input.bool(true, "Pullback filter", tooltip="Skip chasing extended moves — enter after retrace to MA zone")
+usePullbackFilter = input.bool(false, "Pullback filter", tooltip="Skip chasing extended moves — enter after retrace to MA zone")
 
 // ─── Per-asset entry thresholds (matches MT5 EAs) ─────────────────────────────
 isJpy = str.contains(syminfo.ticker, "JPY")

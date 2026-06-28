@@ -17,7 +17,12 @@ datetime g_floatingGuardLastLog = 0;
 string   g_entryBarSymbols[];
 datetime g_entryBarTimes[];
 
-int OnInit()
+int AfbOnInit();
+void AfbOnDeinit(const int reason);
+void AfbOnTick();
+
+//+------------------------------------------------------------------+
+int AfbOnInit()
 {
    g_trade.SetExpertMagicNumber(InpMagic);
    g_trade.SetDeviationInPoints(20);
@@ -32,16 +37,17 @@ int OnInit()
             " category=", InpScoreCategory,
             " adxScore=", (InpUseAdxScore ? "yes" : "no"),
             " rsiScore=", (InpUseRsiScore ? "yes" : "no"),
-            " pullback=", (InpUsePullbackFilter ? "yes" : "no"));
+            " pullback=", (InpUsePullbackFilter ? "yes" : "no"),
+            " trail=", (InpUseTrailing ? "yes" : "no"));
    }
    return INIT_SUCCEEDED;
 }
 
-void OnDeinit(const int reason)
+void AfbOnDeinit(const int reason)
 {
 }
 
-void OnTick()
+void AfbOnTick()
 {
    ApplyTrailingStops();
    ApplyFloatingLossGuard();
@@ -142,7 +148,8 @@ double PipSize(const string symbol)
    if(InpPipSizeOverride > 0.0)
       return InpPipSizeOverride;
    return 1.0;
-#elif defined(AFB_PIP_IS_PRICE_POINT)
+#else
+#ifdef AFB_PIP_IS_PRICE_POINT
    if(InpPipSizeOverride > 0.0)
       return InpPipSizeOverride;
    return 1.0;
@@ -155,6 +162,7 @@ double PipSize(const string symbol)
    if(digits == 3 || digits == 5)
       return point * 10.0;
    return point;
+#endif
 #endif
 }
 
@@ -1061,6 +1069,9 @@ void OpenTrade(const string symbol, int side)
 //+------------------------------------------------------------------+
 void ApplyTrailingStops()
 {
+   if(!InpUseTrailing)
+      return;
+
    double tpMult = EffectiveTrailTpMultiplier();
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)

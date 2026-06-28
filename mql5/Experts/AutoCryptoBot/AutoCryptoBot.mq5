@@ -1,14 +1,29 @@
 //+------------------------------------------------------------------+
 //| AutoCryptoBot.mq5                                                |
-//| BTC / crypto EA — ticker pip model (matches Laravel tickers DB). |
-//| TP/SL = pips x pip_size (BTCUSD: TP 1000, SL 500, spread 100).   |
+//| BTC / crypto EA — ticker pip model (matches Laravel crypto profile). |
 //+------------------------------------------------------------------+
 #property copyright "mt5 project"
-#property version   "2.01"
-#property description "BTC/crypto — matches Laravel crypto bot profile (pips x pip_size)"
+#property version   "2.02"
+#property description "BTC/crypto — pips x pip_size (default pip 1.0 = $1 on BTC)"
 
 #define AFB_CRYPTO_BOT
 
 #include <AutoCryptoBot/AutoCryptoBotInputs.mqh>
 #include <AutoForexBot/AutoForexBotScore.mqh>
 #include <AutoForexBot/AutoForexBotCore.mqh>
+
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   return AfbOnInit();
+}
+
+void OnDeinit(const int reason)
+{
+   AfbOnDeinit(reason);
+}
+
+void OnTick()
+{
+   AfbOnTick();
+}

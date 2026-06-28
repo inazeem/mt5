@@ -25,6 +25,10 @@
    #define AFB_DEF_SESSION_END     23
    #define AFB_DEF_SCORE_REF       120.0
    #define AFB_DEF_SCORE_CATEGORY  "crypto"
+   #define AFB_DEF_MIN_BOT_SCORE   70
+   #define AFB_DEF_USE_BOT_SCORE   1
+   #define AFB_DEF_USE_ADX_SCORE   1
+   #define AFB_DEF_USE_RSI_SCORE   1
    #define AFB_DEF_SYMBOL_LIST     "BTCUSD,ETHUSD"
 #else
 #ifdef AFB_PRESET_COMMODITY
@@ -48,6 +52,10 @@
    #define AFB_DEF_SESSION_END     20
    #define AFB_DEF_SCORE_REF       50.0
    #define AFB_DEF_SCORE_CATEGORY  "commodity"
+   #define AFB_DEF_MIN_BOT_SCORE   70
+   #define AFB_DEF_USE_BOT_SCORE   1
+   #define AFB_DEF_USE_ADX_SCORE   1
+   #define AFB_DEF_USE_RSI_SCORE   1
    #define AFB_DEF_SYMBOL_LIST     "XAUUSD,XAGUSD,WTI,BRENT"
 #else
 #ifdef AFB_PRESET_STOCK
@@ -71,6 +79,10 @@
    #define AFB_DEF_SESSION_END     21
    #define AFB_DEF_SCORE_REF       30.0
    #define AFB_DEF_SCORE_CATEGORY  "stock"
+   #define AFB_DEF_MIN_BOT_SCORE   70
+   #define AFB_DEF_USE_BOT_SCORE   1
+   #define AFB_DEF_USE_ADX_SCORE   1
+   #define AFB_DEF_USE_RSI_SCORE   1
    #define AFB_DEF_SYMBOL_LIST     "US30,US500,NAS100,SPX500"
 #else
    #define AFB_DEF_LABEL           "AutoForexBot"
@@ -93,6 +105,10 @@
    #define AFB_DEF_SESSION_END     20
    #define AFB_DEF_SCORE_REF       10.0
    #define AFB_DEF_SCORE_CATEGORY  "forex"
+   #define AFB_DEF_MIN_BOT_SCORE   70
+   #define AFB_DEF_USE_BOT_SCORE   1
+   #define AFB_DEF_USE_ADX_SCORE   1
+   #define AFB_DEF_USE_RSI_SCORE   1
    #define AFB_DEF_SYMBOL_LIST     "EURUSD,GBPUSD,USDJPY,AUDUSD"
 #endif
 #endif
@@ -117,6 +133,7 @@ input double InpMinMovePercent    = AFB_DEF_MIN_MOVE_PCT;
 input double InpMaxSpreadPercent  = AFB_DEF_MAX_SPREAD_PCT;
 
 input group "Trailing stop"
+input bool   InpUseTrailing       = true;
 input int    InpTrailStartPips    = AFB_DEF_TRAIL_START;
 input int    InpTrailPips         = AFB_DEF_TRAIL_PIPS;
 input double InpTrailTpMultiplier = AFB_DEF_TRAIL_TP_MULT;
@@ -164,22 +181,24 @@ input double InpAdxMinFloor       = 22.0;
 input int    InpAdxPeriod         = 14;
 
 input group "Pullback filter"
-input bool   InpUsePullbackFilter    = true;
+input bool   InpUsePullbackFilter    = false;
 input double InpPullbackRetraceAtrMult = 0.5;
 input double InpPullbackMaxExtAtrMult  = 1.2;
 input double InpPullbackRsiBuyMax      = 58.0;
 input double InpPullbackRsiSellMin     = 42.0;
 input int    InpPullbackLookbackBars   = 5;
 
-input group "Debug & bot score"
-input bool   InpDebugMode         = false;
-input bool   InpUseBotScore       = true;
-input int    InpMinBotScore       = 70;
+input group "Bot score"
+input bool   InpUseBotScore       = (bool)AFB_DEF_USE_BOT_SCORE;
+input int    InpMinBotScore       = AFB_DEF_MIN_BOT_SCORE;
 input double InpScoreSignalRefPips = AFB_DEF_SCORE_REF;
 input string InpScoreCategory     = AFB_DEF_SCORE_CATEGORY;
-input bool   InpUseAdxScore       = true;
-input bool   InpUseRsiScore       = true;
+input bool   InpUseAdxScore       = (bool)AFB_DEF_USE_ADX_SCORE;
+input bool   InpUseRsiScore       = (bool)AFB_DEF_USE_RSI_SCORE;
 input int    InpRsiPeriod         = 14;
+
+input group "Debug"
+input bool   InpDebugMode         = false;
 
 input group "Scanner"
 input bool   InpTradeChartSymbol  = true;

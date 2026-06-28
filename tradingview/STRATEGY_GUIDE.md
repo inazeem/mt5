@@ -115,7 +115,9 @@ Fast and slow MAs must be separated by at least:
 
 ---
 
-### Step E — Pullback filter (don’t chase tops/bottoms)
+### Step E — Pullback filter (optional — **OFF by default**)
+
+Turn **ON** in Inputs when you want to skip chasing tops/bottoms. When **OFF**, entries use MA + trend + ADX only (more trades).
 
 This blocks “late” entries before reversals.
 
@@ -368,11 +370,11 @@ Change **one thing at a time** in Strategy → **Inputs**, re-run Strategy Teste
 
 Use these as starting points in TradingView Inputs. Always backtest **6+ months** before trusting results.
 
-#### Strict (default — fewest trades, highest quality)
+#### Strict (fewest trades, highest quality — turn pullback ON manually)
 
 | Setting | Value |
 |---------|-------|
-| Pullback filter | ON |
+| Pullback filter | **ON** (not default — enable in Inputs) |
 | Min bot score | 70 |
 | Cooldown | 28 min (crypto) / 30 (others) |
 | Trailing | OFF for wide TP/SL tests |
@@ -381,16 +383,16 @@ Use these as starting points in TradingView Inputs. Always backtest **6+ months*
 
 | Setting | Value |
 |---------|-------|
-| Pullback filter | ON |
+| Pullback filter | **ON** |
 | Min bot score | 60 |
 | Cooldown | 15 min |
 | Trailing | Match TP scale or OFF |
 
-#### More signals (most activity — test carefully)
+#### More signals (most activity — default-like)
 
 | Setting | Value |
 |---------|-------|
-| Pullback filter | **OFF** |
+| Pullback filter | **OFF** (default) |
 | Min bot score | 60 or OFF |
 | Cooldown | 15 min or 0 |
 | Trailing | OFF until exits are profitable |
@@ -462,3 +464,133 @@ A single **Trading mode** dropdown (`Strict` / `Balanced` / `More signals`) in P
 | More signals | ~15–30+ | Lower | Learning the chart, more samples |
 
 **Bottom line:** Few trades means filters are working. To get more activity, relax **pullback** and **bot score** first, then re-backtest and watch **profit factor** — not just trade count.
+
+---
+
+## 13. Bot score — configure per bot
+
+**Yes** — each EA has its own bot score settings in MT5 **Inputs → Bot score** (no code change needed unless you want new defaults).
+
+### What bot score does
+
+Before opening a trade, the EA calculates a **quality score 0–100** from:
+
+| Part | Weight (typical) | Meaning |
+|------|------------------|---------|
+| **Signal strength** | 45–70% | How far apart the MAs are vs reference |
+| **Spread quality** | 25–30% | Tighter spread = higher score |
+| **ADX strength** | 15–20% | Stronger trend = higher score |
+| **RSI alignment** | 15–20% | RSI matches trade direction |
+
+Trade only opens if **score ≥ Min bot score** (default **70**).
+
+Turn **Use bot score = OFF** to skip scoring entirely (more trades, lower filter).
+
+---
+
+### Default settings per bot (MT5)
+
+| Bot | Score category | Signal ref (pips/points) | Min score |
+|-----|----------------|--------------------------|-----------|
+| **AutoForexBot** | `forex` | 10 | 70 |
+| **AutoCryptoBot** | `crypto` | 120 | 70 |
+| **AutoCommodityBot** | `commodity` | 50 | 70 |
+| **AutoStockBot** | `stock` | 30 | 70 |
+
+**Signal ref** = how much MA separation counts as a “strong” signal for that asset (BTC needs more points than EURUSD).
+
+**Score category** = changes ADX/RSI thresholds inside the scorer (do not change unless you know why).
+
+---
+
+### How to change in MT5
+
+1. Attach EA → **Inputs**
+2. Open **Bot score** group:
+
+| Input | What to change |
+|-------|----------------|
+| **Use bot score** | ON/OFF master switch |
+| **Min bot score** | `70` strict → `60` more trades |
+| **Score signal ref pips** | Per asset scale (see table) |
+| **Score category** | Leave as preset (`forex`, `crypto`, etc.) |
+| **Use ADX score** | Include ADX in score |
+| **Use RSI score** | Include RSI in score |
+
+3. **Debug = ON** → Experts tab shows: `SCORE=75% sig=... spr=... adx=... rsi=...` or `SKIP: low_score`
+
+---
+
+### TradingView strategy (same idea)
+
+**Inputs → Filters:**
+
+- **Bot score filter** ON/OFF  
+- **Min bot score** (default 70)  
+- **Use ADX / RSI in score**  
+- **Score signal ref** comes from asset preset (Forex 10, Crypto 120, etc.)
+
+HUD top-right shows **Score** green/red.
+
+---
+
+### Common tweaks
+
+| Goal | Change |
+|------|--------|
+| **More trades** | Min score `60`, or Use bot score OFF |
+| **Stricter entries** | Min score `75` or `80` |
+| **BTC big moves** | Signal ref `120` → `200` (matches wide TP) |
+| **Forex tight pairs** | Signal ref stays `10` |
+
+---
+
+### Edit defaults in code (optional)
+
+**Forex / commodity / stock** — `AutoForexBotInputs.mqh` preset `#define`s:
+
+- `AFB_DEF_MIN_BOT_SCORE`
+- `AFB_DEF_SCORE_REF`
+- `AFB_DEF_SCORE_CATEGORY`
+- `AFB_DEF_USE_BOT_SCORE` / `AFB_DEF_USE_ADX_SCORE` / `AFB_DEF_USE_RSI_SCORE`
+
+**Crypto only** — `AutoCryptoBotInputs.mqh` → **Bot score** group.
+
+Recompile EA after editing defaults.
+
+---
+
+## 14. Pullback filter — configure per bot (default OFF)
+
+**Yes** — all EAs have a pullback filter. **Default is OFF** so you get more signals unless you turn it on.
+
+### MT5 — Inputs → **Pullback filter**
+
+| Input | Default | Meaning |
+|-------|---------|---------|
+| **Use pullback filter** | **false (OFF)** | Master switch |
+| **Retrace ATR mult** | 0.5 | How close price must dip to MAs |
+| **Max extension ATR mult** | 1.2 | Block if price too far from slow MA |
+| **RSI buy max** | 58 | No buys when RSI too hot |
+| **RSI sell min** | 42 | No sells when RSI too cold |
+| **Lookback bars** | 5 | Bars to check for retrace |
+
+When **ON**, blocks entries at extended tops/bottoms (orange background on TradingView).
+
+When **OFF**, skipped in Experts log — no `SKIP: pullback_filter`.
+
+**Debug ON** → `SKIP: pullback_filter | extended_above_ma` etc. when filter is ON and blocks.
+
+### TradingView
+
+**Inputs → Pullback filter** — same settings, default **OFF**.
+
+### When to turn ON
+
+- Live trading after bad entries at tops (like AMZN/BTC spikes)
+- **Strict** mode in section 12
+
+### When to leave OFF (default)
+
+- More trades for backtesting
+- Matching older bot behavior before pullback was added
