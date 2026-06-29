@@ -1,15 +1,12 @@
 #ifndef AUTO_FOREX_BOT_INPUTS_MQH
 #define AUTO_FOREX_BOT_INPUTS_MQH
 
-#include <AutoForexBot/AutoForexBotAssetTypes.mqh>
-
 // Define ONE preset in each .mq5 before including this file:
 // AFB_PRESET_FOREX | AFB_PRESET_CRYPTO | AFB_PRESET_COMMODITY | AFB_PRESET_STOCK
 
 #ifdef AFB_PRESET_CRYPTO
    #define AFB_DEF_LABEL           "AutoCryptoBot"
    #define AFB_DEF_MAGIC           20250623
-   #define AFB_DEF_CHART_ASSET     AFB_ASSET_CRYPTO
    #define AFB_DEF_TP_PIPS         150
    #define AFB_DEF_SL_PIPS         100
    #define AFB_DEF_USE_PERCENT     1
@@ -37,7 +34,6 @@
 #ifdef AFB_PRESET_COMMODITY
    #define AFB_DEF_LABEL           "AutoCommodityBot"
    #define AFB_DEF_MAGIC           20250624
-   #define AFB_DEF_CHART_ASSET     AFB_ASSET_COMMODITY
    #define AFB_DEF_TP_PIPS         80
    #define AFB_DEF_SL_PIPS         40
    #define AFB_DEF_USE_PERCENT     0
@@ -65,7 +61,6 @@
 #ifdef AFB_PRESET_STOCK
    #define AFB_DEF_LABEL           "AutoStockBot"
    #define AFB_DEF_MAGIC           20250625
-   #define AFB_DEF_CHART_ASSET     AFB_ASSET_STOCK
    #define AFB_DEF_TP_PIPS         160
    #define AFB_DEF_SL_PIPS         80
    #define AFB_DEF_USE_PERCENT     0
@@ -92,7 +87,6 @@
 #else
    #define AFB_DEF_LABEL           "AutoForexBot"
    #define AFB_DEF_MAGIC           20250622
-   #define AFB_DEF_CHART_ASSET     AFB_ASSET_FOREX
    #define AFB_DEF_TP_PIPS         25
    #define AFB_DEF_SL_PIPS         15
    #define AFB_DEF_USE_PERCENT     0
@@ -209,12 +203,5 @@ input bool   InpDebugMode         = false;
 input group "Scanner"
 input bool   InpTradeChartSymbol  = true;
 input string InpSymbolList        = AFB_DEF_SYMBOL_LIST;
-
-input group "Asset preset"
-input ENUM_AFB_ASSET InpChartAssetCategory   = AFB_DEF_CHART_ASSET;
-input bool           InpUsePerSymbolCategory = true;
-input bool           InpUseCategoryRiskDefaults = true;
-
-#include <AutoForexBot/AutoForexBotAsset.mqh>
 
 #endif // AUTO_FOREX_BOT_INPUTS_MQH
