@@ -4,13 +4,16 @@
 // Bot score + debug helpers (port of App\Services\BotScoreCalculator).
 // Included directly from each .mq5 after AutoForexBotInputs.mqh.
 
-// Forward declarations (implemented in AutoForexBotCore.mqh).
+// Forward declarations (implemented in AutoForexBotCore.mqh / AutoForexBotAsset.mqh).
 double PipSize(const string symbol);
 double SpreadPips(const string symbol);
 bool   UsePercentSizing();
 double DistanceFromPercent(const string symbol, double percent);
-double EffectiveMaxSpread();
-int    EffectiveSlPips();
+double EffectiveMaxSpread(const string symbol = "");
+int    EffectiveSlPips(const string symbol = "");
+int    EffectiveTpPips(const string symbol = "");
+double EffectiveMinMovePips(const string symbol = "");
+AfbAssetProfile AfbResolveProfile(const string symbol);
 
 datetime g_debugLastGlobalLog = 0;
 string   g_debugLastGlobalKey = "";
@@ -83,24 +86,25 @@ double ReadAdx(const string symbol)
 }
 
 //+------------------------------------------------------------------+
-double AdxStrongThreshold()
+double AdxStrongThreshold(const string category = "")
 {
-   if(InpScoreCategory == "crypto")
+   string cat = (category == "") ? InpScoreCategory : category;
+   if(cat == "crypto")
       return 40.0;
-   if(InpScoreCategory == "stock")
+   if(cat == "stock")
       return 32.0;
-   if(InpScoreCategory == "commodity")
+   if(cat == "commodity")
       return 32.0;
-   if(InpScoreCategory == "other")
+   if(cat == "other")
       return 30.0;
    return 35.0;
 }
 
 //+------------------------------------------------------------------+
-double AdxStrengthScore(double adx)
+double AdxStrengthScore(double adx, double adxFloor, const string category = "")
 {
-   double weak = InpAdxMinFloor;
-   double strong = AdxStrongThreshold();
+   double weak = adxFloor;
+   double strong = AdxStrongThreshold(category);
    if(strong <= weak)
       return 0.0;
    return MathMax(0.0, MathMin(100.0, ((adx - weak) / (strong - weak)) * 100.0));
@@ -140,9 +144,9 @@ double RsiSellEntryScore(double rsi, double overbought, double oversold)
 }
 
 //+------------------------------------------------------------------+
-double RsiTrendAlignmentScore(int side, double rsiHtf, double rsiEntry)
+double RsiTrendAlignmentScore(int side, double rsiHtf, double rsiEntry, const string category)
 {
-   bool isCrypto = (InpScoreCategory == "crypto");
+   bool isCrypto = (category == "crypto");
    double overbought = isCrypto ? 78.0 : 72.0;
    double oversold   = isCrypto ? 22.0 : 28.0;
    double total = 0.0;
@@ -185,7 +189,7 @@ double MaxSpreadReferencePips(const string symbol)
          return InpMaxSpreadPercent;
       return DistanceFromPercent(symbol, InpMaxSpreadPercent) / pip;
    }
-   return EffectiveMaxSpread();
+   return EffectiveMaxSpread(symbol);
 }
 
 //+------------------------------------------------------------------+
@@ -198,7 +202,7 @@ double SlReferencePips(const string symbol)
          return InpSlPercent;
       return DistanceFromPercent(symbol, InpSlPercent) / pip;
    }
-   return EffectiveSlPips();
+   return EffectiveSlPips(symbol);
 }
 
 //+------------------------------------------------------------------+
@@ -231,7 +235,8 @@ BotScoreResult CalculateBotScore(const string symbol, int side, double signalStr
    r.rsi_htf = -1.0;
    r.rsi_entry = -1.0;
 
-   double signalRef = MathMax(0.1, InpScoreSignalRefPips);
+   AfbAssetProfile prof = AfbResolveProfile(symbol);
+   double signalRef = MathMax(0.1, prof.score_ref);
    r.signal_score = MathMin(100.0, (MathAbs(signalStrength) / signalRef) * 100.0);
 
    double spreadPips = SpreadPips(symbol);
@@ -252,12 +257,12 @@ BotScoreResult CalculateBotScore(const string symbol, int side, double signalStr
       if(r.adx >= 0.0)
       {
          hasAdx = true;
-         if(r.adx < InpAdxMinFloor)
+         if(r.adx < prof.adx_floor)
          {
             r.hard_reject = true;
             r.reject_reason = "adx_below_floor";
          }
-         r.adx_score = AdxStrengthScore(r.adx);
+         r.adx_score = AdxStrengthScore(r.adx, prof.adx_floor, prof.category);
       }
    }
 
@@ -268,7 +273,7 @@ BotScoreResult CalculateBotScore(const string symbol, int side, double signalStr
       if(r.rsi_htf >= 0.0 || r.rsi_entry >= 0.0)
       {
          hasRsi = true;
-         r.rsi_score = RsiTrendAlignmentScore(side, r.rsi_htf, r.rsi_entry);
+         r.rsi_score = RsiTrendAlignmentScore(side, r.rsi_htf, r.rsi_entry, prof.category);
       }
    }
 

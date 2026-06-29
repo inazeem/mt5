@@ -1,6 +1,8 @@
 #ifndef AUTO_CRYPTO_BOT_INPUTS_MQH
 #define AUTO_CRYPTO_BOT_INPUTS_MQH
 
+#include <AutoForexBot/AutoForexBotAssetTypes.mqh>
+
 // Defaults match Laravel bot profile "crypto" (Execution, Strategy, and Risk).
 // Distance = pips x InpPipSizeOverride (Laravel pip_size; crypto default 1.0 = $1/pip).
 // Profile: TP 200, SL 100 => ~$200 / ~$100 on BTC when pip_size = 1.0.
@@ -97,5 +99,12 @@ input bool   InpDebugMode         = false;
 input group "Scanner"
 input bool   InpTradeChartSymbol  = true;
 input string InpSymbolList        = "BTCUSD";
+
+input group "Asset preset"
+input ENUM_AFB_ASSET InpChartAssetCategory   = AFB_ASSET_CRYPTO;
+input bool           InpUsePerSymbolCategory = true;
+input bool           InpUseCategoryRiskDefaults = true;
+
+#include <AutoForexBot/AutoForexBotAsset.mqh>
 
 #endif // AUTO_CRYPTO_BOT_INPUTS_MQH

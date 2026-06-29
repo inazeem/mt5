@@ -1,5 +1,5 @@
 // AutoForexBot Strategy — full EA parity (session, pullback, spread, cooldown,
-// daily loss, bot score, floating guard). Use 15m chart.
+// daily loss, bot score, floating guard). Use 5m chart for entries.
 
 //@version=5
 strategy("AutoForexBot Strategy", shorttitle="AFB Strat", overlay=true,
@@ -208,8 +208,8 @@ trendSide(tf) =>
 
 t1 = trendSide("60")
 t2 = trendSide("240")
-t15 = close[1] > open[1] ? 1 : close[1] < open[1] ? -1 : 0
-trendOk(s) => t1 == s and t2 == s and t15 == s
+tEntry = close[1] > open[1] ? 1 : close[1] < open[1] ? -1 : 0
+trendOk(s) => t1 == s and t2 == s and tEntry == s
 
 // ─── Pullback filter ──────────────────────────────────────────────────────────
 maBandTop = math.max(emaFast, smaFast)
@@ -286,8 +286,8 @@ calcBotScore(s, signalStrength) =>
     bool reject = useAdxScore and adxVal[1] < adxFloor
     [score, reject]
 
-// ─── Core signal ──────────────────────────────────────────────────────────────
-is15m = timeframe.period == "15"
+// ─── Core signal (5m entry; H1 + H4 trend unchanged) ───────────────────────────
+is5m = timeframe.period == "5"
 closed = barstate.isconfirmed
 
 [botScore, botReject] = calcBotScore(side, strength)
@@ -295,8 +295,8 @@ scoreOk = not useBotScore or (not botReject and botScore >= minBotScore)
 
 riskOk = sessionOk and spreadOk and cooldownOk and not dailyLossHit and not floatingBlocksEntry
 
-rawBuy  = closed and is15m and riskOk and consensusOk and side == 1  and trendOk(1)  and adxOk and minMoveOk and pullbackOk(1)
-rawSell = closed and is15m and riskOk and consensusOk and side == -1 and trendOk(-1) and adxOk and minMoveOk and pullbackOk(-1)
+rawBuy  = closed and is5m and riskOk and consensusOk and side == 1  and trendOk(1)  and adxOk and minMoveOk and pullbackOk(1)
+rawSell = closed and is5m and riskOk and consensusOk and side == -1 and trendOk(-1) and adxOk and minMoveOk and pullbackOk(-1)
 
 buySignal  = rawBuy  and scoreOk
 sellSignal = rawSell and scoreOk
@@ -390,18 +390,20 @@ plotshape(canShort and flat, title="Sell", style=shape.labeldown, location=locat
 blocked = dailyLossHit or floatingBlocksEntry or not cooldownOk or not spreadOk
 bgcolor(dailyLossHit ? color.new(color.red, 88) : floatingBlocksEntry ? color.new(color.maroon, 88) : blocked ? color.new(color.orange, 90) : not sessionOk and useSessionFilter ? color.new(color.gray, 92) : na)
 
-var table hud = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 75), border_width=1)
+var table hud = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 75), border_width=1)
 if barstate.islast
-    table.cell(hud, 0, 0, "Score", text_color=color.gray, text_size=size.small)
-    table.cell(hud, 1, 0, useBotScore ? str.tostring(botScore) : "off", text_color=scoreOk ? color.lime : color.red, text_size=size.small)
-    table.cell(hud, 0, 1, "Daily DD", text_color=color.gray, text_size=size.small)
-    table.cell(hud, 1, 1, str.tostring(dailyDdPct, "#.##") + "%", text_color=dailyLossHit ? color.red : color.white, text_size=size.small)
-    table.cell(hud, 0, 2, "Float", text_color=color.gray, text_size=size.small)
-    table.cell(hud, 1, 2, str.tostring(floatingPct, "#.##") + "%", text_color=floatingBlocksEntry ? color.red : color.white, text_size=size.small)
-    table.cell(hud, 0, 3, "Spread", text_color=color.gray, text_size=size.small)
-    table.cell(hud, 1, 3, spreadOk ? "OK" : "HIGH", text_color=spreadOk ? color.lime : color.red, text_size=size.small)
-    table.cell(hud, 0, 4, "Cooldown", text_color=color.gray, text_size=size.small)
-    table.cell(hud, 1, 4, cooldownOk ? "OK" : "WAIT", text_color=cooldownOk ? color.lime : color.orange, text_size=size.small)
+    table.cell(hud, 0, 0, "Chart TF", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 0, is5m ? "5m OK" : "Use 5m!", text_color=is5m ? color.lime : color.red, text_size=size.small)
+    table.cell(hud, 0, 1, "Score", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 1, useBotScore ? str.tostring(botScore) : "off", text_color=scoreOk ? color.lime : color.red, text_size=size.small)
+    table.cell(hud, 0, 2, "Daily DD", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 2, str.tostring(dailyDdPct, "#.##") + "%", text_color=dailyLossHit ? color.red : color.white, text_size=size.small)
+    table.cell(hud, 0, 3, "Float", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 3, str.tostring(floatingPct, "#.##") + "%", text_color=floatingBlocksEntry ? color.red : color.white, text_size=size.small)
+    table.cell(hud, 0, 4, "Spread", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 4, spreadOk ? "OK" : "HIGH", text_color=spreadOk ? color.lime : color.red, text_size=size.small)
+    table.cell(hud, 0, 5, "Cooldown", text_color=color.gray, text_size=size.small)
+    table.cell(hud, 1, 5, cooldownOk ? "OK" : "WAIT", text_color=cooldownOk ? color.lime : color.orange, text_size=size.small)
 
 alertcondition(canLong and flat,  "AFB Buy",  "AutoForexBot BUY {{ticker}}")
 alertcondition(canShort and flat, "AFB Sell", "AutoForexBot SELL {{ticker}}")

@@ -33,10 +33,9 @@ int AfbOnInit()
    {
       Print(InpTradeLabel, " DEBUG ON | minScore=", InpMinBotScore,
             "% useScore=", (InpUseBotScore ? "yes" : "no"),
-            " signalRef=", DoubleToString(InpScoreSignalRefPips, 1),
-            " category=", InpScoreCategory,
-            " adxScore=", (InpUseAdxScore ? "yes" : "no"),
-            " rsiScore=", (InpUseRsiScore ? "yes" : "no"),
+            " categoryRisk=", (InpUseCategoryRiskDefaults ? "per-asset" : "manual inputs"),
+            " chartAsset=", IntegerToString((int)InpChartAssetCategory),
+            " perSymbol=", (InpUsePerSymbolCategory ? "yes" : "no"),
             " pullback=", (InpUsePullbackFilter ? "yes" : "no"),
             " trail=", (InpUseTrailing ? "yes" : "no"));
    }
@@ -144,12 +143,15 @@ double DistanceFromPercent(const string symbol, double percent)
 //+------------------------------------------------------------------+
 double PipSize(const string symbol)
 {
+   AfbAssetProfile prof = AfbResolveProfile(symbol);
+   if(prof.use_price_point_pip)
+   {
+      if(InpPipSizeOverride > 0.0)
+         return InpPipSizeOverride;
+      return 1.0;
+   }
+
 #ifdef AFB_CRYPTO_BOT
-   if(InpPipSizeOverride > 0.0)
-      return InpPipSizeOverride;
-   return 1.0;
-#else
-#ifdef AFB_PIP_IS_PRICE_POINT
    if(InpPipSizeOverride > 0.0)
       return InpPipSizeOverride;
    return 1.0;
@@ -162,7 +164,6 @@ double PipSize(const string symbol)
    if(digits == 3 || digits == 5)
       return point * 10.0;
    return point;
-#endif
 #endif
 }
 
@@ -188,7 +189,7 @@ bool SpreadOk(const string symbol)
    if(UsePercentSizing() && InpMaxSpreadPercent > 0.0)
       return (ask - bid) <= DistanceFromPercent(symbol, InpMaxSpreadPercent);
 
-   return SpreadPips(symbol) <= EffectiveMaxSpread();
+   return SpreadPips(symbol) <= EffectiveMaxSpread(symbol);
 }
 
 //+------------------------------------------------------------------+
@@ -196,85 +197,126 @@ bool MinSignalMoveOk(const string symbol, double signalStrength)
 {
    if(UsePercentSizing() && InpMinMovePercent > 0.0)
       return signalStrength >= DistanceFromPercent(symbol, InpMinMovePercent);
-   return signalStrength >= EffectiveMinMovePips();
+   return signalStrength >= EffectiveMinMovePips(symbol);
+}
+
+//+------------------------------------------------------------------+
+bool InSessionUtcForSymbol(const string symbol)
+{
+   AfbAssetProfile prof = AfbResolveProfile(symbol);
+   int startHour = prof.session_start;
+   int endHour = prof.session_end;
+
+   MqlDateTime dt;
+   TimeToStruct(TimeGMT(), dt);
+   int hour = dt.hour;
+   if(startHour <= endHour)
+      return (hour >= startHour && hour <= endHour);
+   return (hour >= startHour || hour <= endHour);
 }
 
 //+------------------------------------------------------------------+
 bool InSessionUtc()
 {
-   MqlDateTime dt;
-   TimeToStruct(TimeGMT(), dt);
-   int hour = dt.hour;
-   if(InpSessionStartUtc <= InpSessionEndUtc)
-      return (hour >= InpSessionStartUtc && hour <= InpSessionEndUtc);
-   return (hour >= InpSessionStartUtc || hour <= InpSessionEndUtc);
+   return InSessionUtcForSymbol(_Symbol);
 }
 
 //+------------------------------------------------------------------+
-int EffectiveTpPips()
+int EffectiveTpPips(const string symbol = "")
 {
+   int base = InpTpPips;
+   if(symbol != "")
+      base = AfbResolveProfile(symbol).tp_pips;
+
    if(!InpScalperMode)
-      return InpTpPips;
-   if(InpTpPips <= 30)
-      return MathMin(InpTpPips, 30);
-   return MathMin(InpTpPips, 300);
+      return base;
+   if(base <= 30)
+      return MathMin(base, 30);
+   return MathMin(base, 300);
 }
 
-int EffectiveSlPips()
+int EffectiveSlPips(const string symbol = "")
 {
+   int base = InpSlPips;
+   if(symbol != "")
+      base = AfbResolveProfile(symbol).sl_pips;
+
    if(!InpScalperMode)
-      return InpSlPips;
-   if(InpSlPips <= 15)
-      return MathMin(InpSlPips, 10);
-   return MathMin(InpSlPips, 150);
+      return base;
+   if(base <= 15)
+      return MathMin(base, 10);
+   return MathMin(base, 150);
 }
 
-double EffectiveMaxSpread()
+double EffectiveMaxSpread(const string symbol = "")
 {
+   double base = InpMaxSpreadPips;
+   if(symbol != "")
+      base = AfbResolveProfile(symbol).max_spread;
+
    if(!InpScalperMode)
-      return InpMaxSpreadPips;
-   if(InpMaxSpreadPips <= 5.0)
-      return MathMin(InpMaxSpreadPips, 5.0);
-   return MathMin(InpMaxSpreadPips, 50.0);
+      return base;
+   if(base <= 5.0)
+      return MathMin(base, 5.0);
+   return MathMin(base, 50.0);
 }
 
-double EffectiveMinMovePips()
+double EffectiveMinMovePips(const string symbol = "")
 {
+   double base = InpMinMovePips;
+   if(symbol != "")
+      base = AfbResolveProfile(symbol).min_move;
+
    if(!InpScalperMode)
-      return InpMinMovePips;
-   if(InpMinMovePips <= 3.0)
-      return MathMin(InpMinMovePips, 1.5);
-   return MathMin(InpMinMovePips, 200.0);
+      return base;
+   if(base <= 3.0)
+      return MathMin(base, 1.5);
+   return MathMin(base, 200.0);
 }
 
-int EffectiveTrailStartPips()
+int EffectiveTrailStartPips(const string symbol = "")
 {
+   int base = InpTrailStartPips;
+   if(symbol != "")
+      base = AfbResolveProfile(symbol).trail_start;
+
    if(!InpScalperMode)
-      return InpTrailStartPips;
-   if(InpTrailStartPips <= 15)
-      return MathMin(InpTrailStartPips, 15);
-   return MathMin(InpTrailStartPips, 400);
+      return base;
+   if(base <= 15)
+      return MathMin(base, 15);
+   return MathMin(base, 400);
 }
 
-int EffectiveTrailPips()
+int EffectiveTrailPips(const string symbol = "")
 {
+   int base = InpTrailPips;
+   if(symbol != "")
+      base = AfbResolveProfile(symbol).trail_pips;
+
    if(!InpScalperMode)
-      return InpTrailPips;
-   if(InpTrailPips <= 8)
-      return MathMin(InpTrailPips, 8);
-   return MathMin(InpTrailPips, 200);
+      return base;
+   if(base <= 8)
+      return MathMin(base, 8);
+   return MathMin(base, 200);
 }
 
-double EffectiveTrailTpMultiplier()
+double EffectiveTrailTpMultiplier(const string symbol = "")
 {
+   double base = InpTrailTpMultiplier;
+   if(symbol != "")
+      base = AfbResolveProfile(symbol).trail_tp_mult;
+
    if(!InpScalperMode)
-      return InpTrailTpMultiplier;
-   return MathMin(InpTrailTpMultiplier, 10.0);
+      return base;
+   return MathMin(base, 10.0);
 }
 
-int EffectiveCooldownMinutes()
+int EffectiveCooldownMinutes(const string symbol = "")
 {
-   return InpScalperMode ? MathMin(InpCooldownMinutes, 5) : InpCooldownMinutes;
+   int base = InpCooldownMinutes;
+   if(symbol != "")
+      base = AfbResolveProfile(symbol).cooldown_minutes;
+   return InpScalperMode ? MathMin(base, 5) : base;
 }
 
 int EffectiveMaxOpen()
@@ -683,7 +725,8 @@ bool AdxOk(const string symbol)
       return true;
    }
    IndicatorRelease(handle);
-   return adx[0] >= InpAdxMinFloor;
+   AfbAssetProfile prof = AfbResolveProfile(symbol);
+   return adx[0] >= prof.adx_floor;
 }
 
 //+------------------------------------------------------------------+
@@ -988,7 +1031,7 @@ bool InCooldown(const string symbol)
    int idx = FindCooldownIndex(symbol);
    if(idx < 0)
       return false;
-   int mins = EffectiveCooldownMinutes();
+   int mins = EffectiveCooldownMinutes(symbol);
    if(mins <= 0)
       return false;
    return (TimeCurrent() - g_lastCooldown[idx]) < (mins * 60);
@@ -1022,8 +1065,8 @@ void OpenTrade(const string symbol, int side)
    }
    else
    {
-      tpDist = EffectiveTpPips() * pip;
-      slDist = EffectiveSlPips() * pip;
+      tpDist = EffectiveTpPips(symbol) * pip;
+      slDist = EffectiveSlPips(symbol) * pip;
    }
 
    double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
@@ -1055,8 +1098,8 @@ void OpenTrade(const string symbol, int side)
 #ifdef AFB_CRYPTO_BOT
       else
          Print("Opened ", (side > 0 ? "BUY" : "SELL"), " ", symbol,
-               " TP=", tp, " (", EffectiveTpPips(), " pips x ", DoubleToString(pip, 4), ")",
-               " SL=", sl, " (", EffectiveSlPips(), " pips)");
+               " TP=", tp, " (", EffectiveTpPips(symbol), " pips x ", DoubleToString(pip, 4), ")",
+               " SL=", sl, " (", EffectiveSlPips(symbol), " pips)");
 #else
       else
          Print("Opened ", (side > 0 ? "BUY" : "SELL"), " ", symbol, " TP=", tp, " SL=", sl);
@@ -1071,8 +1114,6 @@ void ApplyTrailingStops()
 {
    if(!InpUseTrailing)
       return;
-
-   double tpMult = EffectiveTrailTpMultiplier();
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -1093,6 +1134,8 @@ void ApplyTrailingStops()
       double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
       double price = (type == POSITION_TYPE_BUY) ? bid : ask;
 
+      double tpMult = EffectiveTrailTpMultiplier(symbol);
+
       double trailStartDist = 0.0;
       double trailDist = 0.0;
       if(UsePercentSizing() && InpTrailStartPercent > 0.0 && InpTrailPercent > 0.0)
@@ -1102,8 +1145,8 @@ void ApplyTrailingStops()
       }
       else
       {
-         trailStartDist = EffectiveTrailStartPips() * pip;
-         trailDist = EffectiveTrailPips() * pip;
+         trailStartDist = EffectiveTrailStartPips(symbol) * pip;
+         trailDist = EffectiveTrailPips(symbol) * pip;
       }
 
       double profitDist = (type == POSITION_TYPE_BUY)
@@ -1165,12 +1208,6 @@ void MarkTpAdjusted(ulong ticket)
 //+------------------------------------------------------------------+
 void RunEntryScan()
 {
-   if(!InSessionUtc())
-   {
-      DebugOnce("session", "Outside UTC session window - entry scan skipped");
-      return;
-   }
-
    if(CountOurPositions() >= EffectiveMaxOpen())
    {
       DebugOnce("max_open", "Max open positions reached - entry scan skipped");
@@ -1218,10 +1255,17 @@ void RunEntryScan()
       if(sym == "")
          continue;
 
+      if(!InSessionUtcForSymbol(sym))
+      {
+         DebugSkip(sym, "session");
+         continue;
+      }
+
       if(!IsNewEntryBar(sym))
          continue;
 
-      DebugPrint(sym + " new " + EnumToString(InpEntryTf) + " bar - evaluating signal");
+      DebugPrint(sym + " new " + EnumToString(InpEntryTf) + " bar ["
+         + AfbResolveProfile(sym).category + "] - evaluating signal");
 
       if(HasOurPosition(sym))
       {
@@ -1273,7 +1317,8 @@ void RunEntryScan()
 
       if(InpUseAdxFloor && !AdxOk(sym))
       {
-         DebugSkip(sym, "adx_floor", "ADX < " + DoubleToString(InpAdxMinFloor, 1));
+         AfbAssetProfile prof = AfbResolveProfile(sym);
+         DebugSkip(sym, "adx_floor", "ADX < " + DoubleToString(prof.adx_floor, 1));
          continue;
       }
 
