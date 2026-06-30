@@ -1,0 +1,82 @@
+// AutoForexBot — one line + BUY / SELL. Works on any symbol. Use 5m or 15m chart.
+
+//@version=5
+indicator("AutoForexBot", shorttitle="AFB", overlay=true, max_labels_count=500)
+
+asset = input.string("Auto", "Asset", options=["Auto", "Forex", "Crypto", "Commodity", "Stock", "Index"])
+
+// ─── Per-asset entry thresholds (matches MT5 EAs) ─────────────────────────────
+isJpy = str.contains(syminfo.ticker, "JPY")
+isGold = str.contains(syminfo.ticker, "XAU") or str.contains(syminfo.ticker, "GOLD")
+isSilver = str.contains(syminfo.ticker, "XAG") or str.contains(syminfo.ticker, "SILVER")
+isOil = str.contains(syminfo.ticker, "WTI") or str.contains(syminfo.ticker, "BRENT") or str.contains(syminfo.ticker, "OIL")
+isIndex = syminfo.type == "index" or str.contains(syminfo.ticker, "US30") or str.contains(syminfo.ticker, "US500") or str.contains(syminfo.ticker, "NAS") or str.contains(syminfo.ticker, "SPX") or str.contains(syminfo.ticker, "DAX") or str.contains(syminfo.ticker, "UK100")
+
+detected = isIndex ? "Index" : syminfo.type == "crypto" ? "Crypto" : isGold or isSilver or isOil ? "Commodity" : syminfo.type == "forex" ? "Forex" : isIndex ? "Index" : "Forex"
+kind = asset == "Auto" ? detected : asset
+
+float adxFloor = 22.0
+float minMove  = 3.0
+float pipSize  = isJpy ? 0.01 : 0.0001
+
+if kind == "Crypto"
+    adxFloor := 18.0
+    minMove  := 25.0
+    pipSize  := 1.0
+else if kind == "Commodity"
+    adxFloor := 22.0
+    minMove  := 12.0
+    pipSize  := isGold or isSilver ? 0.01 : 0.01
+else if kind == "Stock" or kind == "Index"
+    adxFloor := 22.0
+    minMove  := 25.0
+    pipSize  := 1.0
+
+// ─── Shared signal logic (same for every asset) ───────────────────────────────
+smaFast = ta.sma(close, 9)
+smaSlow = ta.sma(close, 21)
+emaFast = ta.ema(close, 9)
+emaSlow = ta.ema(close, 21)
+[_, _, adxVal] = ta.dmi(14, 14)
+
+smaSide = smaFast > smaSlow ? 1 : smaFast < smaSlow ? -1 : 0
+emaSide = emaFast > emaSlow ? 1 : emaFast < emaSlow ? -1 : 0
+side    = smaSide == emaSide ? smaSide : 0
+
+smaOk = smaSide == 1 ? smaFast[1] > smaSlow[1] : smaSide == -1 ? smaFast[1] < smaSlow[1] : false
+emaOk = emaSide == 1 ? emaFast[1] > emaSlow[1] : emaSide == -1 ? emaFast[1] < emaSlow[1] : false
+consensusOk = smaOk and emaOk and side != 0
+
+strength = (math.abs(smaFast - smaSlow) + math.abs(emaFast - emaSlow)) / 2.0 / pipSize
+adxOk = adxVal[1] >= adxFloor
+minMoveOk = strength >= minMove
+
+trendSide(tf) =>
+    request.security(syminfo.tickerid, tf, close[1] > open[1] ? 1 : close[1] < open[1] ? -1 : 0, lookahead=barmerge.lookahead_off)
+
+t1 = trendSide("60")
+t2 = trendSide("240")
+tEntry = close[1] > open[1] ? 1 : close[1] < open[1] ? -1 : 0
+trendOk(s) => t1 == s and t2 == s and tEntry == s
+
+entryTfOk = timeframe.period == "5" or timeframe.period == "15"
+closed = barstate.isconfirmed
+
+buySignal  = closed and entryTfOk and consensusOk and side == 1  and trendOk(1)  and adxOk and minMoveOk
+sellSignal = closed and entryTfOk and consensusOk and side == -1 and trendOk(-1) and adxOk and minMoveOk
+
+signalLine = (emaFast + smaFast) / 2.0
+plot(signalLine, "Signal line", color=color.yellow, linewidth=2)
+
+plotshape(buySignal,  title="Buy",  style=shape.labelup,   location=location.belowbar, color=color.lime, text="BUY",  textcolor=color.black, size=size.normal)
+plotshape(sellSignal, title="Sell", style=shape.labeldown, location=location.abovebar, color=color.red,  text="SELL", textcolor=color.white, size=size.normal)
+
+var label status = na
+if barstate.islast
+    label.delete(status)
+    string txt = buySignal ? "BUY" : sellSignal ? "SELL" : "WAIT"
+    color  col = buySignal ? color.lime : sellSignal ? color.red : color.gray
+    status := label.new(bar_index, signalLine, txt, style=label.style_label_left, color=color.new(color.black, 30), textcolor=col, size=size.huge)
+
+alertcondition(buySignal,  "AFB Buy",  "AutoForexBot BUY {{ticker}}")
+alertcondition(sellSignal, "AFB Sell", "AutoForexBot SELL {{ticker}}")
