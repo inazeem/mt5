@@ -1,9 +1,10 @@
-// AutoForexBot — one line + BUY / SELL. Works on any symbol. Use 5m chart.
+// AutoForexBot — one line + BUY / SELL. Works on any symbol. Use 5m or 15m chart.
 
 //@version=5
 indicator("AutoForexBot", shorttitle="AFB", overlay=true, max_labels_count=500)
 
 asset = input.string("Auto", "Asset", options=["Auto", "Forex", "Crypto", "Commodity", "Stock", "Index"])
+newSetupOnly = input.bool(true, "One signal per setup", tooltip="Show BUY/SELL only when setup first qualifies — not on every bar while conditions stay true")
 
 // ─── Per-asset entry thresholds (matches MT5 EAs) ─────────────────────────────
 isJpy = str.contains(syminfo.ticker, "JPY")
@@ -59,17 +60,22 @@ t2 = trendSide("240")
 tEntry = close[1] > open[1] ? 1 : close[1] < open[1] ? -1 : 0
 trendOk(s) => t1 == s and t2 == s and tEntry == s
 
-is5m = timeframe.period == "5"
+entryTfOk = timeframe.period == "5" or timeframe.period == "15"
 closed = barstate.isconfirmed
 
-buySignal  = closed and is5m and consensusOk and side == 1  and trendOk(1)  and adxOk and minMoveOk
-sellSignal = closed and is5m and consensusOk and side == -1 and trendOk(-1) and adxOk and minMoveOk
+buySignal  = closed and entryTfOk and consensusOk and side == 1  and trendOk(1)  and adxOk and minMoveOk
+sellSignal = closed and entryTfOk and consensusOk and side == -1 and trendOk(-1) and adxOk and minMoveOk
+
+newBuy  = buySignal  and not buySignal[1]
+newSell = sellSignal and not sellSignal[1]
+showBuy  = newSetupOnly ? newBuy  : buySignal
+showSell = newSetupOnly ? newSell : sellSignal
 
 signalLine = (emaFast + smaFast) / 2.0
 plot(signalLine, "Signal line", color=color.yellow, linewidth=2)
 
-plotshape(buySignal,  title="Buy",  style=shape.labelup,   location=location.belowbar, color=color.lime, text="BUY",  textcolor=color.black, size=size.normal)
-plotshape(sellSignal, title="Sell", style=shape.labeldown, location=location.abovebar, color=color.red,  text="SELL", textcolor=color.white, size=size.normal)
+plotshape(showBuy,  title="Buy",  style=shape.labelup,   location=location.belowbar, color=color.lime, text="BUY",  textcolor=color.black, size=size.normal)
+plotshape(showSell, title="Sell", style=shape.labeldown, location=location.abovebar, color=color.red,  text="SELL", textcolor=color.white, size=size.normal)
 
 var label status = na
 if barstate.islast
@@ -78,5 +84,5 @@ if barstate.islast
     color  col = buySignal ? color.lime : sellSignal ? color.red : color.gray
     status := label.new(bar_index, signalLine, txt, style=label.style_label_left, color=color.new(color.black, 30), textcolor=col, size=size.huge)
 
-alertcondition(buySignal,  "AFB Buy",  "AutoForexBot BUY {{ticker}}")
-alertcondition(sellSignal, "AFB Sell", "AutoForexBot SELL {{ticker}}")
+alertcondition(showBuy,  "AFB Buy",  "AutoForexBot BUY {{ticker}}")
+alertcondition(showSell, "AFB Sell", "AutoForexBot SELL {{ticker}}")
