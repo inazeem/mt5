@@ -3,6 +3,7 @@
 use App\Http\Controllers\AiController;
 use App\Http\Controllers\BotController;
 use App\Http\Controllers\BotProfileController;
+use App\Http\Controllers\EaBridgeWebController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\StrategyController;
@@ -36,6 +37,10 @@ Route::middleware(['auth', 'owner'])->group(function () {
     Route::get('/bot/analytics/export', [BotController::class, 'exportCsv'])->name('bot.analytics.export');
     Route::get('/bot/alerts/export', [BotController::class, 'exportCsv'])->name('bot.alerts.export');
     Route::post('/bot/auto-settings', [BotController::class, 'updateAutoSettings'])->name('bot.auto-settings');
+    Route::get('/ea-bridge', [EaBridgeWebController::class, 'index'])->name('ea-bridge.index');
+    Route::post('/ea-bridge/commands', [EaBridgeWebController::class, 'queueCommand'])->name('ea-bridge.commands');
+    Route::post('/ea-bridge/token', [EaBridgeWebController::class, 'regenerateToken'])->name('ea-bridge.token');
+
     Route::post('/bot/trade', [BotController::class, 'store'])->name('bot.trade');
     Route::post('/bot/close-position', [BotController::class, 'closePosition'])->name('bot.close-position');
     Route::get('/bot/price', [BotController::class, 'price'])->name('bot.price');

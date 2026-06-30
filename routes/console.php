@@ -2980,3 +2980,16 @@ Schedule::command('mt5:auto-forex --once')
     ->name('mt5-auto-forex-once')
     ->everyMinute()
     ->withoutOverlapping(120);
+
+Artisan::command('ea:token {--regenerate : Force a new token}', function () {
+    $service = app(\App\Services\EaBridgeService::class);
+    $token = $this->option('regenerate')
+        ? $service->regenerateToken()
+        : $service->resolveToken();
+
+    $this->line('EA bridge token:');
+    $this->line($token);
+    $this->line('Poll URL: '.url('/api/ea/poll'));
+
+    return 0;
+})->purpose('Show or regenerate the MT5 EA bridge API token.');
