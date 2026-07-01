@@ -76,6 +76,11 @@
                     </div>
                     </div>
 
+                    @include('bot-profiles._mt5-instance', [
+                        'mt5Instances' => $mt5Instances,
+                        'selectedInstanceKey' => old('mt5_instance_key', $profile['mt5_instance_key'] ?? ''),
+                    ])
+
                     <div class="rounded-lg border border-gray-200 p-4">
                         <h3 class="text-sm font-semibold text-gray-900 mb-4">Execution, Strategy, and Risk</h3>
 

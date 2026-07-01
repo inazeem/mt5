@@ -25,6 +25,27 @@ class EaBridgeWebController extends Controller
         return view('ea-bridge.index', compact('token', 'terminals', 'recentCommands'));
     }
 
+    public function updateTerminal(Request $request, Mt5EaTerminal $terminal, EaBridgeService $eaBridge)
+    {
+        $validated = $request->validate([
+            'instance_key' => ['nullable', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
+            'display_name' => ['nullable', 'string', 'max:120'],
+            'enabled' => ['nullable', 'boolean'],
+            'is_demo' => ['nullable', 'boolean'],
+        ]);
+
+        $validated['enabled'] = $request->boolean('enabled');
+        $validated['is_demo'] = $request->boolean('is_demo');
+
+        try {
+            $eaBridge->updateTerminalInstance($terminal->id, $validated);
+        } catch (InvalidArgumentException $e) {
+            return back()->withErrors(['instance_key' => $e->getMessage()]);
+        }
+
+        return back()->with('status', 'MT5 instance "'.$terminal->fresh()->label().'" updated.');
+    }
+
     public function queueCommand(Request $request, EaBridgeService $eaBridge)
     {
         $validated = $request->validate([
@@ -35,6 +56,7 @@ class EaBridgeWebController extends Controller
             'tp' => ['nullable', 'numeric', 'min:0'],
             'ticket' => ['nullable', 'integer', 'min:1'],
             'account_login' => ['nullable', 'integer', 'min:1'],
+            'mt5_instance_key' => ['nullable', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
         ]);
 
         try {

@@ -4,10 +4,15 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Str;
 
 class Mt5EaTerminal extends Model
 {
     protected $fillable = [
+        'instance_key',
+        'display_name',
+        'enabled',
+        'is_demo',
         'account_login',
         'server',
         'terminal_name',
@@ -19,12 +24,16 @@ class Mt5EaTerminal extends Model
         'currency',
         'trade_allowed',
         'positions',
+        'market_quotes',
+        'market_candles',
         'last_seen_at',
     ];
 
     protected function casts(): array
     {
         return [
+            'enabled' => 'boolean',
+            'is_demo' => 'boolean',
             'account_login' => 'integer',
             'balance' => 'float',
             'equity' => 'float',
@@ -32,6 +41,8 @@ class Mt5EaTerminal extends Model
             'free_margin' => 'float',
             'trade_allowed' => 'boolean',
             'positions' => 'array',
+            'market_quotes' => 'array',
+            'market_candles' => 'array',
             'last_seen_at' => 'datetime',
         ];
     }
@@ -48,5 +59,39 @@ class Mt5EaTerminal extends Model
         }
 
         return $this->last_seen_at->greaterThan(now()->subSeconds($seconds));
+    }
+
+    public function label(): string
+    {
+        if ($this->display_name) {
+            return $this->display_name;
+        }
+
+        if ($this->instance_key) {
+            return $this->instance_key;
+        }
+
+        return (string) $this->account_login;
+    }
+
+    public static function slugifyInstanceKey(string $value): string
+    {
+        $slug = strtolower(trim((string) preg_replace('/[^a-zA-Z0-9_-]/', '-', $value)));
+        $slug = trim($slug, '-');
+
+        return $slug !== '' ? $slug : 'terminal';
+    }
+
+    public static function makeUniqueInstanceKey(string $base): string
+    {
+        $candidate = self::slugifyInstanceKey($base);
+        $suffix = 1;
+
+        while (self::query()->where('instance_key', $candidate)->exists()) {
+            $candidate = self::slugifyInstanceKey($base).'-'.$suffix;
+            $suffix++;
+        }
+
+        return $candidate;
     }
 }

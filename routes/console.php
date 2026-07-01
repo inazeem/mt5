@@ -2,6 +2,7 @@
 
 use App\Models\AppSetting;
 use App\Models\BotTradeLog;
+use App\Models\Mt5EaCommand;
 use App\Models\Ticker;
 use App\Services\AiService;
 use App\Services\AlpacaService;
@@ -864,6 +865,22 @@ Artisan::command('mt5:auto-forex
             : [];
         $cycleBroker = $brokerResolver->forProfile($profileTickerCategories, $botProfile);
         $usesAlpacaCycle = $brokerResolver->usesAlpaca($cycleBroker);
+        $usesEaBridgeCycle = $brokerResolver->usesEaBridge($cycleBroker);
+
+        if ($usesEaBridgeCycle) {
+            try {
+                $cycleBroker->getAccountInformation();
+            } catch (\Throwable $e) {
+                $this->error('EA bridge profile cannot run: '.$e->getMessage());
+                BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                    'event_type' => 'guardrail',
+                    'status' => 'broker_config_error',
+                    'message' => $e->getMessage(),
+                ]));
+
+                return 0;
+            }
+        }
 
         $minEffectiveVolumeExplicit = $optionProvided('min-effective-volume')
             || ($botProfile['min_effective_volume'] ?? null) !== null;
@@ -1147,7 +1164,7 @@ Artisan::command('mt5:auto-forex
             ];
         };
 
-        if (!$usesAlpacaCycle) {
+        if (!$usesAlpacaCycle && !$usesEaBridgeCycle) {
             $this->info('Running trailing stop updates...');
             $trailResult = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier, $resolveTrailingParamsForSymbol);
             $this->line('Trailing updated: '.$trailResult['updated'].', skipped: '.$trailResult['skipped']);
@@ -1584,29 +1601,31 @@ Artisan::command('mt5:auto-forex
 
         // ── §14–§20 PER-SYMBOL SCAN LOOP (quote → strategy → filters → AI → order) ──
         foreach ($symbols as $symbol) {
-            $pauseUntilRaw = Cache::get($metaApiPauseKey);
-            if (is_string($pauseUntilRaw) && trim($pauseUntilRaw) !== '') {
-                try {
-                    $pauseUntil = \Carbon\Carbon::parse($pauseUntilRaw);
-                    if ($pauseUntil->isFuture()) {
-                        $remaining = now()->diffInSeconds($pauseUntil);
-                        $message = 'MetaApi outage cooldown active; skipping symbol scans for this cycle.';
-                        $this->warn('  '.$message.' remaining='.$remaining.'s');
+            if (!$usesEaBridgeCycle) {
+                $pauseUntilRaw = Cache::get($metaApiPauseKey);
+                if (is_string($pauseUntilRaw) && trim($pauseUntilRaw) !== '') {
+                    try {
+                        $pauseUntil = \Carbon\Carbon::parse($pauseUntilRaw);
+                        if ($pauseUntil->isFuture()) {
+                            $remaining = now()->diffInSeconds($pauseUntil);
+                            $message = 'MetaApi outage cooldown active; skipping symbol scans for this cycle.';
+                            $this->warn('  '.$message.' remaining='.$remaining.'s');
 
-                        BotTradeLog::query()->create(array_merge($botLogDefaults, [
-                            'event_type' => 'guardrail',
-                            'status' => 'metaapi_cooldown_skip',
-                            'message' => $message,
-                            'meta_payload' => [
-                                'pause_until' => $pauseUntil->toIso8601String(),
-                                'remaining_seconds' => $remaining,
-                            ],
-                        ]));
+                            BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                                'event_type' => 'guardrail',
+                                'status' => 'metaapi_cooldown_skip',
+                                'message' => $message,
+                                'meta_payload' => [
+                                    'pause_until' => $pauseUntil->toIso8601String(),
+                                    'remaining_seconds' => $remaining,
+                                ],
+                            ]));
 
-                        break;
+                            break;
+                        }
+                    } catch (\Throwable) {
+                        Cache::forget($metaApiPauseKey);
                     }
-                } catch (\Throwable) {
-                    // Ignore malformed pause values and continue.
                 }
             }
 
@@ -2379,6 +2398,7 @@ Artisan::command('mt5:auto-forex
                     'take_profit' => $takeProfit,
                     'stop_loss' => $stopLoss,
                 ]]);
+                $isEaQueued = ($result['mode'] ?? '') === 'ea_queued';
                 $opened++;
                 $openBySymbol[$symbol] = true;
                 $openedTodayBySymbol[$symbolKey] = $symbolTradesToday + 1;
@@ -2389,9 +2409,12 @@ Artisan::command('mt5:auto-forex
                 $tradeRef = $positionId !== '' ? $positionId : ($orderId !== '' ? $orderId : (string) $symbol);
                 $executedLotSize = is_numeric($result['order_qty'] ?? null) ? (float) $result['order_qty'] : $lotSize;
 
-                $openMessage = 'Opened '.$executionSide.' '.$symbol.' (recommended '.$recommendedSide.') TP='.$takeProfit.' SL='.$stopLoss;
+                $openMessage = ($isEaQueued ? 'Queued ' : 'Opened ').$executionSide.' '.$symbol.' (recommended '.$recommendedSide.') TP='.$takeProfit.' SL='.$stopLoss;
                 if ($executedLotSize > $lotSize) {
                     $openMessage .= ' qty='.$executedLotSize.' (profile lot '.$lotSize.' bumped for Alpaca $10 min notional)';
+                }
+                if ($isEaQueued) {
+                    $openMessage .= ' [EA command #'.(int) ($result['command_id'] ?? 0).']';
                 }
                 $this->info($openMessage);
                 Log::info('Auto bot opened trade', [
@@ -2400,9 +2423,9 @@ Artisan::command('mt5:auto-forex
                     'side' => $executionSide,
                     'result' => $result,
                 ]);
-                BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                $tradeLog = BotTradeLog::query()->create(array_merge($botLogDefaults, [
                     'event_type' => 'trade_open',
-                    'status' => 'success',
+                    'status' => $isEaQueued ? 'pending' : 'success',
                     'symbol' => $symbol,
                     'side' => $executionSide,
                     'order_id' => $orderId !== '' ? $orderId : null,
@@ -2422,18 +2445,34 @@ Artisan::command('mt5:auto-forex
                     'meta_payload' => array_merge($scoreMetaPayload(), [
                         'recommended_side' => $recommendedSide,
                         'execution_side' => $executionSide,
+                        'execution_mode' => $isEaQueued ? 'ea_bridge' : ($usesAlpacaCycle ? 'alpaca' : 'metaapi'),
+                        'ea_command_id' => $isEaQueued ? (int) ($result['command_id'] ?? 0) : null,
                     ]),
                     'meta_response' => $result,
+                    'message' => $isEaQueued
+                        ? 'Trade queued for EA bridge execution.'
+                        : 'Trade opened via broker API.',
                 ]));
 
-                // Run one immediate trailing pass so new trades do not wait for the next cycle.
-                try {
-                    $postOpenTrail = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier, $resolveTrailingParamsForSymbol);
-                    if (($postOpenTrail['updated'] ?? 0) > 0) {
-                        $this->line('Post-open trailing updated: '.$postOpenTrail['updated']);
+                if ($isEaQueued && ! empty($result['command_id'])) {
+                    Mt5EaCommand::query()
+                        ->where('id', (int) $result['command_id'])
+                        ->update([
+                            'bot_trade_log_id' => $tradeLog->id,
+                            'bot_key' => $botKey,
+                        ]);
+                }
+
+                if (!$usesEaBridgeCycle) {
+                    // Run one immediate trailing pass so new trades do not wait for the next cycle.
+                    try {
+                        $postOpenTrail = $mt5Service->applyTrailingStops($trailStartPips, $trailPips, $trailTpMultiplier, $resolveTrailingParamsForSymbol);
+                        if (($postOpenTrail['updated'] ?? 0) > 0) {
+                            $this->line('Post-open trailing updated: '.$postOpenTrail['updated']);
+                        }
+                    } catch (\Throwable $trailError) {
+                        $this->warn('Post-open trailing pass failed: '.$trailError->getMessage());
                     }
-                } catch (\Throwable $trailError) {
-                    $this->warn('Post-open trailing pass failed: '.$trailError->getMessage());
                 }
 
                 if ($opened >= $maxPerCycle) {

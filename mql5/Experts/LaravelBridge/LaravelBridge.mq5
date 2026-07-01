@@ -10,6 +10,7 @@
 
 input string InpServerUrl     = "https://mt5.test";   // Laravel base URL (no trailing slash)
 input string InpApiToken      = "";                   // Bearer token from EA Bridge page
+input string InpInstanceKey   = "";                   // Instance key (matches EA Bridge / bot profile)
 input int    InpPollSeconds   = 1;                    // Poll interval (seconds)
 input int    InpMagic         = 88001;                // Magic number for bridge orders
 input bool   InpDebug         = false;                // Verbose logs
@@ -19,6 +20,8 @@ int    g_lastCommandId = 0;
 bool   g_lastCommandOk = false;
 string g_lastCommandMessage = "";
 ulong  g_lastCommandTicket = 0;
+string g_watchSymbolsCsv = "";
+string g_candlePlanCsv = "";
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -152,6 +155,18 @@ string BuildPollPayload()
    json += "\"trade_allowed\":" + (AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) ? "true" : "false") + ",";
    json += "\"positions\":" + BuildPositionsJson();
 
+   if(StringLen(InpInstanceKey) > 0)
+   {
+      json += ",\"instance_key\":\"" + JsonEscape(InpInstanceKey) + "\"";
+   }
+
+   string quotesJson = BuildQuotesJson();
+   string candlesJson = BuildCandlesJson();
+   if(quotesJson != "{}")
+      json += ",\"quotes\":" + quotesJson;
+   if(candlesJson != "{}")
+      json += ",\"candles\":" + candlesJson;
+
    if(g_lastCommandId > 0)
    {
       json += ",\"command_result\":{";
@@ -256,6 +271,200 @@ bool ParseCommandBlock(const string json, int &id, string &action, string &symbo
    StringTrimRight(symbol);
 
    return action != "";
+}
+
+//+------------------------------------------------------------------+
+void ParseWatchPlan(const string json)
+{
+   int start = StringFind(json, "\"watch_symbols\":[");
+   if(start < 0)
+      return;
+
+   start += StringLen("\"watch_symbols\":[");
+   int end = StringFind(json, "]", start);
+   if(end < 0)
+      return;
+
+   string arrayBody = StringSubstr(json, start, end - start);
+   StringReplace(arrayBody, "\"", "");
+   StringReplace(arrayBody, " ", "");
+   g_watchSymbolsCsv = arrayBody;
+
+   string plan = "";
+   int searchFrom = StringFind(json, "\"candle_requests\":[");
+   if(searchFrom < 0)
+      return;
+
+   int pos = searchFrom;
+   while(true)
+   {
+      int symPos = StringFind(json, "\"symbol\":\"", pos);
+      if(symPos < 0)
+         break;
+
+      int symValueStart = symPos + StringLen("\"symbol\":\"");
+      int symValueEnd = StringFind(json, "\"", symValueStart);
+      if(symValueEnd < 0)
+         break;
+      string sym = StringSubstr(json, symValueStart, symValueEnd - symValueStart);
+
+      int tfPos = StringFind(json, "\"timeframe\":\"", symPos);
+      if(tfPos < 0)
+         break;
+      int tfValueStart = tfPos + StringLen("\"timeframe\":\"");
+      int tfValueEnd = StringFind(json, "\"", tfValueStart);
+      if(tfValueEnd < 0)
+         break;
+      string tf = StringSubstr(json, tfValueStart, tfValueEnd - tfValueStart);
+
+      int limitPos = StringFind(json, "\"limit\":", symPos);
+      double limitVal = 120;
+      if(limitPos >= 0)
+      {
+         int limitStart = limitPos + StringLen("\"limit\":");
+         int limitEnd = limitStart;
+         int len = StringLen(json);
+         while(limitEnd < len)
+         {
+            ushort ch = StringGetCharacter(json, limitEnd);
+            if((ch >= '0' && ch <= '9') || ch == '.')
+            {
+               limitEnd++;
+               continue;
+            }
+            break;
+         }
+         limitVal = StringToDouble(StringSubstr(json, limitStart, limitEnd - limitStart));
+      }
+
+      if(plan != "")
+         plan += ";";
+      plan += sym + "|" + tf + "|" + IntegerToString((int)limitVal);
+      pos = symValueEnd + 1;
+   }
+
+   if(plan != "")
+      g_candlePlanCsv = plan;
+}
+
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES TimeframeFromString(const string tf)
+{
+   string value = tf;
+   StringToLower(value);
+   if(value == "1m") return PERIOD_M1;
+   if(value == "5m") return PERIOD_M5;
+   if(value == "15m") return PERIOD_M15;
+   if(value == "30m") return PERIOD_M30;
+   if(value == "1h") return PERIOD_H1;
+   if(value == "4h") return PERIOD_H4;
+   if(value == "1d") return PERIOD_D1;
+   return PERIOD_H1;
+}
+
+//+------------------------------------------------------------------+
+string BuildQuotesJson()
+{
+   if(g_watchSymbolsCsv == "")
+      return "{}";
+
+   string symbols[];
+   int count = StringSplit(g_watchSymbolsCsv, ',', symbols);
+   string json = "{";
+   bool first = true;
+
+   for(int i = 0; i < count; i++)
+   {
+      string sym = symbols[i];
+      StringTrimLeft(sym);
+      StringTrimRight(sym);
+      if(sym == "")
+         continue;
+
+      if(!SymbolSelect(sym, true))
+         continue;
+
+      double bid = SymbolInfoDouble(sym, SYMBOL_BID);
+      double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
+      if(bid <= 0 || ask <= 0)
+         continue;
+
+      if(!first)
+         json += ",";
+      first = false;
+
+      int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+      json += "\"" + JsonEscape(sym) + "\":{";
+      json += "\"bid\":" + DoubleToString(bid, digits) + ",";
+      json += "\"ask\":" + DoubleToString(ask, digits) + ",";
+      json += "\"last\":" + DoubleToString((bid + ask) / 2.0, digits);
+      json += "}";
+   }
+
+   json += "}";
+   return json;
+}
+
+//+------------------------------------------------------------------+
+string BuildCandlesJson()
+{
+   if(g_candlePlanCsv == "")
+      return "{}";
+
+   string plans[];
+   int planCount = StringSplit(g_candlePlanCsv, ';', plans);
+   string json = "{";
+   bool firstKey = true;
+
+   for(int i = 0; i < planCount; i++)
+   {
+      string parts[];
+      if(StringSplit(plans[i], '|', parts) < 3)
+         continue;
+
+      string sym = parts[0];
+      string tf = parts[1];
+      int limit = (int)StringToInteger(parts[2]);
+      if(limit <= 0)
+         limit = 120;
+      if(limit > 300)
+         limit = 300;
+
+      StringTrimLeft(sym);
+      StringTrimRight(sym);
+      if(sym == "" || !SymbolSelect(sym, true))
+         continue;
+
+      ENUM_TIMEFRAMES period = TimeframeFromString(tf);
+      MqlRates rates[];
+      int copied = CopyRates(sym, period, 0, limit, rates);
+      if(copied <= 0)
+         continue;
+
+      string key = sym + ":" + tf;
+      if(!firstKey)
+         json += ",";
+      firstKey = false;
+
+      json += "\"" + JsonEscape(key) + "\":[";
+      int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+      for(int j = 0; j < copied; j++)
+      {
+         if(j > 0)
+            json += ",";
+         json += "{";
+         json += "\"time\":\"" + TimeToString(rates[j].time, TIME_DATE|TIME_MINUTES) + "\",";
+         json += "\"open\":" + DoubleToString(rates[j].open, digits) + ",";
+         json += "\"high\":" + DoubleToString(rates[j].high, digits) + ",";
+         json += "\"low\":" + DoubleToString(rates[j].low, digits) + ",";
+         json += "\"close\":" + DoubleToString(rates[j].close, digits);
+         json += "}";
+      }
+      json += "]";
+   }
+
+   json += "}";
+   return json;
 }
 
 //+------------------------------------------------------------------+
@@ -393,6 +602,8 @@ void PollServer()
 
    if(status < 200 || status >= 300)
       return;
+
+   ParseWatchPlan(response);
 
    int commandId = 0;
    string action = "";

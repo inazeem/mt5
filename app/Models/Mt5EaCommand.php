@@ -20,6 +20,9 @@ class Mt5EaCommand extends Model
     protected $fillable = [
         'mt5_ea_terminal_id',
         'account_login',
+        'mt5_instance_key',
+        'bot_trade_log_id',
+        'bot_key',
         'action',
         'symbol',
         'lot',

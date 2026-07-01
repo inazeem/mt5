@@ -3,10 +3,13 @@
 namespace App\Services;
 
 use App\Models\AppSetting;
+use App\Models\BotTradeLog;
 use App\Models\Mt5EaCommand;
 use App\Models\Mt5EaTerminal;
+use App\Models\Ticker;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
+use RuntimeException;
 
 class EaBridgeService
 {
@@ -47,9 +50,89 @@ class EaBridgeService
             && hash_equals((string) $settings->ea_bridge_token, $token);
     }
 
+    public function resolveTerminal(?string $instanceKey): Mt5EaTerminal
+    {
+        if ($instanceKey !== null && trim($instanceKey) !== '') {
+            $terminal = Mt5EaTerminal::query()
+                ->where('instance_key', trim($instanceKey))
+                ->where('enabled', true)
+                ->first();
+
+            if ($terminal === null) {
+                throw new RuntimeException('MT5 instance "'.$instanceKey.'" is not registered or is disabled.');
+            }
+
+            if (! $terminal->isOnline()) {
+                throw new RuntimeException('MT5 instance "'.$terminal->label().'" is offline.');
+            }
+
+            return $terminal;
+        }
+
+        $terminal = Mt5EaTerminal::query()
+            ->where('enabled', true)
+            ->where('last_seen_at', '>=', now()->subSeconds(10))
+            ->orderByDesc('last_seen_at')
+            ->first();
+
+        if ($terminal === null) {
+            throw new RuntimeException('No online EA terminal is available. Attach LaravelBridge in MT5.');
+        }
+
+        return $terminal;
+    }
+
+    /**
+     * @return array<int, Mt5EaTerminal>
+     */
+    public function selectableTerminals(): array
+    {
+        return Mt5EaTerminal::query()
+            ->where('enabled', true)
+            ->orderBy('display_name')
+            ->orderBy('instance_key')
+            ->orderByDesc('last_seen_at')
+            ->get()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function updateTerminalInstance(int $terminalId, array $data): Mt5EaTerminal
+    {
+        $terminal = Mt5EaTerminal::query()->findOrFail($terminalId);
+        $instanceKey = trim((string) ($data['instance_key'] ?? $terminal->instance_key ?? ''));
+
+        if ($instanceKey === '') {
+            $instanceKey = Mt5EaTerminal::makeUniqueInstanceKey(
+                (string) ($data['display_name'] ?? $terminal->broker_company ?? $terminal->account_login)
+            );
+        } else {
+            $instanceKey = Mt5EaTerminal::slugifyInstanceKey($instanceKey);
+            $exists = Mt5EaTerminal::query()
+                ->where('instance_key', $instanceKey)
+                ->where('id', '!=', $terminal->id)
+                ->exists();
+            if ($exists) {
+                throw new InvalidArgumentException('Instance key "'.$instanceKey.'" is already in use.');
+            }
+        }
+
+        $terminal->fill([
+            'instance_key' => $instanceKey,
+            'display_name' => trim((string) ($data['display_name'] ?? $terminal->display_name ?? '')) ?: null,
+            'enabled' => array_key_exists('enabled', $data) ? (bool) $data['enabled'] : $terminal->enabled,
+            'is_demo' => array_key_exists('is_demo', $data) ? (bool) $data['is_demo'] : $terminal->is_demo,
+        ]);
+        $terminal->save();
+
+        return $terminal;
+    }
+
     /**
      * @param  array<string, mixed>  $payload
-     * @return array{ok: bool, command: ?array<string, mixed>}
+     * @return array<string, mixed>
      */
     public function handlePoll(array $payload): array
     {
@@ -57,10 +140,13 @@ class EaBridgeService
         $this->applyCommandResult($payload['command_result'] ?? null);
 
         $command = $this->claimNextCommand($terminal);
+        $watchPlan = $this->buildWatchPlan($terminal);
 
         return [
             'ok' => true,
             'command' => $command?->toEaPayload(),
+            'watch_symbols' => $watchPlan['symbols'],
+            'candle_requests' => $watchPlan['candle_requests'],
         ];
     }
 
@@ -75,21 +161,34 @@ class EaBridgeService
             throw new InvalidArgumentException('Unsupported action: '.$action);
         }
 
+        $terminal = null;
+        $instanceKey = trim((string) ($data['mt5_instance_key'] ?? ''));
         $accountLogin = isset($data['account_login']) ? (int) $data['account_login'] : null;
-        $terminalId = null;
 
-        if ($accountLogin !== null) {
+        if ($instanceKey !== '') {
+            $terminal = Mt5EaTerminal::query()
+                ->where('instance_key', $instanceKey)
+                ->where('enabled', true)
+                ->first();
+
+            if ($terminal === null) {
+                throw new InvalidArgumentException('Unknown MT5 instance key: '.$instanceKey);
+            }
+
+            $accountLogin = $terminal->account_login;
+        } elseif ($accountLogin !== null) {
             $terminal = Mt5EaTerminal::query()
                 ->where('account_login', $accountLogin)
                 ->orderByDesc('last_seen_at')
                 ->first();
-
-            $terminalId = $terminal?->id;
         }
 
         return Mt5EaCommand::query()->create([
-            'mt5_ea_terminal_id' => $terminalId,
+            'mt5_ea_terminal_id' => $terminal?->id,
             'account_login' => $accountLogin,
+            'mt5_instance_key' => $instanceKey !== '' ? $instanceKey : $terminal?->instance_key,
+            'bot_trade_log_id' => isset($data['bot_trade_log_id']) ? (int) $data['bot_trade_log_id'] : null,
+            'bot_key' => isset($data['bot_key']) ? trim((string) $data['bot_key']) : null,
             'action' => $action,
             'symbol' => isset($data['symbol']) ? strtoupper(trim((string) $data['symbol'])) : null,
             'lot' => isset($data['lot']) ? (float) $data['lot'] : null,
@@ -113,24 +212,138 @@ class EaBridgeService
             throw new InvalidArgumentException('login is required.');
         }
 
-        return Mt5EaTerminal::query()->updateOrCreate(
-            [
-                'account_login' => $login,
-                'server' => $server !== '' ? $server : null,
-            ],
-            [
-                'terminal_name' => $payload['terminal_name'] ?? null,
-                'broker_company' => $payload['broker_company'] ?? null,
-                'balance' => isset($payload['balance']) ? (float) $payload['balance'] : null,
-                'equity' => isset($payload['equity']) ? (float) $payload['equity'] : null,
-                'margin' => isset($payload['margin']) ? (float) $payload['margin'] : null,
-                'free_margin' => isset($payload['free_margin']) ? (float) $payload['free_margin'] : null,
-                'currency' => $payload['currency'] ?? null,
-                'trade_allowed' => (bool) ($payload['trade_allowed'] ?? false),
-                'positions' => is_array($payload['positions'] ?? null) ? $payload['positions'] : [],
-                'last_seen_at' => now(),
-            ]
-        );
+        $terminal = Mt5EaTerminal::query()->firstOrNew([
+            'account_login' => $login,
+            'server' => $server !== '' ? $server : null,
+        ]);
+
+        if (! $terminal->exists) {
+            $terminal->instance_key = Mt5EaTerminal::makeUniqueInstanceKey(
+                trim((string) ($payload['instance_key'] ?? $payload['broker_company'] ?? 'terminal-'.$login))
+            );
+            $terminal->enabled = true;
+            $terminal->is_demo = true;
+        } elseif (trim((string) ($payload['instance_key'] ?? '')) !== '' && empty($terminal->instance_key)) {
+            $candidate = Mt5EaTerminal::slugifyInstanceKey((string) $payload['instance_key']);
+            if (! Mt5EaTerminal::query()->where('instance_key', $candidate)->where('id', '!=', $terminal->id)->exists()) {
+                $terminal->instance_key = $candidate;
+            }
+        }
+
+        $terminal->fill([
+            'terminal_name' => $payload['terminal_name'] ?? $terminal->terminal_name,
+            'broker_company' => $payload['broker_company'] ?? $terminal->broker_company,
+            'balance' => isset($payload['balance']) ? (float) $payload['balance'] : $terminal->balance,
+            'equity' => isset($payload['equity']) ? (float) $payload['equity'] : $terminal->equity,
+            'margin' => isset($payload['margin']) ? (float) $payload['margin'] : $terminal->margin,
+            'free_margin' => isset($payload['free_margin']) ? (float) $payload['free_margin'] : $terminal->free_margin,
+            'currency' => $payload['currency'] ?? $terminal->currency,
+            'trade_allowed' => (bool) ($payload['trade_allowed'] ?? $terminal->trade_allowed),
+            'positions' => is_array($payload['positions'] ?? null) ? $payload['positions'] : [],
+            'market_quotes' => is_array($payload['quotes'] ?? null) ? $payload['quotes'] : ($terminal->market_quotes ?? []),
+            'market_candles' => $this->mergeMarketCandles(
+                is_array($terminal->market_candles) ? $terminal->market_candles : [],
+                is_array($payload['candles'] ?? null) ? $payload['candles'] : []
+            ),
+            'last_seen_at' => now(),
+        ]);
+        $terminal->save();
+
+        return $terminal;
+    }
+
+    /**
+     * @param  array<string, array<int, array<string, mixed>>>  $existing
+     * @param  array<string, array<int, array<string, mixed>>>  $incoming
+     * @return array<string, array<int, array<string, mixed>>>
+     */
+    private function mergeMarketCandles(array $existing, array $incoming): array
+    {
+        foreach ($incoming as $key => $candles) {
+            if (is_array($candles) && $candles !== []) {
+                $existing[$key] = $candles;
+            }
+        }
+
+        return $existing;
+    }
+
+    /**
+     * @return array{symbols: array<int, string>, candle_requests: array<int, array<string, mixed>>}
+     */
+    private function buildWatchPlan(Mt5EaTerminal $terminal): array
+    {
+        $symbols = [];
+        $timeframes = [];
+        $settings = AppSetting::singleton();
+        $profiles = is_array($settings->bot_profiles) ? $settings->bot_profiles : [];
+
+        foreach ($profiles as $profile) {
+            if (! is_array($profile) || ! ($profile['enabled'] ?? true)) {
+                continue;
+            }
+
+            $profileInstance = trim((string) ($profile['mt5_instance_key'] ?? ''));
+            if ($profileInstance !== '' && $terminal->instance_key !== null && $profileInstance !== $terminal->instance_key) {
+                continue;
+            }
+
+            foreach (['symbols', 'preferred_symbols'] as $field) {
+                if (! is_array($profile[$field] ?? null)) {
+                    continue;
+                }
+                foreach ($profile[$field] as $symbol) {
+                    $symbols[] = strtoupper(trim((string) $symbol));
+                }
+            }
+
+            foreach (['signal_timeframes', 'signal_timeframe', 'entry_timeframe'] as $field) {
+                $value = $profile[$field] ?? null;
+                if (is_array($value)) {
+                    foreach ($value as $tf) {
+                        $timeframes[] = strtolower(trim((string) $tf));
+                    }
+                } elseif (is_string($value) && $value !== '') {
+                    $timeframes[] = strtolower(trim($value));
+                }
+            }
+        }
+
+        if ($symbols === []) {
+            $symbols = Ticker::query()
+                ->where('is_active', true)
+                ->orderBy('symbol')
+                ->limit(12)
+                ->pluck('symbol')
+                ->map(static fn ($symbol) => strtoupper((string) $symbol))
+                ->all();
+        }
+
+        if ($symbols === []) {
+            $symbols = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD'];
+        }
+
+        $symbols = array_values(array_unique(array_filter($symbols)));
+        $timeframes = array_values(array_unique(array_filter($timeframes)));
+        if ($timeframes === []) {
+            $timeframes = ['15m', '1h', '4h'];
+        }
+
+        $candleRequests = [];
+        foreach (array_slice($symbols, 0, 8) as $symbol) {
+            foreach (array_slice($timeframes, 0, 3) as $timeframe) {
+                $candleRequests[] = [
+                    'symbol' => $symbol,
+                    'timeframe' => $timeframe,
+                    'limit' => 120,
+                ];
+            }
+        }
+
+        return [
+            'symbols' => array_slice($symbols, 0, 12),
+            'candle_requests' => array_slice($candleRequests, 0, 12),
+        ];
     }
 
     /**
@@ -157,6 +370,27 @@ class EaBridgeService
             'completed_at' => now(),
         ]);
         $command->save();
+
+        if ($command->bot_trade_log_id) {
+            $log = BotTradeLog::query()->find($command->bot_trade_log_id);
+            if ($log) {
+                $ticket = isset($result['ticket']) ? (int) $result['ticket'] : null;
+                $log->fill([
+                    'status' => $ok ? 'success' : 'failed',
+                    'position_id' => $ticket ? (string) $ticket : $log->position_id,
+                    'order_id' => 'ea-cmd-'.$command->id,
+                    'error_message' => $ok ? null : (string) ($result['message'] ?? 'EA execution failed'),
+                    'meta_payload' => array_merge(is_array($log->meta_payload) ? $log->meta_payload : [], [
+                        'ea_command_id' => $command->id,
+                        'ea_result' => $result,
+                    ]),
+                    'message' => $ok
+                        ? 'Trade executed via EA bridge command #'.$command->id.'.'
+                        : 'EA bridge command #'.$command->id.' failed.',
+                ]);
+                $log->save();
+            }
+        }
     }
 
     private function claimNextCommand(Mt5EaTerminal $terminal): ?Mt5EaCommand
@@ -164,8 +398,18 @@ class EaBridgeService
         $command = Mt5EaCommand::query()
             ->where('status', Mt5EaCommand::STATUS_PENDING)
             ->where(function ($query) use ($terminal) {
-                $query->whereNull('account_login')
-                    ->orWhere('account_login', $terminal->account_login);
+                $query->where('mt5_ea_terminal_id', $terminal->id)
+                    ->orWhere(function ($scoped) use ($terminal) {
+                        $scoped->whereNull('mt5_ea_terminal_id')
+                            ->where(function ($loginScope) use ($terminal) {
+                                $loginScope->whereNull('account_login')
+                                    ->orWhere('account_login', $terminal->account_login);
+                            });
+                    });
+            })
+            ->where(function ($query) use ($terminal) {
+                $query->whereNull('mt5_instance_key')
+                    ->orWhere('mt5_instance_key', $terminal->instance_key);
             })
             ->orderBy('id')
             ->lockForUpdate()
@@ -178,6 +422,7 @@ class EaBridgeService
         $command->fill([
             'mt5_ea_terminal_id' => $terminal->id,
             'account_login' => $terminal->account_login,
+            'mt5_instance_key' => $terminal->instance_key,
             'status' => Mt5EaCommand::STATUS_SENT,
             'sent_at' => now(),
         ]);

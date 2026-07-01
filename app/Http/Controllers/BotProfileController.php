@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\AppSetting;
+use App\Models\Mt5EaTerminal;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
@@ -22,7 +23,13 @@ class BotProfileController extends Controller
 
     public function create()
     {
-        return view('bot-profiles.create');
+        $mt5Instances = Mt5EaTerminal::query()
+            ->where('enabled', true)
+            ->orderBy('display_name')
+            ->orderBy('instance_key')
+            ->get();
+
+        return view('bot-profiles.create', compact('mt5Instances'));
     }
 
     public function store(Request $request)
@@ -84,6 +91,7 @@ class BotProfileController extends Controller
             'signal_timeframes.*'    => ['required', 'in:5m,15m,30m,1h,4h'],
             'signal_timeframe'       => ['nullable', 'in:5m,15m,30m,1h,4h'],
             'entry_timeframe'        => ['nullable', 'in:5m,15m,30m,1h,4h'],
+            'mt5_instance_key'       => ['nullable', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
         ]);
 
         $settings = AppSetting::singleton();
@@ -158,6 +166,7 @@ class BotProfileController extends Controller
             'signal_timeframes' => $signalTimeframes,
             'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
             'entry_timeframe' => $entryTimeframe,
+            'mt5_instance_key' => trim((string) ($validated['mt5_instance_key'] ?? '')) ?: null,
         ];
 
         $profiles[] = $newProfile;
@@ -177,7 +186,13 @@ class BotProfileController extends Controller
             abort(404, 'Bot profile not found.');
         }
 
-        return view('bot-profiles.edit', compact('profile'));
+        $mt5Instances = Mt5EaTerminal::query()
+            ->where('enabled', true)
+            ->orderBy('display_name')
+            ->orderBy('instance_key')
+            ->get();
+
+        return view('bot-profiles.edit', compact('profile', 'mt5Instances'));
     }
 
     public function update(Request $request, string $key)
@@ -238,6 +253,7 @@ class BotProfileController extends Controller
             'signal_timeframes.*'    => ['required', 'in:5m,15m,30m,1h,4h'],
             'signal_timeframe'       => ['nullable', 'in:5m,15m,30m,1h,4h'],
             'entry_timeframe'        => ['nullable', 'in:5m,15m,30m,1h,4h'],
+            'mt5_instance_key'       => ['nullable', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
         ]);
 
         $settings = AppSetting::singleton();
@@ -309,6 +325,7 @@ class BotProfileController extends Controller
             'signal_timeframes' => $signalTimeframes,
             'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
             'entry_timeframe' => $entryTimeframe,
+            'mt5_instance_key' => trim((string) ($validated['mt5_instance_key'] ?? '')) ?: null,
         ]);
 
         $settings->bot_profiles = $profiles;
