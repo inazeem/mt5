@@ -23,6 +23,7 @@ class Mt5EaCommand extends Model
         'mt5_instance_key',
         'bot_trade_log_id',
         'bot_key',
+        'source',
         'action',
         'symbol',
         'lot',

@@ -58,17 +58,20 @@ Broker
 
 ## Multiple MT5 instances + bot profile mapping
 
-### 1. One token, many terminals
+### 1. One instance = one API token
 
-Use the **same** API token on every MT5 install. Each instance is identified by `account_login` + `server` and an **`instance_key`**.
+Each MT5 install gets its **own** API token. Create the instance in Laravel first, copy that token into `InpApiToken` on that chart only. Authentication binds the EA to that instance row on the first poll.
 
 ### 2. Register instances
 
-1. Attach `LaravelBridge` on each MT5 account (different installs or same install, different logins).
-2. Open **EA Bridge** → **MT5 Instance Profiles**.
-3. Set a unique **Instance Key** (e.g. `demo-pepperstone`, `live-icmarkets`) and display name per terminal.
+1. Open **MT5 Instances** (`/ea-bridge`).
+2. Click **Create Instance** — name it by broker and environment (e.g. `Pepperstone Demo`, `IC Markets Live`).
+3. Copy the revealed **API Token** into MT5 → `LaravelBridge` → `InpApiToken`.
+4. Attach `LaravelBridge` on that MT5 account. After the first poll, login/server bind to the instance.
 
-Optional EA input: `InpInstanceKey` — sent on poll so Laravel can match before you name it in the UI.
+Optional EA input: `InpInstanceKey` — must match the Laravel **Instance Key** if you set one manually.
+
+Use **Test Trade** on the instance row (when **Online**) to queue a small demo buy and confirm the EA executes it.
 
 ### 3. Link bot profiles
 
@@ -90,12 +93,12 @@ In **Bot Profiles** → **MT5 Instance Key**, choose which terminal receives tha
 
 ### 4. Multiple MT5 installs checklist
 
-| Install | Account | InpInstanceKey | Laravel instance_key |
-|---------|---------|----------------|----------------------|
-| MT5 #1  | Demo A  | `demo-a`       | `demo-a`             |
-| MT5 #2  | Demo B  | `demo-b`       | `demo-b`             |
+| Install | Display name | Instance key | Token |
+|---------|--------------|--------------|-------|
+| MT5 #1  | Pepperstone Demo | `pepperstone-demo` | unique per instance |
+| MT5 #2  | IC Markets Live  | `ic-markets-live`  | unique per instance |
 
-Bot profile `scalper` → `demo-a`, profile `swing` → `demo-b`.
+Bot profile `scalper` → `pepperstone-demo`, profile `swing` → `ic-markets-live`.
 
 ---
 
@@ -109,31 +112,31 @@ php artisan migrate
 
 Creates:
 
-- `mt5_ea_terminals` — registered EA instances (login, balance, last seen, positions)
-- `mt5_ea_commands` — queued commands and their status
-- `ea_bridge_token` column on `app_settings`
+- `mt5_ea_terminals` — registered EA instances (name, demo/live, per-instance API token, login, balance, last seen, positions)
+- `mt5_ea_commands` — queued commands and their status (`source`: `test`, `manual`, `bot`)
 
-### 2. Get your API token
+### 2. Get your API token (per instance)
 
 **Option A — Web UI**
 
 1. Log in to Laravel.
-2. Open **EA Bridge** in the navigation (`/ea-bridge`).
-3. Copy the **API Token** field.
+2. Open **MT5 Instances** (`/ea-bridge`).
+3. **Create Instance** or use **Regenerate Token** on an existing row.
+4. Copy that instance's **API Token** into `InpApiToken` on the matching MT5 chart.
 
 **Option B — Artisan**
 
 ```bash
-php artisan ea:token
+php artisan ea:token pepperstone-demo
 ```
 
-Regenerate (invalidates the old token in MT5):
+Regenerate for one instance (invalidates the old token in that MT5):
 
 ```bash
-php artisan ea:token --regenerate
+php artisan ea:token pepperstone-demo --regenerate
 ```
 
-The token is stored encrypted in `app_settings.ea_bridge_token`. It is auto-created on first access.
+Tokens are stored encrypted on each `mt5_ea_terminals` row (`api_token` / `api_token_hash`).
 
 ### 3. Verify the poll URL
 
@@ -411,8 +414,8 @@ Use `https://mt5.test` (or your Herd URL) in both MT5 WebRequest whitelist and `
 
 ## Security notes
 
-- Treat the EA bridge token like a password. Anyone with the token can queue trades for connected terminals.
-- Regenerate the token if it is exposed (`/ea-bridge` → **Regenerate Token** or `php artisan ea:token --regenerate`).
+- Treat each instance API token like a password. Anyone with the token can queue trades for that terminal.
+- Regenerate the token if it is exposed (`/ea-bridge` → **Regenerate Token** on that instance, or `php artisan ea:token {instance} --regenerate`).
 - Keep `demo_only` enabled in Laravel settings until you trust the setup.
 - The `/ea-bridge` UI is protected by auth + `owner` middleware (same as the rest of the panel).
 
@@ -429,13 +432,13 @@ php artisan test --filter=EaBridgeTest
 ## Quick checklist
 
 - [ ] `php artisan migrate`
-- [ ] Copy API token from `/ea-bridge` or `php artisan ea:token`
+- [ ] Create each instance at `/ea-bridge` and copy its API token (or `php artisan ea:token {instance}`)
 - [ ] Copy `LaravelBridge.mq5` into MT5 `MQL5/Experts/` and compile
 - [ ] Whitelist Laravel URL in MT5 WebRequest settings
-- [ ] Attach EA with correct `InpServerUrl` and `InpApiToken`
+- [ ] Attach EA with correct `InpServerUrl` and that instance's `InpApiToken`
 - [ ] Algo Trading enabled (green button)
-- [ ] Terminal shows **Online** on `/ea-bridge`
-- [ ] Queue a small **demo** trade and confirm `completed` status
+- [ ] Instance shows **Online** on `/ea-bridge`
+- [ ] Click **Test Trade** or queue a small **demo** trade and confirm `completed` status
 
 ---
 

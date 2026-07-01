@@ -79,7 +79,7 @@
 
                     @include('bot-profiles._mt5-instance', [
                         'mt5Instances' => $mt5Instances,
-                        'selectedInstanceKey' => old('mt5_instance_key'),
+                        'selectedInstanceKeys' => old('mt5_instance_keys', []),
                     ])
 
                     <div class="rounded-lg border border-gray-200 p-4">

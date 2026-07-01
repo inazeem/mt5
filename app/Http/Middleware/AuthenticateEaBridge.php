@@ -20,12 +20,16 @@ class AuthenticateEaBridge
             $token = substr($header, 7);
         }
 
-        if (! $this->eaBridge->tokenIsValid($token)) {
+        $terminal = $this->eaBridge->resolveTerminalFromToken($token);
+
+        if ($terminal === null) {
             return response()->json([
                 'ok' => false,
                 'error' => 'Unauthorized',
             ], 401);
         }
+
+        $request->attributes->set('ea_terminal', $terminal);
 
         return $next($request);
     }

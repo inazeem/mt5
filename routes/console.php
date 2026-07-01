@@ -8,6 +8,8 @@ use App\Services\AiService;
 use App\Services\AlpacaService;
 use App\Services\BotScoreCalculator;
 use App\Services\Brokers\BrokerResolver;
+use App\Services\Brokers\EaBridgeBroker;
+use App\Services\EaBridgeService;
 use App\Services\Mt5Service;
 use App\Services\TradingStrategies\IndicatorMath;
 use App\Services\TradingStrategies\StrategyFactory;
@@ -866,6 +868,9 @@ Artisan::command('mt5:auto-forex
         $cycleBroker = $brokerResolver->forProfile($profileTickerCategories, $botProfile);
         $usesAlpacaCycle = $brokerResolver->usesAlpaca($cycleBroker);
         $usesEaBridgeCycle = $brokerResolver->usesEaBridge($cycleBroker);
+        $eaProfileInstanceKeys = $usesEaBridgeCycle
+            ? EaBridgeService::profileInstanceKeys($botProfile)
+            : [];
 
         if ($usesEaBridgeCycle) {
             try {
@@ -1275,9 +1280,28 @@ Artisan::command('mt5:auto-forex
         }
 
         // ── §11 max open positions + §13 SYMBOL UNIVERSE ───────────────────────────
-        $openSnapshot = $cycleBroker->getOpenTradeSnapshot();
-        $positionsPayload = $openSnapshot['positions'] ?? null;
-        $positions = (is_array($positionsPayload) && array_is_list($positionsPayload)) ? $positionsPayload : [];
+        $positions = [];
+        if ($usesEaBridgeCycle && count($eaProfileInstanceKeys) > 1) {
+            $eaBridgeBroker = app(EaBridgeBroker::class);
+            foreach ($eaProfileInstanceKeys as $instanceKey) {
+                try {
+                    $instanceSnapshot = $eaBridgeBroker->forInstance($instanceKey)->getOpenTradeSnapshot();
+                    $instancePositions = $instanceSnapshot['positions'] ?? null;
+                    if (is_array($instancePositions) && array_is_list($instancePositions)) {
+                        foreach ($instancePositions as $position) {
+                            $positions[] = $position;
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    $this->warn('  Could not load open positions for instance '.$instanceKey.': '.$e->getMessage());
+                }
+            }
+        } else {
+            $openSnapshot = $cycleBroker->getOpenTradeSnapshot();
+            $positionsPayload = $openSnapshot['positions'] ?? null;
+            $positions = (is_array($positionsPayload) && array_is_list($positionsPayload)) ? $positionsPayload : [];
+        }
+
         if (!$testMode && count($positions) >= $maxOpenPositions) {
             $msg = 'Skipped entries: max open positions reached ('.count($positions).'/'.$maxOpenPositions.').';
             $this->line($msg);
@@ -2393,74 +2417,105 @@ Artisan::command('mt5:auto-forex
 
             try {
                 // ── §20 TRADE EXECUTION (broker placeOrder) ───────────────────────────
-                $result = $cycleBroker->placeOrder($symbol, $lotSize, $executionSide, [[
+                $executionBrokers = [$cycleBroker];
+                if ($usesEaBridgeCycle && count($eaProfileInstanceKeys) > 1) {
+                    $executionBrokers = [];
+                    $eaBridgeBroker = app(EaBridgeBroker::class);
+                    foreach ($eaProfileInstanceKeys as $instanceKey) {
+                        try {
+                            $executionBrokers[] = $eaBridgeBroker->forInstance($instanceKey);
+                        } catch (\Throwable $instanceError) {
+                            $this->warn('  EA instance '.$instanceKey.' skipped for execution: '.$instanceError->getMessage());
+                        }
+                    }
+
+                    if ($executionBrokers === []) {
+                        throw new \RuntimeException('No selected EA instances are online for execution.');
+                    }
+                }
+
+                $exitLegs = [[
                     'close_percent' => 100,
                     'take_profit' => $takeProfit,
                     'stop_loss' => $stopLoss,
-                ]]);
-                $isEaQueued = ($result['mode'] ?? '') === 'ea_queued';
+                ]];
+
                 $opened++;
                 $openBySymbol[$symbol] = true;
                 $openedTodayBySymbol[$symbolKey] = $symbolTradesToday + 1;
-                $firstOrder = is_array($result['orders'][0] ?? null) ? $result['orders'][0] : null;
-                $firstResponse = is_array($firstOrder['response'] ?? null) ? $firstOrder['response'] : [];
-                $orderId = trim((string) ($firstResponse['orderId'] ?? ''));
-                $positionId = trim((string) ($firstResponse['positionId'] ?? ''));
-                $tradeRef = $positionId !== '' ? $positionId : ($orderId !== '' ? $orderId : (string) $symbol);
-                $executedLotSize = is_numeric($result['order_qty'] ?? null) ? (float) $result['order_qty'] : $lotSize;
 
-                $openMessage = ($isEaQueued ? 'Queued ' : 'Opened ').$executionSide.' '.$symbol.' (recommended '.$recommendedSide.') TP='.$takeProfit.' SL='.$stopLoss;
-                if ($executedLotSize > $lotSize) {
-                    $openMessage .= ' qty='.$executedLotSize.' (profile lot '.$lotSize.' bumped for Alpaca $10 min notional)';
-                }
-                if ($isEaQueued) {
-                    $openMessage .= ' [EA command #'.(int) ($result['command_id'] ?? 0).']';
-                }
-                $this->info($openMessage);
-                Log::info('Auto bot opened trade', [
-                    'symbol' => $symbol,
-                    'recommended_side' => $recommendedSide,
-                    'side' => $executionSide,
-                    'result' => $result,
-                ]);
-                $tradeLog = BotTradeLog::query()->create(array_merge($botLogDefaults, [
-                    'event_type' => 'trade_open',
-                    'status' => $isEaQueued ? 'pending' : 'success',
-                    'symbol' => $symbol,
-                    'side' => $executionSide,
-                    'order_id' => $orderId !== '' ? $orderId : null,
-                    'position_id' => $positionId !== '' ? $positionId : null,
-                    'linked_trade' => 'TRADE #'.$tradeRef,
-                    'trade_outcome' => 'PENDING',
-                    'lot_size' => $executedLotSize,
-                    'entry_price' => $entry,
-                    'take_profit' => $takeProfit,
-                    'stop_loss' => $stopLoss,
-                    'spread_pips' => $spreadPips,
-                    'signal_delta_pips' => $signalDeltaPips,
-                    'ai_provider' => $aiProvider,
-                    'ai_decision' => $aiDecision,
-                    'ai_confidence' => $aiConfidence,
-                    'ai_summary' => $aiSummary,
-                    'meta_payload' => array_merge($scoreMetaPayload(), [
+                foreach ($executionBrokers as $brokerIndex => $execBroker) {
+                    $result = $execBroker->placeOrder($symbol, $lotSize, $executionSide, $exitLegs);
+                    $isEaQueued = ($result['mode'] ?? '') === 'ea_queued';
+                    $firstOrder = is_array($result['orders'][0] ?? null) ? $result['orders'][0] : null;
+                    $firstResponse = is_array($firstOrder['response'] ?? null) ? $firstOrder['response'] : [];
+                    $orderId = trim((string) ($firstResponse['orderId'] ?? ''));
+                    $positionId = trim((string) ($firstResponse['positionId'] ?? ''));
+                    $tradeRef = $positionId !== '' ? $positionId : ($orderId !== '' ? $orderId : (string) $symbol);
+                    $executedLotSize = is_numeric($result['order_qty'] ?? null) ? (float) $result['order_qty'] : $lotSize;
+
+                    $openMessage = ($isEaQueued ? 'Queued ' : 'Opened ').$executionSide.' '.$symbol.' (recommended '.$recommendedSide.') TP='.$takeProfit.' SL='.$stopLoss;
+                    if (count($executionBrokers) > 1 && $brokerIndex > 0) {
+                        $openMessage .= ' [mirrored instance '.($brokerIndex + 1).'/'.count($executionBrokers).']';
+                    }
+                    if ($executedLotSize > $lotSize) {
+                        $openMessage .= ' qty='.$executedLotSize.' (profile lot '.$lotSize.' bumped for Alpaca $10 min notional)';
+                    }
+                    if ($isEaQueued) {
+                        $openMessage .= ' [EA command #'.(int) ($result['command_id'] ?? 0).']';
+                    }
+                    $this->info($openMessage);
+                    Log::info('Auto bot opened trade', [
+                        'symbol' => $symbol,
                         'recommended_side' => $recommendedSide,
-                        'execution_side' => $executionSide,
-                        'execution_mode' => $isEaQueued ? 'ea_bridge' : ($usesAlpacaCycle ? 'alpaca' : 'metaapi'),
-                        'ea_command_id' => $isEaQueued ? (int) ($result['command_id'] ?? 0) : null,
-                    ]),
-                    'meta_response' => $result,
-                    'message' => $isEaQueued
-                        ? 'Trade queued for EA bridge execution.'
-                        : 'Trade opened via broker API.',
-                ]));
+                        'side' => $executionSide,
+                        'result' => $result,
+                        'broker_index' => $brokerIndex,
+                    ]);
 
-                if ($isEaQueued && ! empty($result['command_id'])) {
-                    Mt5EaCommand::query()
-                        ->where('id', (int) $result['command_id'])
-                        ->update([
-                            'bot_trade_log_id' => $tradeLog->id,
-                            'bot_key' => $botKey,
-                        ]);
+                    $tradeLog = BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                        'event_type' => 'trade_open',
+                        'status' => $isEaQueued ? 'pending' : 'success',
+                        'symbol' => $symbol,
+                        'side' => $executionSide,
+                        'order_id' => $orderId !== '' ? $orderId : null,
+                        'position_id' => $positionId !== '' ? $positionId : null,
+                        'linked_trade' => 'TRADE #'.$tradeRef,
+                        'trade_outcome' => 'PENDING',
+                        'lot_size' => $executedLotSize,
+                        'entry_price' => $entry,
+                        'take_profit' => $takeProfit,
+                        'stop_loss' => $stopLoss,
+                        'spread_pips' => $spreadPips,
+                        'signal_delta_pips' => $signalDeltaPips,
+                        'ai_provider' => $aiProvider,
+                        'ai_decision' => $aiDecision,
+                        'ai_confidence' => $aiConfidence,
+                        'ai_summary' => $aiSummary,
+                        'meta_payload' => array_merge($scoreMetaPayload(), [
+                            'recommended_side' => $recommendedSide,
+                            'execution_side' => $executionSide,
+                            'execution_mode' => $isEaQueued ? 'ea_bridge' : ($usesAlpacaCycle ? 'alpaca' : 'metaapi'),
+                            'ea_command_id' => $isEaQueued ? (int) ($result['command_id'] ?? 0) : null,
+                            'mirrored_instance_index' => count($executionBrokers) > 1 ? $brokerIndex : null,
+                            'mirrored_instance_total' => count($executionBrokers) > 1 ? count($executionBrokers) : null,
+                        ]),
+                        'meta_response' => $result,
+                        'message' => $isEaQueued
+                            ? ($brokerIndex === 0
+                                ? 'Trade queued for EA bridge execution.'
+                                : 'Trade mirrored to additional EA instance.')
+                            : 'Trade opened via broker API.',
+                    ]));
+
+                    if ($isEaQueued && ! empty($result['command_id'])) {
+                        Mt5EaCommand::query()
+                            ->where('id', (int) $result['command_id'])
+                            ->update([
+                                'bot_trade_log_id' => $tradeLog->id,
+                                'bot_key' => $botKey,
+                            ]);
+                    }
                 }
 
                 if (!$usesEaBridgeCycle) {
@@ -3020,15 +3075,41 @@ Schedule::command('mt5:auto-forex --once')
     ->everyMinute()
     ->withoutOverlapping(120);
 
-Artisan::command('ea:token {--regenerate : Force a new token}', function () {
+Artisan::command('ea:token {instance? : Instance key} {--regenerate : Force a new token}', function () {
     $service = app(\App\Services\EaBridgeService::class);
-    $token = $this->option('regenerate')
-        ? $service->regenerateToken()
-        : $service->resolveToken();
+    $key = trim((string) $this->argument('instance'));
 
-    $this->line('EA bridge token:');
+    if ($key === '') {
+        $instances = \App\Models\Mt5EaTerminal::query()->orderBy('display_name')->get();
+        if ($instances->isEmpty()) {
+            $this->error('No MT5 instances. Create one at /ea-bridge first.');
+
+            return 1;
+        }
+
+        $this->line('MT5 instance tokens (use instance key with --regenerate):');
+        foreach ($instances as $instance) {
+            $this->line('- '.$instance->instance_key.' · '.$instance->label().' · '.($instance->isOnline() ? 'online' : 'offline'));
+        }
+
+        return 0;
+    }
+
+    $terminal = \App\Models\Mt5EaTerminal::query()->where('instance_key', $key)->first();
+    if ($terminal === null) {
+        $this->error('Unknown instance key: '.$key);
+
+        return 1;
+    }
+
+    $token = $this->option('regenerate')
+        ? $service->regenerateTerminalToken($terminal)
+        : (string) $terminal->api_token;
+
+    $this->line('Instance: '.$terminal->label().' ('.$terminal->instance_key.')');
+    $this->line('Token:');
     $this->line($token);
     $this->line('Poll URL: '.url('/api/ea/poll'));
 
     return 0;
-})->purpose('Show or regenerate the MT5 EA bridge API token.');
+})->purpose('Show or regenerate per-instance MT5 EA API tokens.');

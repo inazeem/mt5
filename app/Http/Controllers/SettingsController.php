@@ -215,6 +215,13 @@ class SettingsController extends Controller
                 'preferred_hours_utc' => $normalizeHours($profile['preferred_hours_utc'] ?? null),
                 'blocked_hours_utc' => $normalizeHours($profile['blocked_hours_utc'] ?? null),
                 'preferred_symbols' => $normalizeSymbols($profile['preferred_symbols'] ?? null),
+                'mt5_instance_keys' => isset($profile['mt5_instance_keys']) && is_array($profile['mt5_instance_keys'])
+                    ? array_values(array_filter(array_map(static fn ($k) => trim((string) $k), $profile['mt5_instance_keys']), static fn ($k) => $k !== ''))
+                    : (
+                        trim((string) ($profile['mt5_instance_key'] ?? '')) !== ''
+                            ? [trim((string) $profile['mt5_instance_key'])]
+                            : null
+                    ),
                 'mt5_instance_key' => trim((string) ($profile['mt5_instance_key'] ?? '')) ?: null,
                 'signal_timeframe' => in_array(strtolower(trim((string) ($profile['signal_timeframe'] ?? ''))), self::ALLOWED_SIGNAL_TIMEFRAMES, true)
                     ? strtolower(trim((string) ($profile['signal_timeframe'] ?? '')))

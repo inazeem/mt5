@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Mt5EaTerminal;
 use App\Services\EaBridgeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -36,7 +37,9 @@ class EaBridgeController extends Controller
         ]);
 
         try {
-            $response = DB::transaction(static fn () => $eaBridge->handlePoll($validated));
+            /** @var Mt5EaTerminal $terminal */
+            $terminal = $request->attributes->get('ea_terminal');
+            $response = DB::transaction(static fn () => $eaBridge->handlePoll($terminal, $validated));
 
             return response()->json($response);
         } catch (InvalidArgumentException $e) {

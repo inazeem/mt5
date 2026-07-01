@@ -13,6 +13,8 @@ class Mt5EaTerminal extends Model
         'display_name',
         'enabled',
         'is_demo',
+        'api_token',
+        'api_token_hash',
         'account_login',
         'server',
         'terminal_name',
@@ -29,11 +31,17 @@ class Mt5EaTerminal extends Model
         'last_seen_at',
     ];
 
+    protected $hidden = [
+        'api_token',
+        'api_token_hash',
+    ];
+
     protected function casts(): array
     {
         return [
             'enabled' => 'boolean',
             'is_demo' => 'boolean',
+            'api_token' => 'encrypted',
             'account_login' => 'integer',
             'balance' => 'float',
             'equity' => 'float',
@@ -61,6 +69,16 @@ class Mt5EaTerminal extends Model
         return $this->last_seen_at->greaterThan(now()->subSeconds($seconds));
     }
 
+    public function isBound(): bool
+    {
+        return $this->account_login !== null && $this->account_login > 0;
+    }
+
+    public function environmentLabel(): string
+    {
+        return $this->is_demo ? 'Demo' : 'Live';
+    }
+
     public function label(): string
     {
         if ($this->display_name) {
@@ -71,7 +89,7 @@ class Mt5EaTerminal extends Model
             return $this->instance_key;
         }
 
-        return (string) $this->account_login;
+        return $this->isBound() ? (string) $this->account_login : 'Unnamed instance';
     }
 
     public static function slugifyInstanceKey(string $value): string
@@ -93,5 +111,10 @@ class Mt5EaTerminal extends Model
         }
 
         return $candidate;
+    }
+
+    public static function hashToken(string $token): string
+    {
+        return hash('sha256', $token);
     }
 }

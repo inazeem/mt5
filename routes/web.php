@@ -37,10 +37,14 @@ Route::middleware(['auth', 'owner'])->group(function () {
     Route::get('/bot/analytics/export', [BotController::class, 'exportCsv'])->name('bot.analytics.export');
     Route::get('/bot/alerts/export', [BotController::class, 'exportCsv'])->name('bot.alerts.export');
     Route::post('/bot/auto-settings', [BotController::class, 'updateAutoSettings'])->name('bot.auto-settings');
-    Route::post('/ea-bridge/terminals/{terminal}', [EaBridgeWebController::class, 'updateTerminal'])->name('ea-bridge.terminals.update');
     Route::get('/ea-bridge', [EaBridgeWebController::class, 'index'])->name('ea-bridge.index');
+    Route::post('/ea-bridge/instances', [EaBridgeWebController::class, 'store'])->name('ea-bridge.instances.store');
+    Route::post('/ea-bridge/terminals/{terminal}', [EaBridgeWebController::class, 'updateTerminal'])->name('ea-bridge.terminals.update');
+    Route::post('/ea-bridge/terminals/{terminal}/token', [EaBridgeWebController::class, 'regenerateToken'])->name('ea-bridge.terminals.token');
+    Route::post('/ea-bridge/terminals/{terminal}/reveal-token', [EaBridgeWebController::class, 'revealToken'])->name('ea-bridge.terminals.reveal-token');
+    Route::post('/ea-bridge/terminals/{terminal}/test-trade', [EaBridgeWebController::class, 'testTrade'])->name('ea-bridge.terminals.test-trade');
+    Route::delete('/ea-bridge/terminals/{terminal}', [EaBridgeWebController::class, 'destroy'])->name('ea-bridge.terminals.destroy');
     Route::post('/ea-bridge/commands', [EaBridgeWebController::class, 'queueCommand'])->name('ea-bridge.commands');
-    Route::post('/ea-bridge/token', [EaBridgeWebController::class, 'regenerateToken'])->name('ea-bridge.token');
 
     Route::post('/bot/trade', [BotController::class, 'store'])->name('bot.trade');
     Route::post('/bot/close-position', [BotController::class, 'closePosition'])->name('bot.close-position');

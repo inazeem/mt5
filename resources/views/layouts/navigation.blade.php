@@ -22,7 +22,7 @@
                         {{ __('Bot') }}
                     </x-nav-link>
                     <x-nav-link :href="route('ea-bridge.index')" :active="request()->routeIs('ea-bridge.*')">
-                        {{ __('EA Bridge') }}
+                        {{ __('MT5 Instances') }}
                     </x-nav-link>
                     <x-nav-link :href="route('bot.analytics')" :active="request()->routeIs('bot.analytics')">
                         {{ __('Bot Analytics') }}
@@ -104,7 +104,7 @@
                 {{ __('Bot') }}
             </x-responsive-nav-link>
             <x-responsive-nav-link :href="route('ea-bridge.index')" :active="request()->routeIs('ea-bridge.*')">
-                {{ __('EA Bridge') }}
+                {{ __('MT5 Instances') }}
             </x-responsive-nav-link>
             <x-responsive-nav-link :href="route('bot.analytics')" :active="request()->routeIs('bot.analytics')">
                 {{ __('Bot Analytics') }}

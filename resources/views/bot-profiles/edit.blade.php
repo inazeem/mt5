@@ -78,7 +78,14 @@
 
                     @include('bot-profiles._mt5-instance', [
                         'mt5Instances' => $mt5Instances,
-                        'selectedInstanceKey' => old('mt5_instance_key', $profile['mt5_instance_key'] ?? ''),
+                        'selectedInstanceKeys' => old(
+                            'mt5_instance_keys',
+                            $profile['mt5_instance_keys'] ?? (
+                                ! empty($profile['mt5_instance_key'] ?? null)
+                                    ? [(string) $profile['mt5_instance_key']]
+                                    : []
+                            )
+                        ),
                     ])
 
                     <div class="rounded-lg border border-gray-200 p-4">

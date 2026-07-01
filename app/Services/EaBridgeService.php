@@ -13,41 +13,120 @@ use RuntimeException;
 
 class EaBridgeService
 {
-    public function resolveToken(): string
-    {
-        $settings = AppSetting::singleton();
-
-        if (! empty($settings->ea_bridge_token)) {
-            return (string) $settings->ea_bridge_token;
-        }
-
-        $token = Str::random(64);
-        $settings->ea_bridge_token = $token;
-        $settings->save();
-
-        return $token;
-    }
-
-    public function regenerateToken(): string
-    {
-        $settings = AppSetting::singleton();
-        $token = Str::random(64);
-        $settings->ea_bridge_token = $token;
-        $settings->save();
-
-        return $token;
-    }
-
-    public function tokenIsValid(?string $token): bool
+    public function resolveTerminalFromToken(?string $token): ?Mt5EaTerminal
     {
         if ($token === null || trim($token) === '') {
-            return false;
+            return null;
         }
 
-        $settings = AppSetting::singleton();
+        $hash = Mt5EaTerminal::hashToken(trim($token));
 
-        return ! empty($settings->ea_bridge_token)
-            && hash_equals((string) $settings->ea_bridge_token, $token);
+        return Mt5EaTerminal::query()
+            ->where('api_token_hash', $hash)
+            ->where('enabled', true)
+            ->first();
+    }
+
+    /**
+     * @deprecated Global token removed — each instance has its own token.
+     */
+    public function resolveToken(): string
+    {
+        $terminal = Mt5EaTerminal::query()
+            ->where('enabled', true)
+            ->orderByDesc('last_seen_at')
+            ->first();
+
+        if ($terminal?->api_token) {
+            return (string) $terminal->api_token;
+        }
+
+        throw new RuntimeException('No MT5 instance token available. Create an instance on EA Bridge first.');
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function createInstance(array $data): Mt5EaTerminal
+    {
+        $displayName = trim((string) ($data['display_name'] ?? ''));
+        if ($displayName === '') {
+            throw new InvalidArgumentException('Display name is required.');
+        }
+
+        $isDemo = (bool) ($data['is_demo'] ?? true);
+        $instanceKey = trim((string) ($data['instance_key'] ?? ''));
+        if ($instanceKey === '') {
+            $suffix = $isDemo ? 'demo' : 'live';
+            $instanceKey = Mt5EaTerminal::makeUniqueInstanceKey($displayName.'-'.$suffix);
+        } else {
+            $instanceKey = Mt5EaTerminal::slugifyInstanceKey($instanceKey);
+            if (Mt5EaTerminal::query()->where('instance_key', $instanceKey)->exists()) {
+                throw new InvalidArgumentException('Instance key "'.$instanceKey.'" is already in use.');
+            }
+        }
+
+        $plainToken = Str::random(64);
+
+        return Mt5EaTerminal::query()->create([
+            'instance_key' => $instanceKey,
+            'display_name' => $displayName,
+            'is_demo' => $isDemo,
+            'enabled' => true,
+            'api_token' => $plainToken,
+            'api_token_hash' => Mt5EaTerminal::hashToken($plainToken),
+        ]);
+    }
+
+    public function regenerateTerminalToken(Mt5EaTerminal $terminal): string
+    {
+        $plainToken = Str::random(64);
+        $terminal->forceFill([
+            'api_token' => $plainToken,
+            'api_token_hash' => Mt5EaTerminal::hashToken($plainToken),
+        ]);
+        $terminal->save();
+
+        return $plainToken;
+    }
+
+    public function revealTerminalToken(Mt5EaTerminal $terminal): string
+    {
+        $token = trim((string) $terminal->api_token);
+
+        if ($token === '') {
+            throw new RuntimeException('No API token stored for "'.$terminal->label().'". Regenerate a new one.');
+        }
+
+        return $token;
+    }
+
+    public function queueTestTrade(Mt5EaTerminal $terminal, string $symbol = 'GBPUSD', float $lot = 0.01): Mt5EaCommand
+    {
+        if (! $terminal->instance_key) {
+            throw new InvalidArgumentException('Instance key is required before sending a test trade.');
+        }
+
+        if (! $terminal->isOnline()) {
+            throw new RuntimeException('Instance "'.$terminal->label().'" is offline. Start LaravelBridge in MT5 first.');
+        }
+
+        if (! $terminal->is_demo) {
+            $settings = AppSetting::singleton();
+            if ($settings->demo_only) {
+                throw new RuntimeException('Test trades on live instances are blocked while demo_only is enabled.');
+            }
+        }
+
+        return $this->queueCommand([
+            'action' => 'BUY',
+            'symbol' => strtoupper($symbol),
+            'lot' => $lot,
+            'sl' => 15,
+            'tp' => 15,
+            'mt5_instance_key' => $terminal->instance_key,
+            'source' => 'test',
+        ]);
     }
 
     public function resolveTerminal(?string $instanceKey): Mt5EaTerminal
@@ -80,6 +159,73 @@ class EaBridgeService
         }
 
         return $terminal;
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     * @return array<int, string>
+     */
+    public static function profileInstanceKeys(array $profile): array
+    {
+        $keys = [];
+
+        if (is_array($profile['mt5_instance_keys'] ?? null)) {
+            foreach ($profile['mt5_instance_keys'] as $key) {
+                $key = trim((string) $key);
+                if ($key !== '') {
+                    $keys[] = $key;
+                }
+            }
+        }
+
+        $legacy = trim((string) ($profile['mt5_instance_key'] ?? ''));
+        if ($legacy !== '' && ! in_array($legacy, $keys, true)) {
+            $keys[] = $legacy;
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     */
+    public function profileMatchesTerminal(array $profile, Mt5EaTerminal $terminal): bool
+    {
+        $keys = self::profileInstanceKeys($profile);
+
+        if ($keys === []) {
+            return true;
+        }
+
+        return $terminal->instance_key !== null
+            && in_array($terminal->instance_key, $keys, true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     */
+    public function resolvePrimaryTerminalForProfile(array $profile): Mt5EaTerminal
+    {
+        $keys = self::profileInstanceKeys($profile);
+
+        if ($keys === []) {
+            return $this->resolveTerminal(null);
+        }
+
+        foreach ($keys as $key) {
+            $terminal = Mt5EaTerminal::query()
+                ->where('instance_key', $key)
+                ->where('enabled', true)
+                ->first();
+
+            if ($terminal?->isOnline()) {
+                return $terminal;
+            }
+        }
+
+        throw new RuntimeException(
+            'No online MT5 instance for profile. Expected one of: '.implode(', ', $keys)
+        );
     }
 
     /**
@@ -131,12 +277,51 @@ class EaBridgeService
     }
 
     /**
+     * @return array<int, string>
+     */
+    public function botProfileKeysUsingInstance(string $instanceKey): array
+    {
+        if (trim($instanceKey) === '') {
+            return [];
+        }
+
+        $profiles = AppSetting::singleton()->bot_profiles ?? [];
+        $keys = [];
+
+        foreach ($profiles as $profile) {
+            if (! is_array($profile)) {
+                continue;
+            }
+
+            if (in_array($instanceKey, self::profileInstanceKeys($profile), true)) {
+                $keys[] = (string) ($profile['key'] ?? 'unknown');
+            }
+        }
+
+        return $keys;
+    }
+
+    public function deleteInstance(Mt5EaTerminal $terminal): void
+    {
+        $instanceKey = (string) ($terminal->instance_key ?? '');
+        $inUse = $this->botProfileKeysUsingInstance($instanceKey);
+
+        if ($inUse !== []) {
+            throw new RuntimeException(
+                'Instance "'.$terminal->label().'" is linked to bot profiles: '.implode(', ', $inUse).'. Unlink them first.'
+            );
+        }
+
+        $terminal->delete();
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
      */
-    public function handlePoll(array $payload): array
+    public function handlePoll(Mt5EaTerminal $authenticatedTerminal, array $payload): array
     {
-        $terminal = $this->upsertTerminal($payload);
+        $terminal = $this->syncTerminalFromPoll($authenticatedTerminal, $payload);
         $this->applyCommandResult($payload['command_result'] ?? null);
 
         $command = $this->claimNextCommand($terminal);
@@ -144,6 +329,7 @@ class EaBridgeService
 
         return [
             'ok' => true,
+            'instance_key' => $terminal->instance_key,
             'command' => $command?->toEaPayload(),
             'watch_symbols' => $watchPlan['symbols'],
             'candle_requests' => $watchPlan['candle_requests'],
@@ -189,6 +375,7 @@ class EaBridgeService
             'mt5_instance_key' => $instanceKey !== '' ? $instanceKey : $terminal?->instance_key,
             'bot_trade_log_id' => isset($data['bot_trade_log_id']) ? (int) $data['bot_trade_log_id'] : null,
             'bot_key' => isset($data['bot_key']) ? trim((string) $data['bot_key']) : null,
+            'source' => isset($data['source']) ? trim((string) $data['source']) : null,
             'action' => $action,
             'symbol' => isset($data['symbol']) ? strtoupper(trim((string) $data['symbol'])) : null,
             'lot' => isset($data['lot']) ? (float) $data['lot'] : null,
@@ -203,7 +390,7 @@ class EaBridgeService
     /**
      * @param  array<string, mixed>  $payload
      */
-    private function upsertTerminal(array $payload): Mt5EaTerminal
+    private function syncTerminalFromPoll(Mt5EaTerminal $terminal, array $payload): Mt5EaTerminal
     {
         $login = (int) ($payload['login'] ?? 0);
         $server = trim((string) ($payload['server'] ?? ''));
@@ -212,18 +399,30 @@ class EaBridgeService
             throw new InvalidArgumentException('login is required.');
         }
 
-        $terminal = Mt5EaTerminal::query()->firstOrNew([
-            'account_login' => $login,
-            'server' => $server !== '' ? $server : null,
-        ]);
+        if ($terminal->isBound()) {
+            if ((int) $terminal->account_login !== $login) {
+                throw new InvalidArgumentException('Poll login does not match this instance token.');
+            }
 
-        if (! $terminal->exists) {
-            $terminal->instance_key = Mt5EaTerminal::makeUniqueInstanceKey(
-                trim((string) ($payload['instance_key'] ?? $payload['broker_company'] ?? 'terminal-'.$login))
-            );
-            $terminal->enabled = true;
-            $terminal->is_demo = true;
-        } elseif (trim((string) ($payload['instance_key'] ?? '')) !== '' && empty($terminal->instance_key)) {
+            if ($terminal->server && $server !== '' && $terminal->server !== $server) {
+                throw new InvalidArgumentException('Poll server does not match this instance token.');
+            }
+        } else {
+            $duplicate = Mt5EaTerminal::query()
+                ->where('id', '!=', $terminal->id)
+                ->where('account_login', $login)
+                ->where('server', $server !== '' ? $server : null)
+                ->exists();
+
+            if ($duplicate) {
+                throw new InvalidArgumentException('This MT5 account is already linked to another instance.');
+            }
+
+            $terminal->account_login = $login;
+            $terminal->server = $server !== '' ? $server : null;
+        }
+
+        if (trim((string) ($payload['instance_key'] ?? '')) !== '' && empty($terminal->instance_key)) {
             $candidate = Mt5EaTerminal::slugifyInstanceKey((string) $payload['instance_key']);
             if (! Mt5EaTerminal::query()->where('instance_key', $candidate)->where('id', '!=', $terminal->id)->exists()) {
                 $terminal->instance_key = $candidate;
@@ -249,7 +448,7 @@ class EaBridgeService
         ]);
         $terminal->save();
 
-        return $terminal;
+        return $terminal->fresh();
     }
 
     /**
@@ -283,8 +482,7 @@ class EaBridgeService
                 continue;
             }
 
-            $profileInstance = trim((string) ($profile['mt5_instance_key'] ?? ''));
-            if ($profileInstance !== '' && $terminal->instance_key !== null && $profileInstance !== $terminal->instance_key) {
+            if (! self::profileMatchesTerminal($profile, $terminal)) {
                 continue;
             }
 

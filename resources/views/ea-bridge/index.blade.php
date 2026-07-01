@@ -1,10 +1,10 @@
 <x-app-layout>
     <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">EA Bridge</h2>
+        <h2 class="font-semibold text-xl text-gray-800 leading-tight">MT5 Instances</h2>
     </x-slot>
 
-    <div class="py-8">
-        <div class="max-w-5xl mx-auto sm:px-6 lg:px-8 space-y-6">
+    <div class="py-8" @if ($openCredentialsFor) x-data x-init="$nextTick(() => $dispatch('open-modal', 'ea-token-{{ $openCredentialsFor }}'))" @endif>
+        <div class="max-w-6xl mx-auto sm:px-6 lg:px-8 space-y-6">
             @if (session('status'))
                 <div class="bg-green-100 border border-green-200 text-green-800 p-4 rounded">
                     {{ session('status') }}
@@ -22,118 +22,154 @@
             @endif
 
             <div class="bg-white p-6 rounded-lg shadow space-y-4">
-                <h3 class="text-lg font-semibold text-gray-900">Connection</h3>
-                <p class="text-sm text-gray-600">
-                    Attach the <code>LaravelBridge</code> EA in MT5. It polls
-                    <code>{{ url('/api/ea/poll') }}</code> every second with your account snapshot and executes queued commands.
-                </p>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">API Token</label>
-                    <input type="text" readonly value="{{ $token }}" class="mt-1 block w-full rounded border-gray-300 font-mono text-xs" onclick="this.select()" />
-                </div>
-                <form method="POST" action="{{ route('ea-bridge.token') }}" onsubmit="return confirm('Regenerate token? You must update MT5 EA inputs.');">
+                <h3 class="text-lg font-semibold text-gray-900">Add Instance</h3>
+                <p class="text-sm text-gray-600">One row per MT5 install. Name by broker and demo/live. Each gets its own API token.</p>
+                <form method="POST" action="{{ route('ea-bridge.instances.store') }}" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                     @csrf
-                    <button type="submit" class="inline-flex items-center px-4 py-2 bg-gray-800 text-white text-sm rounded hover:bg-gray-700">
-                        Regenerate Token
-                    </button>
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium text-gray-700">Display Name</label>
+                        <input name="display_name" type="text" required value="{{ old('display_name') }}" placeholder="e.g. Pepperstone Demo" class="mt-1 block w-full rounded border-gray-300" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Instance Key (optional)</label>
+                        <input name="instance_key" type="text" value="{{ old('instance_key') }}" placeholder="pepperstone-demo" class="mt-1 block w-full rounded border-gray-300 font-mono text-xs" />
+                    </div>
+                    <div class="space-y-2">
+                        <label class="inline-flex items-center gap-2 text-sm">
+                            <input type="checkbox" name="is_demo" value="1" @checked(old('is_demo', true)) class="rounded border-gray-300" />
+                            Demo account
+                        </label>
+                        <button type="submit" class="inline-flex px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500">Create Instance</button>
+                    </div>
                 </form>
-                <div class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-3 space-y-1">
-                    <p><strong>MT5 setup:</strong> Tools → Options → Expert Advisors → allow WebRequest for your Laravel URL (e.g. <code>{{ parse_url(url('/'), PHP_URL_HOST) }}</code>).</p>
-                    <p>Copy <code>mql5/Experts/LaravelBridge/LaravelBridge.mq5</code> into your MT5 <code>MQL5/Experts</code> folder and compile.</p>
+                <div class="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded p-3">
+                    You can register many instances, but typically <strong>only one EA polls at a time</strong> per MT5 chart.
+                    @if ($terminals->isNotEmpty())
+                        Currently <strong>{{ $onlineCount }}</strong> of {{ $terminals->count() }} online.
+                    @endif
                 </div>
             </div>
 
             <div class="bg-white p-6 rounded-lg shadow space-y-4">
-                <h3 class="text-lg font-semibold text-gray-900">MT5 Instance Profiles</h3>
-                <p class="text-sm text-gray-600">Name each connected terminal and use the instance key in bot profiles. Bot trades route here — no MetaAPI.</p>
+                <h3 class="text-lg font-semibold text-gray-900">Instances</h3>
                 @if ($terminals->isEmpty())
-                    <p class="text-sm text-gray-500">No EA has polled yet. Start LaravelBridge on a chart to register this account.</p>
+                    <p class="text-sm text-gray-500">No instances yet. Create one above, open <strong>Credentials</strong>, copy the token into MT5, then attach LaravelBridge.</p>
                 @else
-                    <div class="space-y-4">
-                        @foreach ($terminals as $terminal)
-                            <form method="POST" action="{{ route('ea-bridge.terminals.update', $terminal) }}" class="border border-gray-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-                                @csrf
-                                <div>
-                                    <p class="text-xs text-gray-500">Account</p>
-                                    <p class="font-mono text-sm">{{ $terminal->account_login }}</p>
-                                    <p class="text-xs text-gray-500">{{ $terminal->server }}</p>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700">Instance Key</label>
-                                    <input name="instance_key" type="text" value="{{ old('instance_key.'.$terminal->id, $terminal->instance_key) }}" class="mt-1 block w-full rounded border-gray-300 font-mono text-xs" />
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700">Display Name</label>
-                                    <input name="display_name" type="text" value="{{ old('display_name.'.$terminal->id, $terminal->display_name) }}" class="mt-1 block w-full rounded border-gray-300 text-sm" />
-                                </div>
-                                <div class="space-y-2">
-                                    <label class="inline-flex items-center gap-2 text-sm">
-                                        <input type="checkbox" name="enabled" value="1" @checked(old('enabled.'.$terminal->id, $terminal->enabled)) class="rounded border-gray-300" />
-                                        Enabled
-                                    </label>
-                                    <label class="inline-flex items-center gap-2 text-sm">
-                                        <input type="checkbox" name="is_demo" value="1" @checked(old('is_demo.'.$terminal->id, $terminal->is_demo)) class="rounded border-gray-300" />
-                                        Demo account
-                                    </label>
-                                    <button type="submit" class="inline-flex px-3 py-2 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-500">Save</button>
-                                    <p class="text-xs {{ $terminal->isOnline() ? 'text-green-700' : 'text-gray-500' }}">
-                                        {{ $terminal->isOnline() ? 'Online' : 'Offline' }} · {{ $terminal->last_seen_at?->diffForHumans() ?? 'never' }}
-                                    </p>
-                                </div>
-                            </form>
-                        @endforeach
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full text-sm">
+                            <thead>
+                                <tr class="text-left text-gray-500 border-b">
+                                    <th class="py-2 pr-4">Name</th>
+                                    <th class="py-2 pr-4">Key</th>
+                                    <th class="py-2 pr-4">Account</th>
+                                    <th class="py-2 pr-4">Status</th>
+                                    <th class="py-2">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach ($terminals as $terminal)
+                                    <tr class="border-b border-gray-100 align-top {{ $terminal->is_demo ? 'bg-sky-50/40' : 'bg-rose-50/30' }}">
+                                        <td class="py-3 pr-4">
+                                            <div class="font-medium text-gray-900">{{ $terminal->label() }}</div>
+                                            <div class="flex gap-1 mt-1">
+                                                <span class="text-xs px-1.5 py-0.5 rounded {{ $terminal->is_demo ? 'bg-sky-100 text-sky-800' : 'bg-rose-100 text-rose-800' }}">{{ $terminal->environmentLabel() }}</span>
+                                                @if (! $terminal->enabled)
+                                                    <span class="text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-600">Disabled</span>
+                                                @endif
+                                            </div>
+                                        </td>
+                                        <td class="py-3 pr-4 font-mono text-xs text-gray-600">{{ $terminal->instance_key ?? '—' }}</td>
+                                        <td class="py-3 pr-4 text-xs text-gray-600">
+                                            @if ($terminal->isBound())
+                                                <div>login {{ $terminal->account_login }}</div>
+                                                <div>{{ $terminal->server }}</div>
+                                                <div>{{ number_format((float) $terminal->balance, 2) }} {{ $terminal->currency }}</div>
+                                            @else
+                                                <span class="text-amber-700">Awaiting EA poll</span>
+                                            @endif
+                                        </td>
+                                        <td class="py-3 pr-4">
+                                            <span class="text-xs px-2 py-0.5 rounded {{ $terminal->isOnline() ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600' }}">
+                                                {{ $terminal->isOnline() ? 'Online' : 'Offline' }}
+                                            </span>
+                                            <div class="text-xs text-gray-400 mt-1">{{ $terminal->last_seen_at?->diffForHumans() ?? 'never' }}</div>
+                                        </td>
+                                        <td class="py-3">
+                                            <div class="flex flex-wrap gap-1">
+                                                <button type="button" x-data x-on:click="$dispatch('open-modal', 'ea-token-{{ $terminal->id }}')" class="inline-flex px-2 py-1 bg-white border border-gray-300 text-xs rounded hover:bg-gray-50">
+                                                    Credentials
+                                                </button>
+                                                <button type="button" x-data x-on:click="$dispatch('open-modal', 'ea-edit-{{ $terminal->id }}')" class="inline-flex px-2 py-1 bg-white border border-gray-300 text-xs rounded hover:bg-gray-50">
+                                                    Edit
+                                                </button>
+                                                <button type="button" x-data x-on:click="$dispatch('open-modal', 'ea-test-{{ $terminal->id }}')" class="inline-flex px-2 py-1 bg-emerald-600 text-white text-xs rounded hover:bg-emerald-500">
+                                                    Test Trade
+                                                </button>
+                                                <button type="button" x-data x-on:click="$dispatch('open-modal', 'ea-delete-{{ $terminal->id }}')" class="inline-flex px-2 py-1 bg-white border border-red-200 text-red-700 text-xs rounded hover:bg-red-50">
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
                     </div>
+
+                    @foreach ($terminals as $terminal)
+                        @include('ea-bridge._instance-modals', [
+                            'terminal' => $terminal,
+                            'revealedTokens' => $revealedTokens,
+                            'linkedProfilesByTerminal' => $linkedProfilesByTerminal,
+                        ])
+                    @endforeach
                 @endif
             </div>
 
-            <form method="POST" action="{{ route('ea-bridge.commands') }}" class="bg-white p-6 rounded-lg shadow space-y-4">
-                @csrf
-                <h3 class="text-lg font-semibold text-gray-900">Queue Command</h3>
-                <p class="text-xs text-gray-500">SL and TP are in pips. The EA converts them to price before sending the order.</p>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Action</label>
-                        <select name="action" class="mt-1 block w-full rounded border-gray-300" required>
-                            <option value="BUY">BUY</option>
-                            <option value="SELL">SELL</option>
-                            <option value="CLOSE">CLOSE</option>
-                            <option value="CLOSE_ALL">CLOSE_ALL</option>
-                        </select>
+            @if ($terminals->isNotEmpty())
+                <form method="POST" action="{{ route('ea-bridge.commands') }}" class="bg-white p-6 rounded-lg shadow space-y-4">
+                    @csrf
+                    <h3 class="text-lg font-semibold text-gray-900">Manual Command</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Instance</label>
+                            <select name="mt5_instance_key" class="mt-1 block w-full rounded border-gray-300" required>
+                                @foreach ($terminals as $terminal)
+                                    @if ($terminal->instance_key)
+                                        <option value="{{ $terminal->instance_key }}">{{ $terminal->label() }} ({{ $terminal->environmentLabel() }}){{ $terminal->isOnline() ? '' : ' — offline' }}</option>
+                                    @endif
+                                @endforeach
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Action</label>
+                            <select name="action" class="mt-1 block w-full rounded border-gray-300" required>
+                                <option value="BUY">BUY</option>
+                                <option value="SELL">SELL</option>
+                                <option value="CLOSE">CLOSE</option>
+                                <option value="CLOSE_ALL">CLOSE_ALL</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Symbol</label>
+                            <input name="symbol" type="text" value="GBPUSD" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Lot</label>
+                            <input name="lot" type="number" step="0.001" min="0.001" value="0.01" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">SL (pips)</label>
+                            <input name="sl" type="number" step="0.1" min="0" value="20" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">TP (pips)</label>
+                            <input name="tp" type="number" step="0.1" min="0" value="40" class="mt-1 block w-full rounded border-gray-300" />
+                        </div>
                     </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Symbol</label>
-                        <input name="symbol" type="text" value="{{ old('symbol', 'GBPUSD') }}" class="mt-1 block w-full rounded border-gray-300" />
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Lot</label>
-                        <input name="lot" type="number" step="0.001" min="0.001" value="{{ old('lot', '0.10') }}" class="mt-1 block w-full rounded border-gray-300" />
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">SL (pips)</label>
-                        <input name="sl" type="number" step="0.1" min="0" value="{{ old('sl', '20') }}" class="mt-1 block w-full rounded border-gray-300" />
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">TP (pips)</label>
-                        <input name="tp" type="number" step="0.1" min="0" value="{{ old('tp', '40') }}" class="mt-1 block w-full rounded border-gray-300" />
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">MT5 Instance (optional)</label>
-                        <select name="mt5_instance_key" class="mt-1 block w-full rounded border-gray-300">
-                            <option value="">Any online terminal</option>
-                            @foreach ($terminals as $terminal)
-                                @if ($terminal->instance_key)
-                                    <option value="{{ $terminal->instance_key }}" @selected(old('mt5_instance_key') === $terminal->instance_key)>
-                                        {{ $terminal->label() }}
-                                    </option>
-                                @endif
-                            @endforeach
-                        </select>
-                    </div>
-                </div>
-                <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500">
-                    Queue for EA
-                </button>
-            </form>
+                    <button type="submit" class="inline-flex px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500">Queue Command</button>
+                </form>
+            @endif
 
             <div class="bg-white p-6 rounded-lg shadow space-y-4">
                 <h3 class="text-lg font-semibold text-gray-900">Recent Commands</h3>
@@ -145,9 +181,10 @@
                             <thead>
                                 <tr class="text-left text-gray-500 border-b">
                                     <th class="py-2 pr-4">#</th>
+                                    <th class="py-2 pr-4">Instance</th>
+                                    <th class="py-2 pr-4">Source</th>
                                     <th class="py-2 pr-4">Action</th>
                                     <th class="py-2 pr-4">Symbol</th>
-                                    <th class="py-2 pr-4">Lot</th>
                                     <th class="py-2 pr-4">Status</th>
                                     <th class="py-2">Queued</th>
                                 </tr>
@@ -156,9 +193,10 @@
                                 @foreach ($recentCommands as $command)
                                     <tr class="border-b border-gray-100">
                                         <td class="py-2 pr-4">{{ $command->id }}</td>
+                                        <td class="py-2 pr-4">{{ $command->terminal?->label() ?? $command->mt5_instance_key ?? '—' }}</td>
+                                        <td class="py-2 pr-4">{{ $command->source ?? '—' }}</td>
                                         <td class="py-2 pr-4">{{ $command->action }}</td>
                                         <td class="py-2 pr-4">{{ $command->symbol ?? '—' }}</td>
-                                        <td class="py-2 pr-4">{{ $command->lot ?? '—' }}</td>
                                         <td class="py-2 pr-4">{{ $command->status }}</td>
                                         <td class="py-2">{{ $command->queued_at?->diffForHumans() }}</td>
                                     </tr>

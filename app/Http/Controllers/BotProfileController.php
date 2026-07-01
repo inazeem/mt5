@@ -91,6 +91,8 @@ class BotProfileController extends Controller
             'signal_timeframes.*'    => ['required', 'in:5m,15m,30m,1h,4h'],
             'signal_timeframe'       => ['nullable', 'in:5m,15m,30m,1h,4h'],
             'entry_timeframe'        => ['nullable', 'in:5m,15m,30m,1h,4h'],
+            'mt5_instance_keys'      => ['nullable', 'array'],
+            'mt5_instance_keys.*'    => ['required', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
             'mt5_instance_key'       => ['nullable', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
         ]);
 
@@ -124,7 +126,7 @@ class BotProfileController extends Controller
             $strategies = [$this->normalizeStrategy($validated['strategy'])];
         }
 
-        $newProfile = [
+        $newProfile = array_merge([
             'key' => $key,
             'name' => trim($validated['name']),
             'enabled' => (bool) ($validated['enabled'] ?? true),
@@ -166,8 +168,7 @@ class BotProfileController extends Controller
             'signal_timeframes' => $signalTimeframes,
             'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
             'entry_timeframe' => $entryTimeframe,
-            'mt5_instance_key' => trim((string) ($validated['mt5_instance_key'] ?? '')) ?: null,
-        ];
+        ], $this->mt5InstanceFieldsFromValidated($validated));
 
         $profiles[] = $newProfile;
         $settings->bot_profiles = $profiles;
@@ -253,6 +254,8 @@ class BotProfileController extends Controller
             'signal_timeframes.*'    => ['required', 'in:5m,15m,30m,1h,4h'],
             'signal_timeframe'       => ['nullable', 'in:5m,15m,30m,1h,4h'],
             'entry_timeframe'        => ['nullable', 'in:5m,15m,30m,1h,4h'],
+            'mt5_instance_keys'      => ['nullable', 'array'],
+            'mt5_instance_keys.*'    => ['required', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
             'mt5_instance_key'       => ['nullable', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
         ]);
 
@@ -325,8 +328,7 @@ class BotProfileController extends Controller
             'signal_timeframes' => $signalTimeframes,
             'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
             'entry_timeframe' => $entryTimeframe,
-            'mt5_instance_key' => trim((string) ($validated['mt5_instance_key'] ?? '')) ?: null,
-        ]);
+        ], $this->mt5InstanceFieldsFromValidated($validated));
 
         $settings->bot_profiles = $profiles;
         $settings->save();
@@ -484,5 +486,32 @@ class BotProfileController extends Controller
         $normalized = array_filter($normalized, static fn ($value) => $value !== null);
 
         return !empty($normalized) ? $normalized : null;
+    }
+
+    /**
+     * @return array{mt5_instance_keys: ?array<int, string>, mt5_instance_key: ?string}
+     */
+    private function mt5InstanceFieldsFromValidated(array $validated): array
+    {
+        $keys = [];
+
+        foreach ($validated['mt5_instance_keys'] ?? [] as $key) {
+            $key = trim((string) $key);
+            if ($key !== '') {
+                $keys[] = $key;
+            }
+        }
+
+        $legacy = trim((string) ($validated['mt5_instance_key'] ?? ''));
+        if ($legacy !== '' && ! in_array($legacy, $keys, true)) {
+            $keys[] = $legacy;
+        }
+
+        $keys = array_values(array_unique($keys));
+
+        return [
+            'mt5_instance_keys' => $keys !== [] ? $keys : null,
+            'mt5_instance_key' => $keys[0] ?? null,
+        ];
     }
 }

@@ -10,24 +10,25 @@ use App\Services\Brokers\BrokerResolver;
 use App\Services\Brokers\EaBridgeBroker;
 use App\Services\EaBridgeService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class EaBridgeTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function bearerToken(): string
-    {
-        return app(EaBridgeService::class)->resolveToken();
-    }
-
     private function seedOnlineTerminal(array $overrides = []): Mt5EaTerminal
     {
+        $token = (string) ($overrides['api_token'] ?? ('test-'.Str::random(48)));
+        unset($overrides['api_token'], $overrides['api_token_hash']);
+
         return Mt5EaTerminal::query()->create(array_merge([
             'instance_key' => 'demo-1',
             'display_name' => 'Demo Terminal',
             'enabled' => true,
             'is_demo' => true,
+            'api_token' => $token,
+            'api_token_hash' => Mt5EaTerminal::hashToken($token),
             'account_login' => 12345,
             'server' => 'Broker-Demo',
             'balance' => 10000,
@@ -58,7 +59,8 @@ class EaBridgeTest extends TestCase
     public function test_poll_registers_terminal_and_returns_queued_command(): void
     {
         AppSetting::singleton();
-        $this->seedOnlineTerminal();
+        $terminal = $this->seedOnlineTerminal();
+        $token = (string) $terminal->api_token;
 
         $command = app(EaBridgeService::class)->queueCommand([
             'action' => 'BUY',
@@ -69,7 +71,7 @@ class EaBridgeTest extends TestCase
             'mt5_instance_key' => 'demo-1',
         ]);
 
-        $response = $this->withToken($this->bearerToken(), 'Bearer')->postJson('/api/ea/poll', [
+        $response = $this->withToken($token, 'Bearer')->postJson('/api/ea/poll', [
             'login' => 12345,
             'server' => 'Broker-Demo',
             'instance_key' => 'demo-1',
@@ -93,6 +95,7 @@ class EaBridgeTest extends TestCase
     {
         AppSetting::singleton();
         $terminal = $this->seedOnlineTerminal();
+        $token = (string) $terminal->api_token;
 
         $command = app(EaBridgeService::class)->queueCommand([
             'action' => 'BUY',
@@ -111,13 +114,13 @@ class EaBridgeTest extends TestCase
 
         $command->update(['bot_trade_log_id' => $log->id, 'bot_key' => 'test-bot']);
 
-        $this->withToken($this->bearerToken(), 'Bearer')->postJson('/api/ea/poll', [
+        $this->withToken($token, 'Bearer')->postJson('/api/ea/poll', [
             'login' => $terminal->account_login,
             'server' => $terminal->server,
             'positions' => [],
         ])->assertOk();
 
-        $response = $this->withToken($this->bearerToken(), 'Bearer')->postJson('/api/ea/poll', [
+        $response = $this->withToken($token, 'Bearer')->postJson('/api/ea/poll', [
             'login' => $terminal->account_login,
             'server' => $terminal->server,
             'positions' => [],
@@ -150,5 +153,62 @@ class EaBridgeTest extends TestCase
 
         $quote = $broker->getTickerPrice('GBPUSD');
         $this->assertSame(1.2650, $quote['bid']);
+    }
+
+    public function test_create_instance_and_queue_test_trade(): void
+    {
+        AppSetting::singleton();
+        $terminal = app(EaBridgeService::class)->createInstance([
+            'display_name' => 'IC Markets Demo',
+            'is_demo' => true,
+        ]);
+
+        $this->assertNotEmpty($terminal->api_token);
+        $this->assertNotEmpty($terminal->api_token_hash);
+
+        $terminal->update(['last_seen_at' => now()]);
+
+        $command = app(EaBridgeService::class)->queueTestTrade($terminal);
+        $this->assertSame('test', $command->source);
+        $this->assertSame('BUY', $command->action);
+    }
+
+    public function test_delete_instance(): void
+    {
+        AppSetting::singleton();
+        $terminal = app(EaBridgeService::class)->createInstance([
+            'display_name' => 'Delete Me',
+            'is_demo' => true,
+        ]);
+
+        app(EaBridgeService::class)->deleteInstance($terminal);
+
+        $this->assertDatabaseMissing('mt5_ea_terminals', ['id' => $terminal->id]);
+    }
+
+    public function test_reveal_token_without_regenerating(): void
+    {
+        AppSetting::singleton();
+        $terminal = app(EaBridgeService::class)->createInstance([
+            'display_name' => 'Reveal Test',
+            'is_demo' => true,
+        ]);
+
+        $originalHash = $terminal->api_token_hash;
+        $revealed = app(EaBridgeService::class)->revealTerminalToken($terminal);
+
+        $this->assertNotEmpty($revealed);
+        $terminal->refresh();
+        $this->assertSame($originalHash, $terminal->api_token_hash);
+    }
+
+    public function test_profile_instance_keys_supports_multi_and_legacy(): void
+    {
+        $keys = EaBridgeService::profileInstanceKeys([
+            'mt5_instance_keys' => ['demo-a', 'demo-b'],
+            'mt5_instance_key' => 'demo-c',
+        ]);
+
+        $this->assertSame(['demo-a', 'demo-b', 'demo-c'], $keys);
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Services\Brokers;
 
 use App\Services\AlpacaService;
+use App\Services\EaBridgeService;
 use App\Services\Brokers\EaBridgeBroker;
 use App\Services\Mt5Service;
 
@@ -12,6 +13,7 @@ class BrokerResolver
         private Mt5Service $mt5Service,
         private AlpacaService $alpacaService,
         private EaBridgeBroker $eaBridgeBroker,
+        private EaBridgeService $eaBridge,
     ) {}
 
     /**
@@ -34,9 +36,15 @@ class BrokerResolver
             return $this->alpacaService;
         }
 
-        $instanceKey = trim((string) ($botProfile['mt5_instance_key'] ?? ''));
+        $instanceKeys = EaBridgeService::profileInstanceKeys($botProfile);
 
-        return $this->eaBridgeBroker->forInstance($instanceKey !== '' ? $instanceKey : null);
+        if ($instanceKeys === []) {
+            return $this->eaBridgeBroker->forInstance(null);
+        }
+
+        $primary = $this->eaBridge->resolvePrimaryTerminalForProfile($botProfile);
+
+        return $this->eaBridgeBroker->forInstance($primary->instance_key);
     }
 
     public function forSymbol(?string $tickerCategory): MarketBrokerInterface
