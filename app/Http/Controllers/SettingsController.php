@@ -223,6 +223,9 @@ class SettingsController extends Controller
                             : null
                     ),
                 'mt5_instance_key' => trim((string) ($profile['mt5_instance_key'] ?? '')) ?: null,
+                'mt5_broker' => in_array(strtolower(trim((string) ($profile['mt5_broker'] ?? 'ea_bridge'))), ['ea_bridge', 'metaapi'], true)
+                    ? strtolower(trim((string) ($profile['mt5_broker'] ?? 'ea_bridge')))
+                    : 'ea_bridge',
                 'signal_timeframe' => in_array(strtolower(trim((string) ($profile['signal_timeframe'] ?? ''))), self::ALLOWED_SIGNAL_TIMEFRAMES, true)
                     ? strtolower(trim((string) ($profile['signal_timeframe'] ?? '')))
                     : null,

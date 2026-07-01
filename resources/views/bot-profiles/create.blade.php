@@ -80,6 +80,7 @@
                     @include('bot-profiles._mt5-instance', [
                         'mt5Instances' => $mt5Instances,
                         'selectedInstanceKeys' => old('mt5_instance_keys', []),
+                        'selectedBroker' => old('mt5_broker', 'ea_bridge'),
                     ])
 
                     <div class="rounded-lg border border-gray-200 p-4">

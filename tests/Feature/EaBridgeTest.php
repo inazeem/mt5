@@ -202,6 +202,17 @@ class EaBridgeTest extends TestCase
         $this->assertSame($originalHash, $terminal->api_token_hash);
     }
 
+    public function test_broker_resolver_uses_metaapi_when_profile_requests_it(): void
+    {
+        $this->seedOnlineTerminal();
+
+        $broker = app(BrokerResolver::class)->forProfile(['forex'], [
+            'mt5_broker' => 'metaapi',
+        ]);
+
+        $this->assertInstanceOf(\App\Services\Mt5Service::class, $broker);
+    }
+
     public function test_profile_instance_keys_supports_multi_and_legacy(): void
     {
         $keys = EaBridgeService::profileInstanceKeys([

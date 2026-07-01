@@ -94,6 +94,7 @@ class BotProfileController extends Controller
             'mt5_instance_keys'      => ['nullable', 'array'],
             'mt5_instance_keys.*'    => ['required', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
             'mt5_instance_key'       => ['nullable', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
+            'mt5_broker'             => ['nullable', 'string', 'in:ea_bridge,metaapi'],
         ]);
 
         $settings = AppSetting::singleton();
@@ -168,6 +169,7 @@ class BotProfileController extends Controller
             'signal_timeframes' => $signalTimeframes,
             'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
             'entry_timeframe' => $entryTimeframe,
+            'mt5_broker' => $this->normalizeMt5Broker($validated['mt5_broker'] ?? null),
         ], $this->mt5InstanceFieldsFromValidated($validated));
 
         $profiles[] = $newProfile;
@@ -257,6 +259,7 @@ class BotProfileController extends Controller
             'mt5_instance_keys'      => ['nullable', 'array'],
             'mt5_instance_keys.*'    => ['required', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
             'mt5_instance_key'       => ['nullable', 'string', 'max:100', 'regex:/^[a-zA-Z0-9_-]+$/'],
+            'mt5_broker'             => ['nullable', 'string', 'in:ea_bridge,metaapi'],
         ]);
 
         $settings = AppSetting::singleton();
@@ -328,6 +331,7 @@ class BotProfileController extends Controller
             'signal_timeframes' => $signalTimeframes,
             'signal_timeframe' => !empty($signalTimeframes) ? $signalTimeframes[0] : null,
             'entry_timeframe' => $entryTimeframe,
+            'mt5_broker' => $this->normalizeMt5Broker($validated['mt5_broker'] ?? null),
         ], $this->mt5InstanceFieldsFromValidated($validated));
 
         $settings->bot_profiles = $profiles;
@@ -486,6 +490,13 @@ class BotProfileController extends Controller
         $normalized = array_filter($normalized, static fn ($value) => $value !== null);
 
         return !empty($normalized) ? $normalized : null;
+    }
+
+    private function normalizeMt5Broker(?string $value): string
+    {
+        $broker = strtolower(trim((string) $value));
+
+        return in_array($broker, ['ea_bridge', 'metaapi'], true) ? $broker : 'ea_bridge';
     }
 
     /**

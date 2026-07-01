@@ -868,6 +868,7 @@ Artisan::command('mt5:auto-forex
         $cycleBroker = $brokerResolver->forProfile($profileTickerCategories, $botProfile);
         $usesAlpacaCycle = $brokerResolver->usesAlpaca($cycleBroker);
         $usesEaBridgeCycle = $brokerResolver->usesEaBridge($cycleBroker);
+        $usesMetaApiCycle = $brokerResolver->usesMetaApi($cycleBroker);
         $eaProfileInstanceKeys = $usesEaBridgeCycle
             ? EaBridgeService::profileInstanceKeys($botProfile)
             : [];
@@ -877,6 +878,21 @@ Artisan::command('mt5:auto-forex
                 $cycleBroker->getAccountInformation();
             } catch (\Throwable $e) {
                 $this->error('EA bridge profile cannot run: '.$e->getMessage());
+                BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                    'event_type' => 'guardrail',
+                    'status' => 'broker_config_error',
+                    'message' => $e->getMessage(),
+                ]));
+
+                return 0;
+            }
+        }
+
+        if ($usesMetaApiCycle) {
+            try {
+                $cycleBroker->getAccountInformation();
+            } catch (\Throwable $e) {
+                $this->error('MetaApi profile cannot run: '.$e->getMessage());
                 BotTradeLog::query()->create(array_merge($botLogDefaults, [
                     'event_type' => 'guardrail',
                     'status' => 'broker_config_error',
@@ -915,8 +931,10 @@ Artisan::command('mt5:auto-forex
         $this->info('Running bot: '.$botName.' ('.$botKey.')');
         if ($usesAlpacaCycle) {
             $this->line('Broker: Alpaca paper crypto');
+        } elseif ($usesEaBridgeCycle) {
+            $this->line('Broker: EA Bridge (LaravelBridge)');
         } else {
-            $this->line('Broker: MetaApi / MT5');
+            $this->line('Broker: MetaApi (cloud MT5)');
         }
 
         if ($scalperMode) {

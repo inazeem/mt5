@@ -86,6 +86,7 @@
                                     : []
                             )
                         ),
+                        'selectedBroker' => old('mt5_broker', $profile['mt5_broker'] ?? 'ea_bridge'),
                     ])
 
                     <div class="rounded-lg border border-gray-200 p-4">

@@ -2,11 +2,12 @@
 
 Remote-control your MT5 account from the Laravel panel. The **LaravelBridge** Expert Advisor polls your server every second, sends account data, and executes queued trade commands.
 
-This is an alternative to **MetaAPI** (`Mt5Service`). **Forex bot profiles now use EA bridge only** — no MetaAPI for quotes, candles, or trade execution. Alpaca crypto profiles are unchanged.
+This is an alternative to **MetaAPI** (`Mt5Service`). **Forex bot profiles default to EA Bridge**; you can switch any profile back to MetaApi under **Execution broker** in Bot Profiles. Alpaca crypto profiles are unchanged.
 
 | Approach | Best for |
 |----------|----------|
-| **EA Bridge** (this doc) | MT5 multi-account, bot profiles, direct broker execution |
+| **EA Bridge** (this doc) | MT5 multi-account, LaravelBridge, direct broker execution |
+| **MetaApi** | Cloud MT5 when EA bridge is not used (Settings → token + account ID) |
 | **Alpaca** | Crypto bot profiles |
 
 Related files:
@@ -100,9 +101,20 @@ In **Bot Profiles** → **MT5 Instance Key**, choose which terminal receives tha
 
 Bot profile `scalper` → `pepperstone-demo`, profile `swing` → `ic-markets-live`.
 
+### 5. EA Bridge vs MetaApi (per bot profile)
+
+In **Bot Profiles → Forex / MT5 execution → Execution broker**:
+
+| Value | Behavior |
+|-------|----------|
+| **EA Bridge (LaravelBridge)** | Default. Uses instance checkboxes, polls `/api/ea/poll`, queues trades to selected MT5 terminals. |
+| **MetaApi (cloud MT5)** | Uses **Settings → MetaApi token + account ID**. Trailing stops and MetaApi outage cooldown apply. Instance checkboxes are ignored. |
+
+Existing profiles without `mt5_broker` behave as **EA Bridge**. The manual **Bot** dashboard (`/bot`) still uses MetaApi for live positions when configured, independent of profile broker choice.
+
 ---
 
-## Bot execution flow (no MetaAPI)
+## Bot execution flow (EA Bridge)
 
 ### 1. Run migrations
 
@@ -408,7 +420,76 @@ Update `InpApiToken` on the chart (right-click EA → Properties → Inputs) or 
 
 ### HTTPS / local dev (Herd)
 
-Use `https://mt5.test` (or your Herd URL) in both MT5 WebRequest whitelist and `InpServerUrl`. For production, use a real domain with valid TLS.
+Use `https://mt5.test` (or your Herd URL) in both MT5 WebRequest whitelist and `InpServerUrl`. For production, use a real domain with valid TLS (see below).
+
+---
+
+## Production deployment (iiadigital)
+
+Use your live Laravel app instead of Herd when MT5 should talk to the server on the internet (e.g. **`https://mt5.iiadigital.co.uk`**). The EA bridge is the same API; only the base URL and tokens change.
+
+### Server (Laravel)
+
+1. Deploy the latest code (branch **`mttest`** or merged main).
+2. Set in `.env`:
+
+   ```env
+   APP_URL=https://mt5.iiadigital.co.uk
+   ```
+
+3. Run migrations on production:
+
+   ```bash
+   php artisan migrate
+   ```
+
+4. Log in to **`https://mt5.iiadigital.co.uk/ea-bridge`** and create each MT5 instance there.
+5. Use **Show Token** (or create/regenerate) and copy the token — **production tokens are separate from Herd**. Tokens from `mt5.test` do not work on iiadigital unless you recreate the same instances on the live database.
+
+### MT5 (each chart)
+
+1. **Tools → Options → Expert Advisors → Allow WebRequest** — add:
+
+   ```text
+   https://mt5.iiadigital.co.uk
+   ```
+
+   (Host only, no path, no trailing slash.)
+
+2. **LaravelBridge** inputs:
+
+   | Input | Example |
+   |-------|---------|
+   | `InpServerUrl` | `https://mt5.iiadigital.co.uk` |
+   | `InpApiToken` | From live `/ea-bridge` → **Credentials** → **Show Token** |
+   | `InpInstanceKey` | Same as the instance key on live (if set) |
+
+   Poll endpoint: `https://mt5.iiadigital.co.uk/api/ea/poll`
+
+3. Enable **Algo Trading**, attach the EA, confirm the instance is **Online** on live `/ea-bridge`.
+
+### Verify on production
+
+- [ ] `APP_URL` matches `https://mt5.iiadigital.co.uk`
+- [ ] `php artisan migrate` completed on production
+- [ ] Instances created on **live** `/ea-bridge` (not only Herd)
+- [ ] WebRequest whitelist includes `https://mt5.iiadigital.co.uk`
+- [ ] `InpServerUrl` = `https://mt5.iiadigital.co.uk` (no trailing slash)
+- [ ] `InpApiToken` = token from **live** instance (**Show Token**)
+- [ ] Instance **Online** on live site; **Test Trade** completes
+- [ ] No `4014` in Experts (URL not allowed) or `401` (wrong/missing token)
+
+### Local vs production
+
+| | Herd (dev) | Production |
+|---|------------|------------|
+| URL | `https://mt5.test` | `https://mt5.iiadigital.co.uk` |
+| Instances / tokens | Local DB | Production DB — recreate on live |
+| MT5 whitelist | `https://mt5.test` | `https://mt5.iiadigital.co.uk` |
+
+Do not point one EA at Herd and another at production unless you intentionally run two environments. Each chart should use one base URL and the matching instance token from that same environment.
+
+Requirements: valid HTTPS certificate on the domain, Laravel reachable from the internet (not localhost-only), firewall allows normal HTTPS to the app.
 
 ---
 

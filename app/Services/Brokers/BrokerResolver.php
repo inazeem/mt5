@@ -36,6 +36,10 @@ class BrokerResolver
             return $this->alpacaService;
         }
 
+        if (self::profileForexBroker($botProfile) === 'metaapi') {
+            return $this->mt5Service;
+        }
+
         $instanceKeys = EaBridgeService::profileInstanceKeys($botProfile);
 
         if ($instanceKeys === []) {
@@ -65,6 +69,21 @@ class BrokerResolver
     public function usesEaBridge(MarketBrokerInterface $broker): bool
     {
         return $broker instanceof EaBridgeBroker;
+    }
+
+    public function usesMetaApi(MarketBrokerInterface $broker): bool
+    {
+        return $broker instanceof Mt5Service;
+    }
+
+    /**
+     * @param  array<string, mixed>  $botProfile
+     */
+    public static function profileForexBroker(array $botProfile): string
+    {
+        $value = strtolower(trim((string) ($botProfile['mt5_broker'] ?? 'ea_bridge')));
+
+        return in_array($value, ['ea_bridge', 'metaapi'], true) ? $value : 'ea_bridge';
     }
 
     /**
