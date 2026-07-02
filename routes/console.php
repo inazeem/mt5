@@ -138,7 +138,7 @@ use Illuminate\Support\Facades\Schedule;
  * → reverse-strategy flip (§16) → bot score (§17) → volume/open/spread checks
  * → asset daily limit → cooldown → trend filter (§18) → TP/SL → AI (§19) → placeOrder (§20)
  *
- * Quote fetch: 6-letter pairs use {SYMBOL}_SB suffix; orders use raw symbol.
+ * Quote fetch: EA bridge uses per-terminal symbol mapping; MetaAPI 6-letter pairs use _SB suffix.
  * Last bid cache: auto_bot_last_bid_{bot_key}_{symbol} (6 hours).
  *
  * ─── §15 STRATEGY EVALUATION ──────────────────────────────────────────────────
@@ -1678,7 +1678,9 @@ Artisan::command('mt5:auto-forex
             $symbol = strtoupper((string) $symbol);
             $quoteSymbol = $usesAlpacaCycle
                 ? $symbol
-                : (preg_match('/^[A-Z]{6}$/', $symbol) === 1 ? $symbol.'_SB' : $symbol);
+                : ($usesEaBridgeCycle
+                    ? $cycleBroker->toBrokerSymbol($symbol)
+                    : (preg_match('/^[A-Z]{6}$/', $symbol) === 1 ? $symbol.'_SB' : $symbol));
             $scanned++;
             $this->line("  SCANNED: {$quoteSymbol}");
 

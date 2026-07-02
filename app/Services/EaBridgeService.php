@@ -13,6 +13,9 @@ use RuntimeException;
 
 class EaBridgeService
 {
+    public function __construct(
+        private readonly SymbolMapper $symbolMapper,
+    ) {}
     public function resolveTerminalFromToken(?string $token): ?Mt5EaTerminal
     {
         if ($token === null || trim($token) === '') {
@@ -270,6 +273,12 @@ class EaBridgeService
             'display_name' => trim((string) ($data['display_name'] ?? $terminal->display_name ?? '')) ?: null,
             'enabled' => array_key_exists('enabled', $data) ? (bool) $data['enabled'] : $terminal->enabled,
             'is_demo' => array_key_exists('is_demo', $data) ? (bool) $data['is_demo'] : $terminal->is_demo,
+            'symbol_suffix' => array_key_exists('symbol_suffix', $data)
+                ? ($data['symbol_suffix'] !== '' ? (string) $data['symbol_suffix'] : null)
+                : $terminal->symbol_suffix,
+            'symbol_map' => array_key_exists('symbol_map', $data)
+                ? (is_array($data['symbol_map']) ? $data['symbol_map'] : $terminal->symbol_map)
+                : $terminal->symbol_map,
         ]);
         $terminal->save();
 
@@ -369,6 +378,13 @@ class EaBridgeService
                 ->first();
         }
 
+        $canonicalSymbol = isset($data['symbol']) ? strtoupper(trim((string) $data['symbol'])) : null;
+        $brokerSymbol = $canonicalSymbol;
+
+        if ($canonicalSymbol !== null && $terminal !== null) {
+            $brokerSymbol = $this->symbolMapper->toBrokerSymbol($terminal, $canonicalSymbol);
+        }
+
         return Mt5EaCommand::query()->create([
             'mt5_ea_terminal_id' => $terminal?->id,
             'account_login' => $accountLogin,
@@ -377,7 +393,7 @@ class EaBridgeService
             'bot_key' => isset($data['bot_key']) ? trim((string) $data['bot_key']) : null,
             'source' => isset($data['source']) ? trim((string) $data['source']) : null,
             'action' => $action,
-            'symbol' => isset($data['symbol']) ? strtoupper(trim((string) $data['symbol'])) : null,
+            'symbol' => $brokerSymbol,
             'lot' => isset($data['lot']) ? (float) $data['lot'] : null,
             'sl' => isset($data['sl']) ? (float) $data['sl'] : null,
             'tp' => isset($data['tp']) ? (float) $data['tp'] : null,
@@ -521,6 +537,11 @@ class EaBridgeService
             $symbols = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD'];
         }
 
+        $symbols = array_values(array_unique(array_filter($symbols)));
+        $symbols = array_map(
+            fn (string $symbol) => $this->symbolMapper->toBrokerSymbol($terminal, $symbol),
+            $symbols
+        );
         $symbols = array_values(array_unique(array_filter($symbols)));
         $timeframes = array_values(array_unique(array_filter($timeframes)));
         if ($timeframes === []) {

@@ -10,6 +10,7 @@
                 <li>Create one instance per MT5 install (demo or live). Each gets a unique API token.</li>
                 <li>In MT5: whitelist your Laravel URL in WebRequest, set <code>InpServerUrl</code> and paste the token from <strong>Credentials → Show Token</strong>.</li>
                 <li>Only one EA typically polls at a time per chart. Bot profiles can target one or more instances.</li>
+                <li>Set <strong>Symbol suffix mode</strong> per instance: Pepperstone spread-bet uses <code>_SB</code>; IC Markets uses plain symbols.</li>
                 <li>See the <a href="{{ route('setup.index') }}">Setup Guide</a> for full steps including production deployment.</li>
             </ul>
         </x-guide-panel>

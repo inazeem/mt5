@@ -30,5 +30,10 @@ interface MarketBrokerInterface
      */
     public function getAccountInformation(): array;
 
+    /**
+     * Map a canonical symbol to the broker-specific tradable symbol.
+     */
+    public function toBrokerSymbol(string $symbol): string;
+
     public function baseSymbol(string $symbol): string;
 }

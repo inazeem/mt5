@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Mt5EaCommand;
 use App\Models\Mt5EaTerminal;
 use App\Services\EaBridgeService;
+use App\Services\SymbolMapper;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
 use RuntimeException;
@@ -78,10 +79,16 @@ class EaBridgeWebController extends Controller
             'display_name' => ['nullable', 'string', 'max:120'],
             'enabled' => ['nullable', 'boolean'],
             'is_demo' => ['nullable', 'boolean'],
+            'symbol_suffix' => ['nullable', 'string', 'in:auto,none,spread_bet'],
+            'symbol_map' => ['nullable', 'string', 'max:5000'],
         ]);
 
         $validated['enabled'] = $request->boolean('enabled');
         $validated['is_demo'] = $request->boolean('is_demo');
+
+        if ($request->has('symbol_map')) {
+            $validated['symbol_map'] = SymbolMapper::parseMapInput((string) $request->input('symbol_map', ''));
+        }
 
         try {
             $eaBridge->updateTerminalInstance($terminal->id, $validated);

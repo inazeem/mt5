@@ -1315,6 +1315,15 @@ class Mt5Service implements MarketBrokerInterface
      * Strip broker-specific suffixes (e.g. ".a", ".m", "_SB") from a symbol
      * and return the normalised base symbol in upper-case.
      */
+    public function toBrokerSymbol(string $symbol): string
+    {
+        return strtoupper(str_replace('/', '', trim($symbol)));
+    }
+
+    /**
+     * Strip broker-specific suffixes (e.g. ".a", ".m", "_SB") from a symbol
+     * and return the normalised base symbol in upper-case.
+     */
     public function baseSymbol(string $symbol): string
     {
         $upper = strtoupper(str_replace('/', '', trim($symbol)));

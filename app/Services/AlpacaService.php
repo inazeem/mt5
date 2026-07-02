@@ -374,6 +374,11 @@ class AlpacaService implements MarketBrokerInterface
         return $normalized;
     }
 
+    public function toBrokerSymbol(string $symbol): string
+    {
+        return $this->toAlpacaSymbol($symbol);
+    }
+
     public function baseSymbol(string $symbol): string
     {
         return strtoupper(str_replace('/', '', trim($symbol)));

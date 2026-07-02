@@ -27,6 +27,32 @@
                 Demo account
             </label>
         </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Symbol suffix mode</label>
+            <select name="symbol_suffix" class="mt-1 block w-full rounded border-gray-300 text-sm">
+                @php
+                    $suffixValue = old('symbol_suffix.'.$terminal->id, $terminal->symbol_suffix ?: 'auto');
+                    $suffixOptions = \App\Services\SymbolMapper::suffixOptions();
+                @endphp
+                @foreach ($suffixOptions as $value => $label)
+                    <option value="{{ $value }}" @selected($suffixValue === $value)>{{ $label }}</option>
+                @endforeach
+            </select>
+            <p class="mt-1 text-xs text-gray-500">Pepperstone spread-bet accounts need <strong>Spread bet (_SB)</strong>. IC Markets-style brokers use <strong>Plain</strong>.</p>
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Symbol map overrides (optional)</label>
+            @php
+                $mapLines = old('symbol_map.'.$terminal->id);
+                if ($mapLines === null && is_array($terminal->symbol_map)) {
+                    $mapLines = collect($terminal->symbol_map)
+                        ->map(fn ($broker, $canonical) => $canonical.'='.$broker)
+                        ->implode("\n");
+                }
+            @endphp
+            <textarea name="symbol_map" rows="4" class="mt-1 block w-full rounded border-gray-300 font-mono text-xs" placeholder="GBPUSD=GBPUSD_SB&#10;EURAUD=EURAUD_SB">{{ $mapLines }}</textarea>
+            <p class="mt-1 text-xs text-gray-500">One per line: <code>CANONICAL=BROKER</code>. Canonical symbols come from tickers/profiles (e.g. GBPUSD).</p>
+        </div>
         <div class="flex justify-end gap-3 pt-2">
             <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
             <button type="submit" class="inline-flex px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500">Save</button>

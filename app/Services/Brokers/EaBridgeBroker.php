@@ -8,6 +8,7 @@ use App\Models\Mt5EaTerminal;
 use App\Models\Ticker;
 use App\Services\EaBridgeService;
 use App\Services\Mt5Service;
+use App\Services\SymbolMapper;
 use RuntimeException;
 
 class EaBridgeBroker implements MarketBrokerInterface
@@ -17,6 +18,7 @@ class EaBridgeBroker implements MarketBrokerInterface
     public function __construct(
         private readonly EaBridgeService $eaBridge,
         private readonly Mt5Service $mt5Service,
+        private readonly SymbolMapper $symbolMapper,
     ) {}
 
     public function forInstance(?string $instanceKey): self
@@ -33,7 +35,7 @@ class EaBridgeBroker implements MarketBrokerInterface
         $requested = strtoupper(str_replace('/', '', trim($symbol)));
         $quotes = is_array($terminal->market_quotes) ? $terminal->market_quotes : [];
 
-        foreach ($this->symbolCandidates($requested) as $candidate) {
+        foreach ($this->symbolMapper->brokerSymbolCandidates($terminal, $requested) as $candidate) {
             $quote = $quotes[$candidate] ?? $quotes[strtoupper($candidate)] ?? null;
             if (! is_array($quote)) {
                 continue;
@@ -67,7 +69,7 @@ class EaBridgeBroker implements MarketBrokerInterface
         $limit = max(1, min(1000, $limit));
         $candlesByKey = is_array($terminal->market_candles) ? $terminal->market_candles : [];
 
-        foreach ($this->symbolCandidates($requested) as $candidate) {
+        foreach ($this->symbolMapper->brokerSymbolCandidates($terminal, $requested) as $candidate) {
             $cacheKey = strtoupper($candidate).':'.$normalizedTimeframe;
             $candles = $candlesByKey[$cacheKey] ?? null;
             if (! is_array($candles) || $candles === []) {
@@ -190,6 +192,11 @@ class EaBridgeBroker implements MarketBrokerInterface
         ];
     }
 
+    public function toBrokerSymbol(string $symbol): string
+    {
+        return $this->symbolMapper->toBrokerSymbol($this->terminal(), $symbol);
+    }
+
     public function baseSymbol(string $symbol): string
     {
         return $this->mt5Service->baseSymbol($symbol);
@@ -202,20 +209,5 @@ class EaBridgeBroker implements MarketBrokerInterface
         }
 
         return $this->terminal;
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    private function symbolCandidates(string $symbol): array
-    {
-        $requested = strtoupper(str_replace('/', '', trim($symbol)));
-        $candidates = [$requested];
-
-        foreach (['_SB', '.a', '.c', '.pro'] as $suffix) {
-            $candidates[] = $requested.$suffix;
-        }
-
-        return array_values(array_unique(array_filter($candidates)));
     }
 }

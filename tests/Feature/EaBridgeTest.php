@@ -222,4 +222,46 @@ class EaBridgeTest extends TestCase
 
         $this->assertSame(['demo-a', 'demo-b', 'demo-c'], $keys);
     }
+
+    public function test_queue_command_maps_symbol_for_spread_bet_terminal(): void
+    {
+        AppSetting::singleton();
+        $terminal = $this->seedOnlineTerminal([
+            'instance_key' => 'pepper-demo',
+            'symbol_suffix' => 'spread_bet',
+        ]);
+
+        $command = app(EaBridgeService::class)->queueCommand([
+            'action' => 'BUY',
+            'symbol' => 'GBPUSD',
+            'lot' => 0.01,
+            'mt5_instance_key' => $terminal->instance_key,
+        ]);
+
+        $this->assertSame('GBPUSD_SB', $command->symbol);
+    }
+
+    public function test_poll_watch_plan_uses_broker_symbols(): void
+    {
+        AppSetting::singleton();
+        $terminal = $this->seedOnlineTerminal([
+            'instance_key' => 'pepper-demo',
+            'symbol_suffix' => 'spread_bet',
+            'market_quotes' => [
+                'GBPUSD_SB' => ['bid' => 1.2650, 'ask' => 1.2652],
+            ],
+        ]);
+        $token = (string) $terminal->api_token;
+
+        $response = $this->withToken($token, 'Bearer')->postJson('/api/ea/poll', [
+            'login' => $terminal->account_login,
+            'server' => $terminal->server,
+            'positions' => [],
+        ]);
+
+        $response->assertOk();
+        $watchSymbols = $response->json('watch_symbols') ?? [];
+        $this->assertContains('GBPUSD_SB', $watchSymbols);
+        $this->assertNotContains('GBPUSD', $watchSymbols);
+    }
 }
