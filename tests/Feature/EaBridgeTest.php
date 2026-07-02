@@ -323,4 +323,37 @@ class EaBridgeTest extends TestCase
         $this->assertSame(0.89, $quote['bid']);
         $this->assertSame('USDCHF', $quote['symbol']);
     }
+
+    public function test_resolve_scan_broker_detailed_records_attempts(): void
+    {
+        AppSetting::singleton();
+
+        $this->seedOnlineTerminal([
+            'instance_key' => 'pepper-demo',
+            'display_name' => 'Pepperstone Demo',
+            'symbol_suffix' => 'spread_bet',
+            'market_quotes' => [],
+        ]);
+
+        $this->seedOnlineTerminal([
+            'instance_key' => 'ic-demo',
+            'display_name' => 'ICMARKET DEMO',
+            'symbol_suffix' => 'none',
+            'account_login' => 54321,
+            'market_quotes' => [
+                'USDCHF' => ['bid' => 0.89, 'ask' => 0.8902],
+            ],
+        ]);
+
+        $resolution = app(EaBridgeService::class)->resolveScanBrokerDetailed(
+            'USDCHF',
+            ['pepper-demo', 'ic-demo'],
+            app(EaBridgeBroker::class)
+        );
+
+        $this->assertSame('ic-demo', $resolution['instance_key']);
+        $this->assertCount(2, $resolution['attempts']);
+        $this->assertFalse($resolution['attempts'][0]['ok']);
+        $this->assertTrue($resolution['attempts'][1]['ok']);
+    }
 }

@@ -690,23 +690,80 @@ class EaBridgeService
      */
     public function resolveScanBroker(string $canonicalSymbol, array $instanceKeys, EaBridgeBroker $broker): EaBridgeBroker
     {
+        $resolution = $this->resolveScanBrokerDetailed($canonicalSymbol, $instanceKeys, $broker);
+
+        if ($resolution['broker'] === null) {
+            throw new RuntimeException((string) ($resolution['error'] ?? 'No EA instance available.'));
+        }
+
+        return $resolution['broker'];
+    }
+
+    /**
+     * @param  array<int, string>  $instanceKeys
+     * @return array{
+     *     broker: ?EaBridgeBroker,
+     *     canonical_symbol: string,
+     *     broker_symbol: ?string,
+     *     instance_key: ?string,
+     *     instance_label: ?string,
+     *     attempts: array<int, array{instance_key: ?string, instance_label: string, broker_symbol: string, ok: bool, error?: string}>,
+     *     error: ?string
+     * }
+     */
+    public function resolveScanBrokerDetailed(string $canonicalSymbol, array $instanceKeys, EaBridgeBroker $broker): array
+    {
         $canonical = $this->symbolMapper->normalizeCanonical($canonicalSymbol);
         $keys = $instanceKeys !== [] ? $instanceKeys : [null];
+        $attempts = [];
         $lastError = null;
 
         foreach ($keys as $key) {
+            $instanceLabel = $key !== null ? (string) $key : 'default';
+            $brokerSymbol = $canonical;
+
             try {
                 $instance = $broker->forInstance($key);
+                $instanceLabel = $instance->instanceLabel();
+                $brokerSymbol = $instance->toBrokerSymbol($canonical);
                 $instance->getTickerPrice($canonical);
 
-                return $instance;
+                $attempts[] = [
+                    'instance_key' => $instance->instanceKey(),
+                    'instance_label' => $instanceLabel,
+                    'broker_symbol' => $brokerSymbol,
+                    'ok' => true,
+                ];
+
+                return [
+                    'broker' => $instance,
+                    'canonical_symbol' => $canonical,
+                    'broker_symbol' => $brokerSymbol,
+                    'instance_key' => $instance->instanceKey(),
+                    'instance_label' => $instanceLabel,
+                    'attempts' => $attempts,
+                    'error' => null,
+                ];
             } catch (\Throwable $e) {
+                $attempts[] = [
+                    'instance_key' => $key,
+                    'instance_label' => $instanceLabel,
+                    'broker_symbol' => $brokerSymbol,
+                    'ok' => false,
+                    'error' => $e->getMessage(),
+                ];
                 $lastError = $e;
             }
         }
 
-        $message = $lastError?->getMessage() ?? 'No EA instance available for '.$canonical.'.';
-
-        throw new RuntimeException($message, 0, $lastError);
+        return [
+            'broker' => null,
+            'canonical_symbol' => $canonical,
+            'broker_symbol' => null,
+            'instance_key' => null,
+            'instance_label' => null,
+            'attempts' => $attempts,
+            'error' => $lastError?->getMessage() ?? 'No EA instance available for '.$canonical.'.',
+        ];
     }
 }

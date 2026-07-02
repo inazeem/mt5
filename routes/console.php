@@ -937,6 +937,20 @@ Artisan::command('mt5:auto-forex
             $this->line('Broker: Alpaca paper crypto');
         } elseif ($usesEaBridgeCycle) {
             $this->line('Broker: EA Bridge (LaravelBridge)');
+            if ($eaProfileInstanceKeys !== []) {
+                $instanceSummaries = [];
+                foreach ($eaProfileInstanceKeys as $instanceKey) {
+                    try {
+                        $scanInstance = $eaBridgeBrokerForScan?->forInstance($instanceKey);
+                        $instanceSummaries[] = $scanInstance
+                            ? $scanInstance->instanceLabel().' ['.$scanInstance->instanceKey().']'
+                            : $instanceKey;
+                    } catch (\Throwable $e) {
+                        $instanceSummaries[] = $instanceKey.' (offline: '.$e->getMessage().')';
+                    }
+                }
+                $this->line('EA scan instances: '.implode(' | ', $instanceSummaries));
+            }
         } else {
             $this->line('Broker: MetaApi (cloud MT5)');
         }
@@ -1653,6 +1667,33 @@ Artisan::command('mt5:auto-forex
                 || str_contains($upper, 'CONNECTION RESET');
         };
 
+        $logEaScanResolution = function (string $canonicalSymbol, array $resolution): void {
+            $attempts = is_array($resolution['attempts'] ?? null) ? $resolution['attempts'] : [];
+            if ($attempts === []) {
+                return;
+            }
+
+            foreach ($attempts as $attempt) {
+                if (! is_array($attempt)) {
+                    continue;
+                }
+
+                $label = (string) ($attempt['instance_label'] ?? 'unknown');
+                $brokerSymbol = (string) ($attempt['broker_symbol'] ?? $canonicalSymbol);
+                $key = (string) ($attempt['instance_key'] ?? '-');
+                $ok = (bool) ($attempt['ok'] ?? false);
+
+                if ($ok) {
+                    $this->line('    instance '.$label.' ['.$key.'] symbol '.$brokerSymbol.': quote ok');
+
+                    continue;
+                }
+
+                $error = trim((string) ($attempt['error'] ?? 'quote unavailable'));
+                $this->line('    instance '.$label.' ['.$key.'] symbol '.$brokerSymbol.': '.$error);
+            }
+        };
+
         // ── §14–§20 PER-SYMBOL SCAN LOOP (quote → strategy → filters → AI → order) ──
         foreach ($symbols as $symbol) {
             if (!$usesEaBridgeCycle) {
@@ -1690,35 +1731,63 @@ Artisan::command('mt5:auto-forex
             $symbol = $mt5Service->baseSymbol(strtoupper((string) $symbol));
             $symbolScanBroker = $cycleBroker;
             $brokerSymbol = $symbol;
+            $scanResolution = null;
+            $scanMetaPayload = [];
 
             if ($usesEaBridgeCycle && $eaBridgeBrokerForScan !== null) {
-                try {
-                    $symbolScanBroker = app(EaBridgeService::class)->resolveScanBroker(
-                        $symbol,
-                        $eaProfileInstanceKeys,
-                        $eaBridgeBrokerForScan
-                    );
-                    $brokerSymbol = $symbolScanBroker->toBrokerSymbol($symbol);
-                } catch (\Throwable $e) {
-                    $errorMessage = $e->getMessage();
+                $scanResolution = app(EaBridgeService::class)->resolveScanBrokerDetailed(
+                    $symbol,
+                    $eaProfileInstanceKeys,
+                    $eaBridgeBrokerForScan
+                );
+                $scanMetaPayload = [
+                    'ea_canonical_symbol' => $scanResolution['canonical_symbol'] ?? $symbol,
+                    'ea_broker_symbol' => $scanResolution['broker_symbol'] ?? null,
+                    'ea_instance_key' => $scanResolution['instance_key'] ?? null,
+                    'ea_instance_label' => $scanResolution['instance_label'] ?? null,
+                    'ea_scan_attempts' => $scanResolution['attempts'] ?? [],
+                ];
+
+                if ($scanResolution['broker'] === null) {
+                    $errorMessage = (string) ($scanResolution['error'] ?? 'Quote unavailable on all attached instances.');
                     $scanned++;
-                    $this->line("  SCANNED: {$symbol}");
-                    Log::warning('Auto bot quote failed', ['symbol' => $symbol, 'error' => $errorMessage]);
+                    $this->line('  SCANNED: '.$symbol.' — no quote on attached instances');
+                    $logEaScanResolution($symbol, $scanResolution);
+                    Log::warning('Auto bot quote failed on all EA instances', [
+                        'symbol' => $symbol,
+                        'attempts' => $scanResolution['attempts'] ?? [],
+                        'error' => $errorMessage,
+                    ]);
                     $this->line("  {$symbol}: quote error — {$errorMessage}");
                     $logSignal([
                         'status' => 'quote_error',
                         'symbol' => $symbol,
                         'message' => 'Signal skipped due to quote retrieval failure.',
                         'error_message' => $errorMessage,
+                        'meta_payload' => $scanMetaPayload,
                     ]);
                     continue;
                 }
+
+                $symbolScanBroker = $scanResolution['broker'];
+                $brokerSymbol = (string) ($scanResolution['broker_symbol'] ?? $symbolScanBroker->toBrokerSymbol($symbol));
             } elseif (! $usesAlpacaCycle && ! $usesEaBridgeCycle) {
                 $brokerSymbol = preg_match('/^[A-Z]{6}$/', $symbol) === 1 ? $symbol.'_SB' : $symbol;
             }
 
             $scanned++;
-            $this->line('  SCANNED: '.$symbol.($brokerSymbol !== $symbol ? ' ('.$brokerSymbol.')' : ''));
+            if ($usesEaBridgeCycle && $scanResolution !== null) {
+                $this->line(
+                    '  SCANNED: '.$symbol.' via '
+                    .($scanResolution['instance_label'] ?? 'EA instance')
+                    .' ['.($scanResolution['instance_key'] ?? '-').'] as '.$brokerSymbol
+                );
+                if (count($scanResolution['attempts'] ?? []) > 1) {
+                    $logEaScanResolution($symbol, $scanResolution);
+                }
+            } else {
+                $this->line('  SCANNED: '.$symbol.($brokerSymbol !== $symbol ? ' ('.$brokerSymbol.')' : ''));
+            }
 
             if (!$reserveCycleCredits($creditCostQuote, 'quote', $symbol)) {
                 break;
@@ -1730,11 +1799,15 @@ Artisan::command('mt5:auto-forex
                 $errorMessage = $e->getMessage();
                 Log::warning('Auto bot quote failed', ['symbol' => $symbol, 'error' => $errorMessage]);
                 $this->line("  {$symbol}: quote error — {$errorMessage}");
+                if ($usesEaBridgeCycle && $scanResolution !== null) {
+                    $logEaScanResolution($symbol, $scanResolution);
+                }
                 $logSignal([
                     'status' => 'quote_error',
                     'symbol' => $symbol,
                     'message' => 'Signal skipped due to quote retrieval failure.',
                     'error_message' => $errorMessage,
+                    'meta_payload' => $scanMetaPayload,
                 ]);
 
                 $upperError = strtoupper($errorMessage);

@@ -203,6 +203,16 @@ class EaBridgeBroker implements MarketBrokerInterface
         return $this->mt5Service->baseSymbol($symbol);
     }
 
+    public function instanceKey(): ?string
+    {
+        return $this->terminal()->instance_key;
+    }
+
+    public function instanceLabel(): string
+    {
+        return $this->terminal()->label();
+    }
+
     private function terminal(): Mt5EaTerminal
     {
         if ($this->terminal === null) {
