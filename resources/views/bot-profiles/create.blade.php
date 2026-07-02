@@ -1,22 +1,17 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Create Bot Profile</h2>
-    </x-slot>
+    <x-page-header title="Create Bot Profile" subtitle="Define strategy, symbols, risk, and MT5 execution for a new bot." />
 
-    <div class="py-8">
-        <div class="max-w-6xl mx-auto sm:px-6 lg:px-8">
-            <div class="bg-white p-6 rounded-lg shadow">
-                @if ($errors->any())
-                    <div class="mb-4 p-4 bg-rose-50 border border-rose-200 rounded">
-                        <h4 class="text-sm font-semibold text-rose-800 mb-2">Validation Errors</h4>
-                        <ul class="list-disc list-inside text-sm text-rose-700 space-y-1">
-                            @foreach ($errors->all() as $error)
-                                <li>{{ $error }}</li>
-                            @endforeach
-                        </ul>
-                    </div>
-                @endif
+    <div class="mx-auto max-w-6xl space-y-6">
+        <x-flash-messages />
 
+        <x-guide-panel title="Profile setup tips">
+            <ul>
+                <li>Pick <strong>EA Bridge</strong> and select MT5 instance(s), or <strong>MetaApi</strong> for cloud execution.</li>
+                <li>Leave parameter fields blank to inherit defaults from Settings → Auto-Bot Parameters.</li>
+            </ul>
+        </x-guide-panel>
+
+            <x-card>
                 <form method="POST" action="{{ route('bot-profiles.store') }}" class="space-y-6">
                     @csrf
                     @php
@@ -409,7 +404,6 @@
                         </a>
                     </div>
                 </form>
-            </div>
-        </div>
+            </x-card>
     </div>
 </x-app-layout>

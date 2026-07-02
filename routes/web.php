@@ -3,9 +3,11 @@
 use App\Http\Controllers\AiController;
 use App\Http\Controllers\BotController;
 use App\Http\Controllers\BotProfileController;
+use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\EaBridgeWebController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\SetupController;
 use App\Http\Controllers\StrategyController;
 use App\Http\Controllers\TickerController;
 use Illuminate\Support\Facades\Route;
@@ -14,11 +16,10 @@ Route::get('/', function () {
     return redirect()->route('dashboard');
 });
 
-Route::get('/dashboard', function () {
-    return view('dashboard');
-})->middleware(['auth', 'owner'])->name('dashboard');
+Route::get('/dashboard', DashboardController::class)->middleware(['auth', 'owner'])->name('dashboard');
 
 Route::middleware(['auth', 'owner'])->group(function () {
+    Route::get('/setup', [SetupController::class, 'index'])->name('setup.index');
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');

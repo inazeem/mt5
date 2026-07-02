@@ -1,15 +1,11 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Bot Health</h2>
-    </x-slot>
+    <x-page-header title="Bot Health" subtitle="Runtime checks — why the bot can or cannot place trades right now." />
 
-    <div class="py-8">
-        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
-            <div class="bg-white p-6 rounded-lg shadow space-y-4">
-                <div class="flex items-center justify-between">
+    <div class="mx-auto max-w-7xl space-y-6">
+            <x-card>
+                <div class="flex items-center justify-between mb-4">
                     <div>
-                        <h3 class="text-lg font-semibold">Runtime Status</h3>
-                        <p class="text-sm text-gray-500">Use this page to see why the bot can or cannot place trades right now.</p>
+                        <p class="text-sm text-slate-500 dark:text-slate-400">Refresh checks for a specific symbol or review recent issues below.</p>
                     </div>
                     <div class="flex gap-2">
                         <a href="{{ route('bot.analytics') }}"
@@ -143,7 +139,6 @@
                         </tbody>
                     </table>
                 </div>
-            </div>
-        </div>
+            </x-card>
     </div>
 </x-app-layout>

@@ -1,27 +1,20 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Settings</h2>
-    </x-slot>
+    <x-page-header title="Settings" subtitle="Access control, broker credentials, AI, and auto-bot defaults." />
 
-    <div class="py-8">
-        <div class="max-w-5xl mx-auto sm:px-6 lg:px-8 space-y-6">
-            @if (session('status'))
-                <div class="bg-green-100 border border-green-200 text-green-800 p-4 rounded">
-                    {{ session('status') }}
-                </div>
-            @endif
+    <div class="mx-auto max-w-5xl space-y-6">
+        <x-flash-messages />
 
-            @if ($errors->any())
-                <div class="bg-red-100 border border-red-200 text-red-800 p-4 rounded">
-                    <ul class="list-disc list-inside space-y-1">
-                        @foreach ($errors->all() as $error)
-                            <li>{{ $error }}</li>
-                        @endforeach
-                    </ul>
-                </div>
-            @endif
+        <x-guide-panel title="Settings overview">
+            <ul>
+                <li><strong>Access</strong> — owner email and demo-only mode (recommended for testing).</li>
+                <li><strong>MetaApi</strong> — optional cloud MT5 when a bot profile uses MetaApi broker.</li>
+                <li><strong>Alpaca</strong> — crypto execution credentials.</li>
+                <li><strong>AI</strong> — provider and API keys for signal filtering.</li>
+            </ul>
+        </x-guide-panel>
 
-            <form method="POST" action="{{ route('settings.update') }}" class="bg-white p-6 rounded-lg shadow space-y-8">
+            <x-card>
+            <form method="POST" action="{{ route('settings.update') }}" class="space-y-8">
                 @csrf
                 @method('PUT')
 
@@ -204,7 +197,7 @@
                     </button>
                 </div>
             </form>
-        </div>
+            </x-card>
     </div>
 
     <script>

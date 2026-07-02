@@ -1,29 +1,21 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">MT5 Instances</h2>
-    </x-slot>
+    <div @if ($openCredentialsFor) x-data x-init="$nextTick(() => $dispatch('open-modal', 'ea-token-{{ $openCredentialsFor }}'))" @endif>
+    <x-page-header title="MT5 Instances" subtitle="Connect LaravelBridge EAs, manage tokens, and test trades per terminal." />
 
-    <div class="py-8" @if ($openCredentialsFor) x-data x-init="$nextTick(() => $dispatch('open-modal', 'ea-token-{{ $openCredentialsFor }}'))" @endif>
-        <div class="max-w-6xl mx-auto sm:px-6 lg:px-8 space-y-6">
-            @if (session('status'))
-                <div class="bg-green-100 border border-green-200 text-green-800 p-4 rounded">
-                    {{ session('status') }}
-                </div>
-            @endif
+    <div class="mx-auto max-w-6xl space-y-6">
+        <x-flash-messages />
 
-            @if ($errors->any())
-                <div class="bg-red-100 border border-red-200 text-red-800 p-4 rounded">
-                    <ul class="list-disc list-inside space-y-1">
-                        @foreach ($errors->all() as $error)
-                            <li>{{ $error }}</li>
-                        @endforeach
-                    </ul>
-                </div>
-            @endif
+        <x-guide-panel title="How MT5 Instances work">
+            <ul>
+                <li>Create one instance per MT5 install (demo or live). Each gets a unique API token.</li>
+                <li>In MT5: whitelist your Laravel URL in WebRequest, set <code>InpServerUrl</code> and paste the token from <strong>Credentials → Show Token</strong>.</li>
+                <li>Only one EA typically polls at a time per chart. Bot profiles can target one or more instances.</li>
+                <li>See the <a href="{{ route('setup.index') }}">Setup Guide</a> for full steps including production deployment.</li>
+            </ul>
+        </x-guide-panel>
 
-            <div class="bg-white p-6 rounded-lg shadow space-y-4">
-                <h3 class="text-lg font-semibold text-gray-900">Add Instance</h3>
-                <p class="text-sm text-gray-600">One row per MT5 install. Name by broker and demo/live. Each gets its own API token.</p>
+            <x-card title="Add Instance">
+                <p class="text-sm text-slate-600 dark:text-slate-400">One row per MT5 install. Name by broker and demo/live. Each gets its own API token.</p>
                 <form method="POST" action="{{ route('ea-bridge.instances.store') }}" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                     @csrf
                     <div class="md:col-span-2">
@@ -42,16 +34,15 @@
                         <button type="submit" class="inline-flex px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500">Create Instance</button>
                     </div>
                 </form>
-                <div class="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded p-3">
+                <div class="text-xs text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded p-3">
                     You can register many instances, but typically <strong>only one EA polls at a time</strong> per MT5 chart.
                     @if ($terminals->isNotEmpty())
                         Currently <strong>{{ $onlineCount }}</strong> of {{ $terminals->count() }} online.
                     @endif
                 </div>
-            </div>
+            </x-card>
 
-            <div class="bg-white p-6 rounded-lg shadow space-y-4">
-                <h3 class="text-lg font-semibold text-gray-900">Instances</h3>
+            <x-card title="Instances">
                 @if ($terminals->isEmpty())
                     <p class="text-sm text-gray-500">No instances yet. Create one above, open <strong>Credentials</strong>, copy the token into MT5, then attach LaravelBridge.</p>
                 @else
@@ -124,12 +115,12 @@
                         ])
                     @endforeach
                 @endif
-            </div>
+            </x-card>
 
             @if ($terminals->isNotEmpty())
-                <form method="POST" action="{{ route('ea-bridge.commands') }}" class="bg-white p-6 rounded-lg shadow space-y-4">
+                <x-card title="Manual Command">
+                <form method="POST" action="{{ route('ea-bridge.commands') }}" class="space-y-4">
                     @csrf
-                    <h3 class="text-lg font-semibold text-gray-900">Manual Command</h3>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Instance</label>
@@ -169,10 +160,10 @@
                     </div>
                     <button type="submit" class="inline-flex px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500">Queue Command</button>
                 </form>
+                </x-card>
             @endif
 
-            <div class="bg-white p-6 rounded-lg shadow space-y-4">
-                <h3 class="text-lg font-semibold text-gray-900">Recent Commands</h3>
+            <x-card title="Recent Commands">
                 @if ($recentCommands->isEmpty())
                     <p class="text-sm text-gray-500">No commands queued yet.</p>
                 @else
@@ -205,7 +196,7 @@
                         </table>
                     </div>
                 @endif
-            </div>
+            </x-card>
         </div>
     </div>
 </x-app-layout>

@@ -1,23 +1,24 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Bot Profiles</h2>
-    </x-slot>
+    <x-page-header title="Bot Profiles" subtitle="Configure strategies, risk, symbols, and MT5 execution per bot.">
+        <x-slot name="actions">
+            <a href="{{ route('bot-profiles.create') }}" class="inline-flex rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">+ New Profile</a>
+        </x-slot>
+    </x-page-header>
 
-    <div class="py-8">
-        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
-            @if (session('status'))
-                <div class="bg-green-100 border border-green-200 text-green-800 p-4 rounded">
-                    {{ session('status') }}
-                </div>
-            @endif
+    <div class="mx-auto max-w-6xl space-y-6">
+        <x-flash-messages />
 
-            <div class="bg-white p-6 rounded-lg shadow space-y-4">
-                <div class="flex items-center justify-between">
-                    <h3 class="text-lg font-semibold">Manage Bot Profiles</h3>
-                    <a href="{{ route('bot-profiles.create') }}"
-                       class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700">
-                        + New Bot Profile
-                    </a>
+        <x-guide-panel title="How bot profiles work">
+            <p>Each profile defines a trading strategy, symbol list, risk limits, and which MT5 instance(s) receive trades.</p>
+            <ul>
+                <li><strong>EA Bridge</strong> — default; select one or more MT5 instances to mirror signals.</li>
+                <li><strong>MetaApi</strong> — uses cloud credentials from Settings instead of LaravelBridge.</li>
+            </ul>
+        </x-guide-panel>
+
+            <x-card>
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">All profiles</h3>
                 </div>
 
                 @if (empty($profiles))
@@ -151,13 +152,11 @@
                     </div>
                 @endif
 
-                <div class="mt-6 p-4 bg-blue-50 border border-blue-200 rounded">
-                    <p class="text-xs text-blue-800">
+                <div class="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950/40">
+                    <p class="text-xs text-blue-800 dark:text-blue-200">
                         <strong>Tip:</strong> Leave parameter fields blank to use the default values from Auto-Bot Parameters in Settings.
-                        Settings values are used as fallback if a profile parameter is not specified.
                     </p>
                 </div>
-            </div>
-        </div>
+            </x-card>
     </div>
 </x-app-layout>

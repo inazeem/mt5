@@ -1,26 +1,8 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Strategy Parameters</h2>
-    </x-slot>
+    <x-page-header title="Strategy Parameters" subtitle="Tune momentum, mean-reversion, and other strategy defaults." />
 
-    <div class="py-8">
-        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
-            @if (session('status'))
-                <div class="bg-green-100 border border-green-200 text-green-800 p-4 rounded">
-                    {{ session('status') }}
-                </div>
-            @endif
-
-            @if ($errors->any())
-                <div class="bg-rose-50 border border-rose-200 text-rose-800 p-4 rounded">
-                    <h4 class="font-semibold mb-1">Please fix the following:</h4>
-                    <ul class="list-disc list-inside text-sm space-y-1">
-                        @foreach ($errors->all() as $error)
-                            <li>{{ $error }}</li>
-                        @endforeach
-                    </ul>
-                </div>
-            @endif
+    <div class="mx-auto max-w-7xl space-y-6">
+        <x-flash-messages />
 
             @php
                 $params = old('bot_strategy_params', $settings->bot_strategy_params ?? []);
@@ -340,7 +322,6 @@
                     </div>
                 </div>
             </div>
-        </div>
     </div>
 
     <script>

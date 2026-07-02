@@ -1,25 +1,16 @@
 <x-app-layout>
-    <x-slot name="header">
-        <div class="flex items-center justify-between">
-            <h2 class="font-semibold text-xl text-gray-800 leading-tight">Tickers</h2>
-            <a href="{{ route('tickers.create') }}"
-               class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded hover:bg-indigo-700">
-                + Add Ticker
-            </a>
-        </div>
-    </x-slot>
+    <x-page-header title="Tickers" subtitle="Symbols the bot can trade, with spread and TP/SL limits.">
+        <x-slot name="actions">
+            <a href="{{ route('tickers.create') }}" class="inline-flex rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">+ Add Ticker</a>
+        </x-slot>
+    </x-page-header>
 
-    <div class="py-8">
-        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-4">
-
-            @if (session('status'))
-                <div class="rounded border border-emerald-200 bg-emerald-50 text-emerald-700 px-4 py-3 text-sm">
-                    {{ session('status') }}
-                </div>
-            @endif
+    <div class="mx-auto max-w-7xl space-y-4">
+        <x-flash-messages />
 
             {{-- Filters --}}
-            <form method="GET" action="{{ route('tickers.index') }}" class="bg-white p-4 rounded-lg shadow flex flex-wrap gap-3 items-end">
+            <x-card :padding="false">
+            <form method="GET" action="{{ route('tickers.index') }}" class="flex flex-wrap gap-3 items-end p-4">
                 <div>
                     <label class="block text-xs text-gray-500 mb-1">Search</label>
                     <input type="text" name="search" value="{{ $validated['search'] ?? '' }}" placeholder="Symbol or description"
@@ -65,6 +56,7 @@
                 </div>
                 <div class="ml-auto text-xs text-gray-400 self-end">{{ $tickers->total() }} ticker(s)</div>
             </form>
+            </x-card>
 
             <div id="category-info-modal-index" class="hidden fixed inset-0 z-50">
                 <div id="category-info-backdrop-index" class="absolute inset-0 bg-black/40"></div>
@@ -86,7 +78,8 @@
             </div>
 
             {{-- Bulk actions --}}
-            <div class="bg-white p-3 rounded-lg shadow flex items-center gap-3">
+            <x-card :padding="false">
+            <div class="flex items-center gap-3 p-3">
                 <form id="bulk-delete-form" method="POST" action="{{ route('tickers.bulk-delete', request()->query()) }}" class="flex items-center gap-2">
                     @csrf
                     @method('DELETE')
@@ -99,9 +92,10 @@
                 </form>
                 <div id="bulk-selected-help" class="text-xs text-gray-500">Select rows, then click Delete Selected.</div>
             </div>
+            </x-card>
 
-            {{-- Table --}}
-            <div class="bg-white rounded-lg shadow overflow-x-auto">
+            <x-card :padding="false">
+            <div class="overflow-x-auto">
                 <table class="min-w-full text-sm">
                     <thead>
                         <tr class="text-left text-gray-600 border-b bg-gray-50">
@@ -169,15 +163,14 @@
                 </table>
             </div>
 
-            <div class="flex items-center justify-between text-sm text-gray-500">
+            <div class="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-sm text-gray-500 dark:border-slate-800">
                 <div>
                     Showing {{ $tickers->firstItem() ?? 0 }}-{{ $tickers->lastItem() ?? 0 }} of {{ $tickers->total() }}
                     (Page {{ $tickers->currentPage() }} of {{ $tickers->lastPage() }})
                 </div>
                 <div>{{ $tickers->links() }}</div>
             </div>
-
-        </div>
+            </x-card>
     </div>
 
     <script>

@@ -1,42 +1,39 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Bot Analytics</h2>
-    </x-slot>
+    <x-page-header title="Bot Analytics" subtitle="Live stats, open positions, and performance summary." />
 
-    <div class="py-8">
-        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
+    <div class="mx-auto max-w-7xl space-y-6">
             <div class="flex items-center justify-between gap-3">
-                <div class="text-xs text-gray-500" id="analytics-last-updated">Last updated: {{ now()->format('Y-m-d H:i:s') }}</div>
+                <div class="text-xs text-slate-500 dark:text-slate-400" id="analytics-last-updated">Last updated: {{ now()->format('Y-m-d H:i:s') }}</div>
                 <button
                     id="analytics-refresh-btn"
                     type="button"
-                    class="inline-flex items-center px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700"
+                    class="inline-flex items-center px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-500"
                 >
                     Refresh Now
                 </button>
             </div>
             <div class="grid grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Active Positions</div>
                     <div id="stat-active_positions" class="mt-1 text-xl sm:text-2xl font-bold text-indigo-700">{{ $stats['active_positions'] }}</div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Today Signals</div>
                     <div id="stat-today_signals" class="mt-1 text-xl sm:text-2xl font-bold text-gray-800">{{ $stats['today_signals'] }}</div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Today Opened</div>
                     <div id="stat-today_opened" class="mt-1 text-xl sm:text-2xl font-bold text-emerald-700">{{ $stats['today_opened'] }}</div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">AI Rejected</div>
                     <div id="stat-today_rejected_ai" class="mt-1 text-xl sm:text-2xl font-bold text-amber-700">{{ $stats['today_rejected_ai'] }}</div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Today Failed</div>
                     <div id="stat-today_failed" class="mt-1 text-xl sm:text-2xl font-bold text-rose-700">{{ $stats['today_failed'] }}</div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Trailing Updates</div>
                     <div id="stat-today_trailing_updates" class="mt-1 text-xl sm:text-2xl font-bold text-cyan-700">{{ $stats['today_trailing_updates'] }}</div>
                 </div>
@@ -50,38 +47,38 @@
             </div>
 
             <div class="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 sm:gap-4">
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow col-span-1">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 col-span-1">
                     <div class="text-xs uppercase text-gray-500">30d Total P/L</div>
                     @php $pnl = $stats['total_pnl']; @endphp
                     <div id="stat-total_pnl" class="mt-1 text-xl sm:text-2xl font-bold {{ $pnl === null ? 'text-gray-400' : ($pnl >= 0 ? 'text-emerald-700' : 'text-rose-700') }}">
                         {{ $pnl !== null ? ($pnl >= 0 ? '+' : '') . number_format($pnl, 2) : '—' }}
                     </div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Closed Trades</div>
                     <div id="stat-total_trades" class="mt-1 text-xl sm:text-2xl font-bold text-gray-800">{{ $stats['total_trades'] ?? '—' }}</div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Wins</div>
                     <div id="stat-winning_trades" class="mt-1 text-xl sm:text-2xl font-bold text-emerald-700">{{ $stats['winning_trades'] ?? '—' }}</div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Losses</div>
                     <div id="stat-losing_trades" class="mt-1 text-xl sm:text-2xl font-bold text-rose-700">{{ $stats['losing_trades'] ?? '—' }}</div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Win Rate</div>
                     <div id="stat-win_rate" class="mt-1 text-xl sm:text-2xl font-bold {{ is_numeric($stats['win_rate']) ? ((float) $stats['win_rate'] >= 50 ? 'text-emerald-700' : 'text-rose-700') : 'text-gray-400' }}">
                         {{ $stats['win_rate'] !== null ? $stats['win_rate'] . '%' : '—' }}
                     </div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Avg Win</div>
                     <div id="stat-avg_win" class="mt-1 text-xl sm:text-2xl font-bold text-emerald-700">
                         {{ $stats['avg_win'] !== null ? '+' . number_format($stats['avg_win'], 2) : '—' }}
                     </div>
                 </div>
-                <div class="bg-white p-3 sm:p-4 rounded-lg shadow">
+                <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div class="text-xs uppercase text-gray-500">Avg Loss</div>
                     <div id="stat-avg_loss" class="mt-1 text-xl sm:text-2xl font-bold text-rose-700">
                         {{ $stats['avg_loss'] !== null ? number_format($stats['avg_loss'], 2) : '—' }}
@@ -89,8 +86,7 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-lg shadow space-y-4">
-                <h3 class="text-lg font-semibold">Active Trades</h3>
+            <x-card title="Active Trades">
 
                 @if (!empty($openSnapshot['error']))
                     <div id="active-positions-error" class="rounded border border-rose-200 bg-rose-50 text-rose-700 p-3 text-sm">
@@ -171,9 +167,9 @@
                         </tbody>
                     </table>
                 </div>
-            </div>
+            </x-card>
 
-            <div class="bg-white p-6 rounded-lg shadow">
+            <x-card>
                 <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
                         <h3 class="text-lg font-semibold">Alerts</h3>
@@ -194,8 +190,7 @@
                         </a>
                     </div>
                 </div>
-            </div>
-        </div>
+            </x-card>
     </div>
 
     <script>

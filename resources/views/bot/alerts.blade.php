@@ -1,19 +1,12 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Bot Alerts</h2>
-    </x-slot>
+    <x-page-header title="Bot Alerts" subtitle="Signal, trade, and error logs with filters and export." />
 
-    <div class="py-8">
-        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
-            @if (session('status'))
-                <div class="bg-green-100 border border-green-200 text-green-800 p-4 rounded">
-                    {{ session('status') }}
-                </div>
-            @endif
+    <div class="mx-auto max-w-7xl space-y-6">
+        <x-flash-messages />
 
-            <div class="bg-white p-6 rounded-lg shadow space-y-4">
-                <div class="flex items-center justify-between">
-                    <h3 class="text-lg font-semibold">Alert Logs</h3>
+            <x-card>
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Alert Logs</h3>
                     <div class="flex gap-2">
                         <form method="POST" action="{{ route('bot.alerts.clear') }}" onsubmit="return confirm('Clear all alert records? This cannot be undone.');">
                             @csrf
@@ -208,8 +201,7 @@
                 <div class="mt-4">
                     {{ $recentLogs->links() }}
                 </div>
-            </div>
-        </div>
+            </x-card>
     </div>
 
     <div id="bot-thinking-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4">

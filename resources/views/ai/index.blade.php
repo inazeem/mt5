@@ -1,21 +1,11 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">AI</h2>
-    </x-slot>
+    <x-page-header title="AI" subtitle="Ask questions using your configured AI provider." />
 
-    <div class="py-8">
-        <div class="max-w-4xl mx-auto sm:px-6 lg:px-8 space-y-6">
-            @if ($errors->any())
-                <div class="bg-red-100 border border-red-200 text-red-800 p-4 rounded">
-                    <ul class="list-disc list-inside space-y-1">
-                        @foreach ($errors->all() as $error)
-                            <li>{{ $error }}</li>
-                        @endforeach
-                    </ul>
-                </div>
-            @endif
+    <div class="mx-auto max-w-4xl space-y-6">
+        <x-flash-messages />
 
-            <form method="POST" action="{{ route('ai.ask') }}" class="bg-white p-6 rounded-lg shadow space-y-4">
+            <x-card>
+            <form method="POST" action="{{ route('ai.ask') }}" class="space-y-4">
                 @csrf
 
                 <div>
@@ -28,13 +18,12 @@
                     Ask
                 </button>
             </form>
+            </x-card>
 
             @if (!empty($answer))
-                <div class="bg-white p-6 rounded-lg shadow space-y-3">
-                    <h3 class="text-lg font-semibold">Answer ({{ strtoupper($provider) }})</h3>
-                    <div class="whitespace-pre-wrap text-gray-800 leading-relaxed">{{ $answer }}</div>
-                </div>
+                <x-card :title="'Answer (' . strtoupper($provider) . ')'">
+                    <div class="whitespace-pre-wrap text-slate-800 leading-relaxed dark:text-slate-200">{{ $answer }}</div>
+                </x-card>
             @endif
-        </div>
     </div>
 </x-app-layout>

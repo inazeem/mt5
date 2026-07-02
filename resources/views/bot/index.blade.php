@@ -1,29 +1,24 @@
 <x-app-layout>
-    <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">Bot</h2>
-    </x-slot>
+    <x-page-header title="Bot" subtitle="Auto-bot defaults and manual test trades.">
+        <x-slot name="actions">
+            <a href="{{ route('setup.index') }}" class="text-sm text-indigo-600 hover:underline dark:text-indigo-400">Setup Guide</a>
+        </x-slot>
+    </x-page-header>
 
-    <div class="py-8">
-        <div class="max-w-4xl mx-auto sm:px-6 lg:px-8 space-y-6">
-            @if (session('status'))
-                <div class="bg-green-100 border border-green-200 text-green-800 p-4 rounded">
-                    {{ session('status') }}
-                </div>
-            @endif
+    <div class="mx-auto max-w-4xl space-y-6">
+        <x-flash-messages />
 
-            @if ($errors->any())
-                <div class="bg-red-100 border border-red-200 text-red-800 p-4 rounded">
-                    <ul class="list-disc list-inside space-y-1">
-                        @foreach ($errors->all() as $error)
-                            <li>{{ $error }}</li>
-                        @endforeach
-                    </ul>
-                </div>
-            @endif
+        <x-alert type="warning">
+            Demo-only is currently <strong>{{ $settings->demo_only ? 'ON' : 'OFF' }}</strong>.
+        </x-alert>
 
-            <div class="bg-yellow-50 border border-yellow-200 text-yellow-900 p-4 rounded">
-                Demo-only is currently <strong>{{ $settings->demo_only ? 'ON' : 'OFF' }}</strong>.
-            </div>
+        <x-guide-panel title="How the bot page works">
+            <ul>
+                <li><strong>Auto-Bot Settings</strong> — defaults for the <code>mt5:auto-forex</code> scheduler command.</li>
+                <li><strong>Manual Trade</strong> — send a one-off order to MT5 for testing (requires EA Bridge online).</li>
+                <li>Configure profiles under <a href="{{ route('bot-profiles.index') }}" class="text-indigo-600 hover:underline">Bot Profiles</a> for multi-bot execution.</li>
+            </ul>
+        </x-guide-panel>
 
             @php
                 $allTimeframes = ['5m', '15m', '30m', '1h', '4h'];
@@ -41,13 +36,13 @@
                 }
             @endphp
 
-            <form method="POST" action="{{ route('bot.auto-settings') }}" class="bg-white p-6 rounded-lg shadow space-y-4">
+            <x-card title="Auto-Bot Settings">
+            <form method="POST" action="{{ route('bot.auto-settings') }}" class="space-y-4">
                 @csrf
                 <div class="flex items-center justify-between">
-                    <h3 class="text-lg font-semibold text-gray-900">Auto-Bot Settings</h3>
-                    <a href="{{ route('strategies.edit') }}" class="text-xs text-indigo-600 hover:underline">Edit strategy parameters</a>
+                    <p class="text-xs text-gray-500 dark:text-slate-400">These are the defaults used by <code>mt5:auto-forex</code>.</p>
+                    <a href="{{ route('strategies.edit') }}" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Edit strategy parameters</a>
                 </div>
-                <p class="text-xs text-gray-500">These are the defaults used by <code>mt5:auto-forex</code>.</p>
                 <p class="text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-2 py-1">
                     Category-aware runtime is enabled. These values act as Forex baseline, while Stock/Commodity/Other get higher defaults for TP, SL, trail start, trail distance, trail TP multiplier, and min move.
                 </p>
@@ -169,8 +164,10 @@
                     Save Auto-Bot Settings
                 </button>
             </form>
+            </x-card>
 
-            <form method="POST" action="{{ route('bot.trade') }}" class="bg-white p-6 rounded-lg shadow space-y-4">
+            <x-card title="Manual Trade">
+            <form method="POST" action="{{ route('bot.trade') }}" class="space-y-4">
                 @csrf
 
                 @php
@@ -298,6 +295,7 @@
                     Send To MT5
                 </button>
             </form>
+            </x-card>
 
             <script>
                 document.addEventListener('DOMContentLoaded', function () {
@@ -458,10 +456,9 @@
             </script>
 
             @if (session('trade_result'))
-                <div class="bg-white p-6 rounded-lg shadow">
-                    <h3 class="text-lg font-semibold mb-2">Last Trade Result</h3>
-                    <pre class="text-xs bg-gray-100 p-3 rounded overflow-x-auto">{{ json_encode(session('trade_result'), JSON_PRETTY_PRINT) }}</pre>
-                </div>
+                <x-card title="Last Trade Result">
+                    <pre class="text-xs bg-slate-100 dark:bg-slate-950 p-3 rounded overflow-x-auto">{{ json_encode(session('trade_result'), JSON_PRETTY_PRINT) }}</pre>
+                </x-card>
             @endif
 
             @php
@@ -634,6 +631,5 @@
                     @endif
                 </div>
             </section>
-        </div>
     </div>
 </x-app-layout>
