@@ -56,7 +56,7 @@ class SymbolMapper
         $broker = $this->toBrokerSymbol($terminal, $canonical);
         $candidates = [$broker, $canonical];
 
-        foreach (['_SB', '_sb', '.a', '.c', '.pro'] as $suffix) {
+        foreach (['_SB', '_sb', '.a', '.i', '.c', '.pro', '.z'] as $suffix) {
             $candidates[] = $canonical.$suffix;
         }
 
@@ -143,6 +143,10 @@ class SymbolMapper
 
         if (str_contains($company, 'PEPPERSTONE')) {
             return true;
+        }
+
+        if (str_contains($company, 'IC MARKETS') || str_contains($company, 'ICMARKETS')) {
+            return false;
         }
 
         $quotes = is_array($terminal->market_quotes) ? $terminal->market_quotes : [];

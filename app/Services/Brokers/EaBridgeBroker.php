@@ -57,7 +57,8 @@ class EaBridgeBroker implements MarketBrokerInterface
 
         throw new RuntimeException(
             'EA bridge quote unavailable for '.$requested.' on terminal '.$terminal->label()
-            .'. Ensure LaravelBridge is online and symbol is in the bot watch list.'
+            .'. Ensure LaravelBridge is online, symbol suffix mode is correct (IC Markets = Plain),'
+            .' and the symbol is in the bot profile / ticker list watched by this instance.'
         );
     }
 

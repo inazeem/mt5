@@ -264,4 +264,29 @@ class EaBridgeTest extends TestCase
         $this->assertContains('GBPUSD_SB', $watchSymbols);
         $this->assertNotContains('GBPUSD', $watchSymbols);
     }
+
+    public function test_poll_merges_quote_cache_instead_of_replacing(): void
+    {
+        AppSetting::singleton();
+        $terminal = $this->seedOnlineTerminal([
+            'market_quotes' => [
+                'EURUSD' => ['bid' => 1.08, 'ask' => 1.0802],
+            ],
+        ]);
+        $token = (string) $terminal->api_token;
+
+        $this->withToken($token, 'Bearer')->postJson('/api/ea/poll', [
+            'login' => $terminal->account_login,
+            'server' => $terminal->server,
+            'positions' => [],
+            'quotes' => [
+                'GBPUSD' => ['bid' => 1.2650, 'ask' => 1.2652],
+            ],
+        ])->assertOk();
+
+        $terminal->refresh();
+        $quotes = $terminal->market_quotes ?? [];
+        $this->assertArrayHasKey('EURUSD', $quotes);
+        $this->assertArrayHasKey('GBPUSD', $quotes);
+    }
 }

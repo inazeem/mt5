@@ -13,6 +13,10 @@ use RuntimeException;
 
 class EaBridgeService
 {
+    private const MAX_WATCH_SYMBOLS = 64;
+
+    private const MAX_CANDLE_REQUESTS = 24;
+
     public function __construct(
         private readonly SymbolMapper $symbolMapper,
     ) {}
@@ -455,7 +459,10 @@ class EaBridgeService
             'currency' => $payload['currency'] ?? $terminal->currency,
             'trade_allowed' => (bool) ($payload['trade_allowed'] ?? $terminal->trade_allowed),
             'positions' => is_array($payload['positions'] ?? null) ? $payload['positions'] : [],
-            'market_quotes' => is_array($payload['quotes'] ?? null) ? $payload['quotes'] : ($terminal->market_quotes ?? []),
+            'market_quotes' => $this->mergeMarketQuotes(
+                is_array($terminal->market_quotes) ? $terminal->market_quotes : [],
+                is_array($payload['quotes'] ?? null) ? $payload['quotes'] : []
+            ),
             'market_candles' => $this->mergeMarketCandles(
                 is_array($terminal->market_candles) ? $terminal->market_candles : [],
                 is_array($payload['candles'] ?? null) ? $payload['candles'] : []
@@ -465,6 +472,30 @@ class EaBridgeService
         $terminal->save();
 
         return $terminal->fresh();
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $existing
+     * @param  array<string, array<string, mixed>>  $incoming
+     * @return array<string, array<string, mixed>>
+     */
+    private function mergeMarketQuotes(array $existing, array $incoming): array
+    {
+        foreach ($incoming as $key => $quote) {
+            if (! is_array($quote)) {
+                continue;
+            }
+
+            $bid = (float) ($quote['bid'] ?? 0);
+            $ask = (float) ($quote['ask'] ?? 0);
+            if ($bid <= 0 || $ask <= 0) {
+                continue;
+            }
+
+            $existing[strtoupper((string) $key)] = $quote;
+        }
+
+        return $existing;
     }
 
     /**
@@ -527,7 +558,7 @@ class EaBridgeService
             $symbols = Ticker::query()
                 ->where('is_active', true)
                 ->orderBy('symbol')
-                ->limit(12)
+                ->limit(self::MAX_WATCH_SYMBOLS)
                 ->pluck('symbol')
                 ->map(static fn ($symbol) => strtoupper((string) $symbol))
                 ->all();
@@ -549,8 +580,8 @@ class EaBridgeService
         }
 
         $candleRequests = [];
-        foreach (array_slice($symbols, 0, 8) as $symbol) {
-            foreach (array_slice($timeframes, 0, 3) as $timeframe) {
+        foreach (array_slice($symbols, 0, 12) as $symbol) {
+            foreach (array_slice($timeframes, 0, 2) as $timeframe) {
                 $candleRequests[] = [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe,
@@ -560,8 +591,8 @@ class EaBridgeService
         }
 
         return [
-            'symbols' => array_slice($symbols, 0, 12),
-            'candle_requests' => array_slice($candleRequests, 0, 12),
+            'symbols' => array_slice($symbols, 0, self::MAX_WATCH_SYMBOLS),
+            'candle_requests' => array_slice($candleRequests, 0, self::MAX_CANDLE_REQUESTS),
         ];
     }
 

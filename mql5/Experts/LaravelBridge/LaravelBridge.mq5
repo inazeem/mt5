@@ -363,6 +363,43 @@ ENUM_TIMEFRAMES TimeframeFromString(const string tf)
 }
 
 //+------------------------------------------------------------------+
+bool SelectSymbolWithFallback(const string requested, string &resolved)
+{
+   string base = requested;
+   StringTrimLeft(base);
+   StringTrimRight(base);
+   if(base == "")
+      return false;
+
+   string candidates[];
+   ArrayResize(candidates, 0);
+   int idx = ArraySize(candidates);
+   ArrayResize(candidates, idx + 1);
+   candidates[idx] = base;
+
+   string suffixes[] = {".a", ".i", ".c", ".pro", ".z", "_SB"};
+   for(int s = 0; s < ArraySize(suffixes); s++)
+   {
+      if(StringFind(base, suffixes[s]) >= 0)
+         continue;
+      idx = ArraySize(candidates);
+      ArrayResize(candidates, idx + 1);
+      candidates[idx] = base + suffixes[s];
+   }
+
+   for(int i = 0; i < ArraySize(candidates); i++)
+   {
+      if(SymbolSelect(candidates[i], true))
+      {
+         resolved = candidates[i];
+         return true;
+      }
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
 string BuildQuotesJson()
 {
    if(g_watchSymbolsCsv == "")
@@ -381,11 +418,12 @@ string BuildQuotesJson()
       if(sym == "")
          continue;
 
-      if(!SymbolSelect(sym, true))
+      string resolved = sym;
+      if(!SelectSymbolWithFallback(sym, resolved))
          continue;
 
-      double bid = SymbolInfoDouble(sym, SYMBOL_BID);
-      double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
+      double bid = SymbolInfoDouble(resolved, SYMBOL_BID);
+      double ask = SymbolInfoDouble(resolved, SYMBOL_ASK);
       if(bid <= 0 || ask <= 0)
          continue;
 
@@ -393,8 +431,8 @@ string BuildQuotesJson()
          json += ",";
       first = false;
 
-      int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-      json += "\"" + JsonEscape(sym) + "\":{";
+      int digits = (int)SymbolInfoInteger(resolved, SYMBOL_DIGITS);
+      json += "\"" + JsonEscape(resolved) + "\":{";
       json += "\"bid\":" + DoubleToString(bid, digits) + ",";
       json += "\"ask\":" + DoubleToString(ask, digits) + ",";
       json += "\"last\":" + DoubleToString((bid + ask) / 2.0, digits);
@@ -432,16 +470,20 @@ string BuildCandlesJson()
 
       StringTrimLeft(sym);
       StringTrimRight(sym);
-      if(sym == "" || !SymbolSelect(sym, true))
+      if(sym == "")
+         continue;
+
+      string resolved = sym;
+      if(!SelectSymbolWithFallback(sym, resolved))
          continue;
 
       ENUM_TIMEFRAMES period = TimeframeFromString(tf);
       MqlRates rates[];
-      int copied = CopyRates(sym, period, 0, limit, rates);
+      int copied = CopyRates(resolved, period, 0, limit, rates);
       if(copied <= 0)
          continue;
 
-      string key = sym + ":" + tf;
+      string key = resolved + ":" + tf;
       if(!firstKey)
          json += ",";
       firstKey = false;
@@ -523,17 +565,18 @@ bool ExecuteCommand(const int id, const string action, const string symbol, cons
       return false;
    }
 
-   if(!SymbolSelect(symbol, true))
+   string tradeSymbol = symbol;
+   if(!SelectSymbolWithFallback(symbol, tradeSymbol))
    {
       g_lastCommandMessage = "Symbol not available: " + symbol;
       return false;
    }
 
-   double volume = NormalizeVolume(symbol, lot > 0.0 ? lot : 0.01);
-   double pip = PipSize(symbol);
-   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double volume = NormalizeVolume(tradeSymbol, lot > 0.0 ? lot : 0.01);
+   double pip = PipSize(tradeSymbol);
+   int digits = (int)SymbolInfoInteger(tradeSymbol, SYMBOL_DIGITS);
+   double bid = SymbolInfoDouble(tradeSymbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(tradeSymbol, SYMBOL_ASK);
    double sl = 0.0;
    double tp = 0.0;
    bool ok = false;
@@ -544,7 +587,7 @@ bool ExecuteCommand(const int id, const string action, const string symbol, cons
          sl = NormalizeDouble(ask - slPips * pip, digits);
       if(tpPips > 0.0)
          tp = NormalizeDouble(ask + tpPips * pip, digits);
-      ok = g_trade.Buy(volume, symbol, ask, sl, tp, "LaravelBridge #" + IntegerToString(id));
+      ok = g_trade.Buy(volume, tradeSymbol, ask, sl, tp, "LaravelBridge #" + IntegerToString(id));
    }
    else if(action == "SELL")
    {
@@ -552,7 +595,7 @@ bool ExecuteCommand(const int id, const string action, const string symbol, cons
          sl = NormalizeDouble(bid + slPips * pip, digits);
       if(tpPips > 0.0)
          tp = NormalizeDouble(bid - tpPips * pip, digits);
-      ok = g_trade.Sell(volume, symbol, bid, sl, tp, "LaravelBridge #" + IntegerToString(id));
+      ok = g_trade.Sell(volume, tradeSymbol, bid, sl, tp, "LaravelBridge #" + IntegerToString(id));
    }
    else
    {
