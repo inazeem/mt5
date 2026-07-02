@@ -386,7 +386,7 @@ Artisan::command('mt5:auto-forex
             return $hours;
         };
 
-        $normalizeSymbolList = static function (mixed $raw): array {
+        $normalizeSymbolList = static function (mixed $raw) use ($mt5Service): array {
             if (is_array($raw)) {
                 $source = $raw;
             } else {
@@ -398,7 +398,10 @@ Artisan::command('mt5:auto-forex
             }
 
             return array_values(array_unique(array_filter(
-                array_map(static fn ($symbol) => strtoupper(trim((string) $symbol)), $source),
+                array_map(
+                    static fn ($symbol) => $mt5Service->baseSymbol(strtoupper(trim((string) $symbol))),
+                    $source
+                ),
                 static fn ($symbol) => $symbol !== ''
             )));
         };
@@ -872,6 +875,7 @@ Artisan::command('mt5:auto-forex
         $eaProfileInstanceKeys = $usesEaBridgeCycle
             ? EaBridgeService::profileInstanceKeys($botProfile)
             : [];
+        $eaBridgeBrokerForScan = $usesEaBridgeCycle ? app(EaBridgeBroker::class) : null;
 
         if ($usesEaBridgeCycle) {
             try {
@@ -1351,7 +1355,10 @@ Artisan::command('mt5:auto-forex
         // Prefer active tickers from the database; fall back to MetaAPI symbol discovery.
         $dbTickers = Ticker::query()->active()->orderBy('symbol')->get()->keyBy(fn ($t) => strtoupper($t->symbol));
         $profileSymbols = isset($botProfile['symbols']) && is_array($botProfile['symbols'])
-            ? array_values(array_filter(array_map(static fn ($s) => strtoupper(trim((string) $s)), $botProfile['symbols']), static fn ($s) => $s !== ''))
+            ? array_values(array_filter(array_map(
+                static fn ($s) => $mt5Service->baseSymbol(strtoupper(trim((string) $s))),
+                $botProfile['symbols']
+            ), static fn ($s) => $s !== ''))
             : [];
 
         if (!empty($profileSymbols)) {
@@ -1404,6 +1411,11 @@ Artisan::command('mt5:auto-forex
             $symbols = array_slice($symbols, 0, $maxSymbols);
             $this->line('TEST MODE symbol cap applied: '.count($symbols).' of '.$totalSymbols.' symbol(s).');
         }
+
+        $symbols = array_values(array_unique(array_map(
+            static fn (string $s): string => $mt5Service->baseSymbol($s),
+            $symbols
+        )));
 
         if (!$testMode && empty($symbols)) {
             $msg = 'Skipped cycle: no symbols available after preferred symbol filter.';
@@ -1675,25 +1687,49 @@ Artisan::command('mt5:auto-forex
                 usleep($scanDelayMs * 1000);
             }
 
-            $symbol = strtoupper((string) $symbol);
-            $quoteSymbol = $usesAlpacaCycle
-                ? $symbol
-                : ($usesEaBridgeCycle
-                    ? $cycleBroker->toBrokerSymbol($symbol)
-                    : (preg_match('/^[A-Z]{6}$/', $symbol) === 1 ? $symbol.'_SB' : $symbol));
-            $scanned++;
-            $this->line("  SCANNED: {$quoteSymbol}");
+            $symbol = $mt5Service->baseSymbol(strtoupper((string) $symbol));
+            $symbolScanBroker = $cycleBroker;
+            $brokerSymbol = $symbol;
 
-            if (!$reserveCycleCredits($creditCostQuote, 'quote', $quoteSymbol)) {
+            if ($usesEaBridgeCycle && $eaBridgeBrokerForScan !== null) {
+                try {
+                    $symbolScanBroker = app(EaBridgeService::class)->resolveScanBroker(
+                        $symbol,
+                        $eaProfileInstanceKeys,
+                        $eaBridgeBrokerForScan
+                    );
+                    $brokerSymbol = $symbolScanBroker->toBrokerSymbol($symbol);
+                } catch (\Throwable $e) {
+                    $errorMessage = $e->getMessage();
+                    $scanned++;
+                    $this->line("  SCANNED: {$symbol}");
+                    Log::warning('Auto bot quote failed', ['symbol' => $symbol, 'error' => $errorMessage]);
+                    $this->line("  {$symbol}: quote error — {$errorMessage}");
+                    $logSignal([
+                        'status' => 'quote_error',
+                        'symbol' => $symbol,
+                        'message' => 'Signal skipped due to quote retrieval failure.',
+                        'error_message' => $errorMessage,
+                    ]);
+                    continue;
+                }
+            } elseif (! $usesAlpacaCycle && ! $usesEaBridgeCycle) {
+                $brokerSymbol = preg_match('/^[A-Z]{6}$/', $symbol) === 1 ? $symbol.'_SB' : $symbol;
+            }
+
+            $scanned++;
+            $this->line('  SCANNED: '.$symbol.($brokerSymbol !== $symbol ? ' ('.$brokerSymbol.')' : ''));
+
+            if (!$reserveCycleCredits($creditCostQuote, 'quote', $symbol)) {
                 break;
             }
 
             try {
-                $quote = $cycleBroker->getTickerPrice($quoteSymbol);
+                $quote = $symbolScanBroker->getTickerPrice($symbol);
             } catch (\Throwable $e) {
                 $errorMessage = $e->getMessage();
                 Log::warning('Auto bot quote failed', ['symbol' => $symbol, 'error' => $errorMessage]);
-                $this->line("  {$quoteSymbol}: quote error — {$errorMessage}");
+                $this->line("  {$symbol}: quote error — {$errorMessage}");
                 $logSignal([
                     'status' => 'quote_error',
                     'symbol' => $symbol,
@@ -1774,7 +1810,7 @@ Artisan::command('mt5:auto-forex
                 }
 
                 try {
-                    $candlesForStrategy = $cycleBroker->getCandles($symbol, $primaryTimeframe, $requiredCandleCount);
+                    $candlesForStrategy = $symbolScanBroker->getCandles($symbol, $primaryTimeframe, $requiredCandleCount);
                 } catch (\Throwable $e) {
                     $skippedNoMove++;
                     $logSignal([
@@ -1947,7 +1983,7 @@ Artisan::command('mt5:auto-forex
                     if (count($adxCandles) < $adxMinBars) {
                         if ($reserveCycleCredits($creditCostCandle, 'adx_entry_'.$entryTimeframe, $symbol)) {
                             try {
-                                $adxCandles = $cycleBroker->getCandles($symbol, $entryTimeframe, $adxMinBars);
+                                $adxCandles = $symbolScanBroker->getCandles($symbol, $entryTimeframe, $adxMinBars);
                             } catch (\Throwable $e) {
                                 Log::warning('Auto bot ADX candle fetch failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
                                 $adxCandles = [];
@@ -1964,7 +2000,7 @@ Artisan::command('mt5:auto-forex
                     $rsiHtfTimeframe = $trendContextTimeframes[0] ?? '1h';
                     if ($reserveCycleCredits($creditCostCandle, 'rsi_htf_'.$rsiHtfTimeframe, $symbol)) {
                         try {
-                            $rsiHtfCandles = $cycleBroker->getCandles($symbol, $rsiHtfTimeframe, $rsiMinBars);
+                            $rsiHtfCandles = $symbolScanBroker->getCandles($symbol, $rsiHtfTimeframe, $rsiMinBars);
                             $rsiHtfValue = IndicatorMath::rsi(IndicatorMath::closeSeries($rsiHtfCandles), $indicatorPeriod);
                         } catch (\Throwable $e) {
                             Log::warning('Auto bot RSI HTF candle fetch failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
@@ -1977,7 +2013,7 @@ Artisan::command('mt5:auto-forex
                     if (count($rsiEntryCandles) < $rsiMinBars) {
                         if ($reserveCycleCredits($creditCostCandle, 'rsi_entry_'.$entryTimeframe, $symbol)) {
                             try {
-                                $rsiEntryCandles = $cycleBroker->getCandles($symbol, $entryTimeframe, $rsiMinBars);
+                                $rsiEntryCandles = $symbolScanBroker->getCandles($symbol, $entryTimeframe, $rsiMinBars);
                             } catch (\Throwable $e) {
                                 Log::warning('Auto bot RSI entry candle fetch failed', ['symbol' => $symbol, 'error' => $e->getMessage()]);
                                 $rsiEntryCandles = [];
@@ -2170,7 +2206,7 @@ Artisan::command('mt5:auto-forex
                             break 2;
                         }
 
-                        $candles = $cycleBroker->getCandles($symbol, $timeframe, 1);
+                        $candles = $symbolScanBroker->getCandles($symbol, $timeframe, 1);
                         $trendByTimeframe[$timeframe] = $resolveTrendSide($candles);
                     }
 
@@ -2198,7 +2234,7 @@ Artisan::command('mt5:auto-forex
                         break;
                     }
 
-                    $entryCandles = $cycleBroker->getCandles($symbol, $entryTimeframe, 1);
+                    $entryCandles = $symbolScanBroker->getCandles($symbol, $entryTimeframe, 1);
                     $entryTrendSide = $resolveTrendSide($entryCandles);
                     if ($entryTrendSide !== $side) {
                         $logSignal([
@@ -2292,7 +2328,7 @@ Artisan::command('mt5:auto-forex
                                 break 2;
                             }
 
-                            $candles = $cycleBroker->getCandles($symbol, $timeframe, $limit);
+                            $candles = $symbolScanBroker->getCandles($symbol, $timeframe, $limit);
                             if (!empty($candles)) {
                                 $candleContext .= "\n\nLast ".count($candles)." x ".strtoupper($timeframe)." candles (oldest first):\n".$formatCandles($candles);
                             }

@@ -289,4 +289,38 @@ class EaBridgeTest extends TestCase
         $this->assertArrayHasKey('EURUSD', $quotes);
         $this->assertArrayHasKey('GBPUSD', $quotes);
     }
+
+    public function test_resolve_scan_broker_tries_instances_until_quote_found(): void
+    {
+        AppSetting::singleton();
+
+        $pepper = $this->seedOnlineTerminal([
+            'instance_key' => 'pepper-demo',
+            'display_name' => 'Pepperstone Demo',
+            'symbol_suffix' => 'spread_bet',
+            'market_quotes' => [
+                'USDCHF_SB' => ['bid' => 0.88, 'ask' => 0.8802],
+            ],
+        ]);
+
+        $ic = $this->seedOnlineTerminal([
+            'instance_key' => 'ic-demo',
+            'display_name' => 'ICMARKET DEMO',
+            'symbol_suffix' => 'none',
+            'account_login' => 54321,
+            'market_quotes' => [
+                'USDCHF' => ['bid' => 0.89, 'ask' => 0.8902],
+            ],
+        ]);
+
+        $broker = app(EaBridgeService::class)->resolveScanBroker(
+            'USDCHF',
+            ['ic-demo', 'pepper-demo'],
+            app(EaBridgeBroker::class)
+        );
+
+        $quote = $broker->getTickerPrice('USDCHF');
+        $this->assertSame(0.89, $quote['bid']);
+        $this->assertSame('USDCHF', $quote['symbol']);
+    }
 }

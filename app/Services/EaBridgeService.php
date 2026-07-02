@@ -7,6 +7,8 @@ use App\Models\BotTradeLog;
 use App\Models\Mt5EaCommand;
 use App\Models\Mt5EaTerminal;
 use App\Models\Ticker;
+use App\Services\Brokers\EaBridgeBroker;
+use App\Services\SymbolMapper;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
@@ -538,7 +540,7 @@ class EaBridgeService
                     continue;
                 }
                 foreach ($profile[$field] as $symbol) {
-                    $symbols[] = strtoupper(trim((string) $symbol));
+                    $symbols[] = $this->symbolMapper->normalizeCanonical((string) $symbol);
                 }
             }
 
@@ -560,7 +562,7 @@ class EaBridgeService
                 ->orderBy('symbol')
                 ->limit(self::MAX_WATCH_SYMBOLS)
                 ->pluck('symbol')
-                ->map(static fn ($symbol) => strtoupper((string) $symbol))
+                ->map(fn ($symbol) => $this->symbolMapper->normalizeCanonical((string) $symbol))
                 ->all();
         }
 
@@ -679,5 +681,32 @@ class EaBridgeService
         $command->save();
 
         return $command;
+    }
+
+    /**
+     * Pick the first online EA instance that can quote a canonical symbol.
+     *
+     * @param  array<int, string>  $instanceKeys
+     */
+    public function resolveScanBroker(string $canonicalSymbol, array $instanceKeys, EaBridgeBroker $broker): EaBridgeBroker
+    {
+        $canonical = $this->symbolMapper->normalizeCanonical($canonicalSymbol);
+        $keys = $instanceKeys !== [] ? $instanceKeys : [null];
+        $lastError = null;
+
+        foreach ($keys as $key) {
+            try {
+                $instance = $broker->forInstance($key);
+                $instance->getTickerPrice($canonical);
+
+                return $instance;
+            } catch (\Throwable $e) {
+                $lastError = $e;
+            }
+        }
+
+        $message = $lastError?->getMessage() ?? 'No EA instance available for '.$canonical.'.';
+
+        throw new RuntimeException($message, 0, $lastError);
     }
 }
