@@ -26,6 +26,9 @@ RUN npm install -g pnpm
 # Install Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
+# Git 2.35+ refuses repos with mismatched ownership (common in Docker COPY from Windows hosts).
+RUN git config --global --add safe.directory /var/www/html
+
 WORKDIR /var/www/html
 
 # Copy composer files first for layer caching
