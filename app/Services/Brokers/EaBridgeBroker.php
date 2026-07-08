@@ -108,9 +108,17 @@ class EaBridgeBroker implements MarketBrokerInterface
         $bid = (float) $quote['bid'];
         $ask = (float) $quote['ask'];
         $entry = strtolower($side) === 'buy' ? $ask : $bid;
-        $ticker = Ticker::query()->where('symbol', strtoupper($symbol))->first();
+        $canonical = $this->mt5Service->baseSymbol($symbol);
+        $matchedBrokerSymbol = strtoupper(trim((string) ($quote['symbol'] ?? '')));
+        if ($matchedBrokerSymbol === '') {
+            $matchedBrokerSymbol = $this->toBrokerSymbol($canonical);
+        }
+        $ticker = Ticker::query()
+            ->whereIn('symbol', array_values(array_unique([$canonical, strtoupper($symbol)])))
+            ->orderByRaw('CASE WHEN symbol = ? THEN 0 ELSE 1 END', [$canonical])
+            ->first();
         $pipSize = $this->mt5Service->resolvePipSize(
-            $symbol,
+            $canonical,
             $ticker?->category,
             is_numeric($ticker?->pip_size) ? (float) $ticker->pip_size : null
         );
@@ -128,7 +136,8 @@ class EaBridgeBroker implements MarketBrokerInterface
 
         $command = $this->eaBridge->queueCommand([
             'action' => strtolower($side) === 'buy' ? 'BUY' : 'SELL',
-            'symbol' => $symbol,
+            'symbol' => $canonical,
+            'broker_symbol' => $matchedBrokerSymbol,
             'lot' => $scaledLot,
             'sl' => $slPips,
             'tp' => $tpPips,

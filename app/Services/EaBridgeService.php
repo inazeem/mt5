@@ -385,9 +385,12 @@ class EaBridgeService
         }
 
         $canonicalSymbol = isset($data['symbol']) ? strtoupper(trim((string) $data['symbol'])) : null;
+        $explicitBrokerSymbol = isset($data['broker_symbol']) ? strtoupper(trim((string) $data['broker_symbol'])) : '';
         $brokerSymbol = $canonicalSymbol;
 
-        if ($canonicalSymbol !== null && $terminal !== null) {
+        if ($explicitBrokerSymbol !== '') {
+            $brokerSymbol = $explicitBrokerSymbol;
+        } elseif ($canonicalSymbol !== null && $terminal !== null) {
             $brokerSymbol = $this->symbolMapper->toBrokerSymbol($terminal, $canonicalSymbol);
         }
 
@@ -451,9 +454,25 @@ class EaBridgeService
             }
         }
 
+        $brokerCompany = $payload['broker_company'] ?? $terminal->broker_company;
+        $symbolSuffix = $terminal->symbol_suffix;
+        if ($symbolSuffix === null || $symbolSuffix === '' || $symbolSuffix === SymbolMapper::SUFFIX_AUTO) {
+            $company = strtoupper((string) $brokerCompany);
+            if (str_contains($company, 'PEPPERSTONE')) {
+                $symbolSuffix = SymbolMapper::SUFFIX_SPREAD_BET;
+            } elseif (
+                str_contains($company, 'IC MARKETS')
+                || str_contains($company, 'ICMARKETS')
+                || str_contains($company, 'RAW TRADING')
+            ) {
+                $symbolSuffix = SymbolMapper::SUFFIX_NONE;
+            }
+        }
+
         $terminal->fill([
             'terminal_name' => $payload['terminal_name'] ?? $terminal->terminal_name,
-            'broker_company' => $payload['broker_company'] ?? $terminal->broker_company,
+            'broker_company' => $brokerCompany,
+            'symbol_suffix' => $symbolSuffix,
             'balance' => isset($payload['balance']) ? (float) $payload['balance'] : $terminal->balance,
             'equity' => isset($payload['equity']) ? (float) $payload['equity'] : $terminal->equity,
             'margin' => isset($payload['margin']) ? (float) $payload['margin'] : $terminal->margin,

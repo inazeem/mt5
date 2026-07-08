@@ -2584,14 +2584,20 @@ Artisan::command('mt5:auto-forex
                     $executedLotSize = is_numeric($result['order_qty'] ?? null) ? (float) $result['order_qty'] : $lotSize;
 
                     $openMessage = ($isEaQueued ? 'Queued ' : 'Opened ').$executionSide.' '.$symbol.' (recommended '.$recommendedSide.') TP='.$takeProfit.' SL='.$stopLoss;
-                    if (count($executionBrokers) > 1 && $brokerIndex > 0) {
-                        $openMessage .= ' [mirrored instance '.($brokerIndex + 1).'/'.count($executionBrokers).']';
+                    if (count($executionBrokers) > 1) {
+                        $execLabel = method_exists($execBroker, 'instanceLabel') ? (string) $execBroker->instanceLabel() : ('instance '.($brokerIndex + 1));
+                        $execKey = method_exists($execBroker, 'instanceKey') ? (string) ($execBroker->instanceKey() ?? '-') : '-';
+                        $openMessage .= ' → '.$execLabel.' ['.$execKey.']';
+                    }
+                    if ($isEaQueued) {
+                        $queuedSymbol = Mt5EaCommand::query()->where('id', (int) ($result['command_id'] ?? 0))->value('symbol');
+                        if (is_string($queuedSymbol) && $queuedSymbol !== '') {
+                            $openMessage .= ' as '.$queuedSymbol;
+                        }
+                        $openMessage .= ' [EA command #'.(int) ($result['command_id'] ?? 0).']';
                     }
                     if ($executedLotSize > $lotSize) {
                         $openMessage .= ' qty='.$executedLotSize.' (profile lot '.$lotSize.' bumped for Alpaca $10 min notional)';
-                    }
-                    if ($isEaQueued) {
-                        $openMessage .= ' [EA command #'.(int) ($result['command_id'] ?? 0).']';
                     }
                     $this->info($openMessage);
                     Log::info('Auto bot opened trade', [

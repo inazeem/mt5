@@ -241,6 +241,79 @@ class EaBridgeTest extends TestCase
         $this->assertSame('GBPUSD_SB', $command->symbol);
     }
 
+    public function test_queue_command_uses_explicit_broker_symbol(): void
+    {
+        AppSetting::singleton();
+        $terminal = $this->seedOnlineTerminal([
+            'instance_key' => 'icmarketdemo',
+            'display_name' => 'ICMARKET DEMO',
+            'broker_company' => 'Raw Trading Ltd',
+            'symbol_suffix' => 'spread_bet',
+        ]);
+
+        $command = app(EaBridgeService::class)->queueCommand([
+            'action' => 'SELL',
+            'symbol' => 'AUDUSD',
+            'broker_symbol' => 'AUDUSD',
+            'lot' => 0.01,
+            'mt5_instance_key' => $terminal->instance_key,
+        ]);
+
+        $this->assertSame('AUDUSD', $command->symbol);
+    }
+
+    public function test_place_order_queues_matched_quote_symbol_per_instance(): void
+    {
+        AppSetting::singleton()->update(['demo_only' => true]);
+
+        $terminal = $this->seedOnlineTerminal([
+            'instance_key' => 'icmarketdemo',
+            'display_name' => 'ICMARKET DEMO',
+            'broker_company' => 'Raw Trading Ltd',
+            'symbol_suffix' => 'spread_bet',
+            'market_quotes' => [
+                'AUDUSD' => ['bid' => 0.69166, 'ask' => 0.69174],
+            ],
+            'trade_allowed' => true,
+        ]);
+
+        $broker = app(EaBridgeBroker::class)->forInstance($terminal->instance_key);
+        $result = $broker->placeOrder('AUDUSD', 0.01, 'sell', [[
+            'take_profit' => 0.6897,
+            'stop_loss' => 0.6937,
+        ]]);
+
+        $command = Mt5EaCommand::query()->findOrFail((int) $result['command_id']);
+        $this->assertSame('AUDUSD', $command->symbol);
+        $this->assertSame('icmarketdemo', $command->mt5_instance_key);
+    }
+
+    public function test_poll_auto_sets_plain_suffix_for_raw_trading(): void
+    {
+        AppSetting::singleton();
+        $terminal = $this->seedOnlineTerminal([
+            'instance_key' => 'icmarketdemo',
+            'display_name' => 'ICMARKET DEMO',
+            'broker_company' => null,
+            'symbol_suffix' => null,
+            'market_quotes' => [],
+        ]);
+
+        $response = $this->withToken((string) $terminal->api_token, 'Bearer')->postJson('/api/ea/poll', [
+            'login' => $terminal->account_login,
+            'server' => $terminal->server,
+            'broker_company' => 'Raw Trading Ltd',
+            'positions' => [],
+            'quotes' => [
+                'AUDUSD' => ['bid' => 0.69, 'ask' => 0.6901],
+            ],
+        ]);
+
+        $response->assertOk();
+        $this->assertSame('none', $terminal->fresh()->symbol_suffix);
+        $this->assertSame('Raw Trading Ltd', $terminal->fresh()->broker_company);
+    }
+
     public function test_poll_watch_plan_uses_broker_symbols(): void
     {
         AppSetting::singleton();
