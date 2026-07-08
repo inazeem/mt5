@@ -3204,11 +3204,45 @@ Artisan::command('mt5:learn-policy
     return 0;
 })->purpose('Learn bot policy recommendations from recent resolved trades.');
 
+Artisan::command('bot:prune-logs
+    {--signal-days=1 : Delete scan/signal and guardrail logs older than N days}
+    {--trade-days=90 : Delete resolved trade_open logs older than N days}
+    {--no-cache : Skip pruning database cache temp entries}
+    {--no-files : Skip pruning old storage/log files}
+    {--dry-run : Show what would be deleted without deleting}
+', function () {
+    $dryRun = (bool) $this->option('dry-run');
+    $stats = app(\App\Services\BotLogPruner::class)->prune(
+        signalDays: max(1, (int) $this->option('signal-days')),
+        tradeDays: max(30, (int) $this->option('trade-days')),
+        pruneCache: ! $this->option('no-cache'),
+        pruneFiles: ! $this->option('no-files'),
+        dryRun: $dryRun,
+    );
+
+    $prefix = $dryRun ? 'Would prune' : 'Pruned';
+    $this->info($prefix.' bot temp logs:');
+    $this->line('  signals/guardrails: '.(int) $stats['bot_signals_deleted']);
+    $this->line('  resolved trades: '.(int) $stats['bot_trades_deleted']);
+    $this->line('  cache expired: '.(int) $stats['cache_expired_deleted']);
+    $this->line('  cache temp keys: '.(int) $stats['cache_temp_deleted']);
+    $this->line('  cache locks: '.(int) $stats['cache_locks_deleted']);
+    $this->line('  log files removed: '.(int) $stats['log_files_deleted']);
+    $this->line('  log files truncated: '.(int) $stats['log_files_truncated']);
+
+    return 0;
+})->purpose('Delete auto-forex temp logs, cache entries, and old log files.');
+
 // ── §27 SCHEDULER — mt5:auto-forex --once every minute, lock 120 min ─────────────
 Schedule::command('mt5:auto-forex --once')
     ->name('mt5-auto-forex-once')
     ->everyMinute()
     ->withoutOverlapping(120);
+
+Schedule::command('bot:prune-logs')
+    ->name('bot-prune-logs-daily')
+    ->dailyAt('03:00')
+    ->withoutOverlapping(30);
 
 Artisan::command('ea:token {instance? : Instance key} {--regenerate : Force a new token}', function () {
     $service = app(\App\Services\EaBridgeService::class);
