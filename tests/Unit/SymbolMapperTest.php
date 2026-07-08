@@ -77,6 +77,51 @@ class SymbolMapperTest extends TestCase
         $this->assertSame('GBPUSD_SB', $mapper->toBrokerSymbol($terminal, 'GBPUSD'));
     }
 
+    public function test_raw_trading_company_maps_to_plain_symbols(): void
+    {
+        $terminal = Mt5EaTerminal::query()->create([
+            'instance_key' => 'icmarketdemo',
+            'display_name' => 'ICMARKET DEMO',
+            'broker_company' => 'Raw Trading Ltd',
+            'symbol_suffix' => SymbolMapper::SUFFIX_AUTO,
+            'market_quotes' => [
+                'AUDUSD' => ['bid' => 0.69, 'ask' => 0.6901],
+                'AUDUSD_SB' => ['bid' => 0.69, 'ask' => 0.6901],
+            ],
+            'enabled' => true,
+            'is_demo' => true,
+        ]);
+
+        $mapper = app(SymbolMapper::class);
+
+        $this->assertSame('AUDUSD', $mapper->toBrokerSymbol($terminal, 'AUDUSD'));
+        $this->assertSame(['AUDUSD'], array_values(array_intersect(
+            $mapper->brokerSymbolCandidates($terminal, 'AUDUSD'),
+            ['AUDUSD']
+        )));
+        $this->assertFalse(in_array('AUDUSD_SB', $mapper->brokerSymbolCandidates($terminal, 'AUDUSD'), true));
+    }
+
+    public function test_plain_mode_ignores_stale_spread_bet_quote_keys(): void
+    {
+        $terminal = Mt5EaTerminal::query()->create([
+            'instance_key' => 'ic-plain',
+            'display_name' => 'IC Plain',
+            'broker_company' => 'Raw Trading Ltd',
+            'symbol_suffix' => SymbolMapper::SUFFIX_NONE,
+            'market_quotes' => [
+                'AUDUSD_SB' => ['bid' => 0.69, 'ask' => 0.6901],
+                'AUDUSD' => ['bid' => 0.69, 'ask' => 0.6901],
+            ],
+            'enabled' => true,
+            'is_demo' => true,
+        ]);
+
+        $mapper = app(SymbolMapper::class);
+
+        $this->assertSame('AUDUSD', $mapper->toBrokerSymbol($terminal, 'AUDUSD'));
+    }
+
     public function test_parse_map_input(): void
     {
         $map = SymbolMapper::parseMapInput("GBPUSD=GBPUSD_SB\n# comment\nEURAUD:EURAUD_SB\n");

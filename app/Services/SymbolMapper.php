@@ -55,9 +55,15 @@ class SymbolMapper
         $canonical = $this->normalizeCanonical($symbol);
         $broker = $this->toBrokerSymbol($terminal, $canonical);
         $candidates = [$broker, $canonical];
+        $suffixMode = $terminal->symbol_suffix ?: self::SUFFIX_AUTO;
 
-        foreach (['_SB', '_sb', '.a', '.i', '.c', '.pro', '.z'] as $suffix) {
-            $candidates[] = $canonical.$suffix;
+        if ($suffixMode === self::SUFFIX_SPREAD_BET || ($suffixMode === self::SUFFIX_AUTO && $this->inferSpreadBetBroker($terminal))) {
+            array_unshift($candidates, $canonical.'_SB');
+        } elseif ($suffixMode === self::SUFFIX_AUTO) {
+            // Auto/plain forex: never invent _SB for IC-style brokers.
+            foreach (['.a', '.i', '.c', '.pro', '.z'] as $suffix) {
+                $candidates[] = $canonical.$suffix;
+            }
         }
 
         return array_values(array_unique(array_filter($candidates)));
@@ -145,37 +151,92 @@ class SymbolMapper
             return true;
         }
 
-        if (str_contains($company, 'IC MARKETS') || str_contains($company, 'ICMARKETS')) {
+        // IC Markets demo often reports as "Raw Trading Ltd".
+        if (
+            str_contains($company, 'IC MARKETS')
+            || str_contains($company, 'ICMARKETS')
+            || str_contains($company, 'RAW TRADING')
+        ) {
             return false;
         }
 
         $quotes = is_array($terminal->market_quotes) ? $terminal->market_quotes : [];
+        $hasSpreadBet = false;
+        $hasPlainForex = false;
+
         foreach (array_keys($quotes) as $key) {
-            if (str_ends_with(strtoupper((string) $key), '_SB')) {
-                return true;
+            $brokerSymbol = strtoupper((string) $key);
+            if (str_ends_with($brokerSymbol, '_SB')) {
+                $hasSpreadBet = true;
+                continue;
+            }
+
+            if (preg_match('/^[A-Z]{6}$/', $brokerSymbol) === 1) {
+                $hasPlainForex = true;
             }
         }
 
-        return false;
+        // Prefer plain symbols when both styles appear (stale _SB keys must not win).
+        return $hasSpreadBet && ! $hasPlainForex;
     }
 
     private function matchFromQuoteKeys(Mt5EaTerminal $terminal, string $canonical): ?string
     {
         $quotes = is_array($terminal->market_quotes) ? $terminal->market_quotes : [];
+        $matches = [];
 
         foreach (array_keys($quotes) as $key) {
             $brokerSymbol = strtoupper((string) $key);
             if ($this->mt5Service->baseSymbol($brokerSymbol) === $canonical) {
-                return $brokerSymbol;
+                $matches[] = $brokerSymbol;
             }
         }
 
-        return null;
+        if ($matches === []) {
+            return null;
+        }
+
+        return $this->preferBrokerSymbol($terminal, $canonical, $matches);
+    }
+
+    /**
+     * @param  array<int, string>  $matches
+     */
+    private function preferBrokerSymbol(Mt5EaTerminal $terminal, string $canonical, array $matches): string
+    {
+        $matches = array_values(array_unique($matches));
+        if (in_array($canonical, $matches, true)) {
+            if (! $this->inferSpreadBetBroker($terminal) || ($terminal->symbol_suffix ?: self::SUFFIX_AUTO) === self::SUFFIX_NONE) {
+                return $canonical;
+            }
+        }
+
+        $preferred = $this->applySuffixPolicy($terminal, $canonical);
+        if (in_array($preferred, $matches, true)) {
+            return $preferred;
+        }
+
+        if ($this->inferSpreadBetBroker($terminal)) {
+            foreach ($matches as $match) {
+                if (str_ends_with($match, '_SB')) {
+                    return $match;
+                }
+            }
+        } else {
+            foreach ($matches as $match) {
+                if (! str_ends_with($match, '_SB')) {
+                    return $match;
+                }
+            }
+        }
+
+        return $matches[0];
     }
 
     private function matchFromPositions(Mt5EaTerminal $terminal, string $canonical): ?string
     {
         $positions = is_array($terminal->positions) ? $terminal->positions : [];
+        $matches = [];
 
         foreach ($positions as $position) {
             if (! is_array($position)) {
@@ -188,10 +249,14 @@ class SymbolMapper
             }
 
             if ($this->mt5Service->baseSymbol($brokerSymbol) === $canonical) {
-                return $brokerSymbol;
+                $matches[] = $brokerSymbol;
             }
         }
 
-        return null;
+        if ($matches === []) {
+            return null;
+        }
+
+        return $this->preferBrokerSymbol($terminal, $canonical, $matches);
     }
 }

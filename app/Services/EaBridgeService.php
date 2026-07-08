@@ -726,7 +726,11 @@ class EaBridgeService
                 $instance = $broker->forInstance($key);
                 $instanceLabel = $instance->instanceLabel();
                 $brokerSymbol = $instance->toBrokerSymbol($canonical);
-                $instance->getTickerPrice($canonical);
+                $quote = $instance->getTickerPrice($canonical);
+                $matchedSymbol = strtoupper(trim((string) ($quote['symbol'] ?? '')));
+                if ($matchedSymbol !== '') {
+                    $brokerSymbol = $matchedSymbol;
+                }
 
                 $attempts[] = [
                     'instance_key' => $instance->instanceKey(),
