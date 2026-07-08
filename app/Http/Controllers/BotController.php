@@ -4,6 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Models\BotTradeLog;
 use App\Models\AppSetting;
+use App\Services\Brokers\BrokerResolver;
+use App\Services\Brokers\EaBridgeBroker;
+use App\Services\EaBridgeService;
 use App\Services\Mt5Service;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -20,13 +23,14 @@ class BotController extends Controller
     public function index(Mt5Service $mt5Service)
     {
         $settings = AppSetting::singleton();
+        $botProfile = $this->resolveHealthBotProfile($settings);
         $openSnapshot = null;
         $tickerPrice = null;
         $topForexSymbols = ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'USDCAD', 'AUDUSD', 'NZDUSD', 'EURJPY'];
         $defaultSymbol = strtoupper((string) old('symbol', 'GBPUSD'));
 
         try {
-            $openSnapshot = $mt5Service->getOpenTradeSnapshot();
+            $openSnapshot = $this->openSnapshotCached($mt5Service, true, $botProfile);
         } catch (Throwable $e) {
             $openSnapshot = [
                 'error' => $e->getMessage(),
@@ -240,7 +244,7 @@ class BotController extends Controller
         ]);
 
         $profileSymbols = isset($botProfile['symbols']) && is_array($botProfile['symbols'])
-            ? array_values(array_filter(array_map(static fn ($symbol) => strtoupper(trim((string) $symbol)), $botProfile['symbols'])))
+            ? array_values(array_filter(array_map(static fn ($symbol) => $mt5Service->baseSymbol((string) $symbol), $botProfile['symbols'])))
             : [];
 
         $healthSymbol = strtoupper((string) ($validated['symbol'] ?? ($profileSymbols[0] ?? 'GBPUSD')));
@@ -303,35 +307,41 @@ class BotController extends Controller
 
         $checks = [];
 
+        $healthSnapshot = $this->openSnapshotCached($mt5Service, true, $botProfile);
+        $healthBroker = $this->resolveUiBrokerContext($botProfile);
+
         try {
-            $account = $mt5Service->getAccountInformation();
-            $checks[] = [
-                'name' => 'Account',
-                'ok' => true,
-                'detail' => 'Balance='.(float) ($account['balance'] ?? 0).' Equity='.(float) ($account['equity'] ?? 0),
-            ];
+            if (($healthBroker['type'] ?? '') === 'ea_bridge') {
+                $terminals = is_array($healthSnapshot['terminals'] ?? null) ? $healthSnapshot['terminals'] : [];
+                $online = collect($terminals)->where('ok', true)->count();
+                $checks[] = [
+                    'name' => 'Accounts',
+                    'ok' => $online > 0,
+                    'detail' => 'Online instances='.$online.'/'.count($terminals),
+                ];
+            } else {
+                $account = $mt5Service->getAccountInformation();
+                $checks[] = [
+                    'name' => 'Account',
+                    'ok' => true,
+                    'detail' => 'Balance='.(float) ($account['balance'] ?? 0).' Equity='.(float) ($account['equity'] ?? 0),
+                ];
+            }
         } catch (Throwable $e) {
             $checks[] = [
-                'name' => 'Account',
+                'name' => 'Accounts',
                 'ok' => false,
                 'detail' => $e->getMessage(),
             ];
         }
 
-        try {
-            $snapshot = $mt5Service->getOpenTradeSnapshot();
-            $checks[] = [
-                'name' => 'Open snapshot',
-                'ok' => true,
-                'detail' => 'Positions='.count($snapshot['positions'] ?? []).' Orders='.count($snapshot['orders'] ?? []),
-            ];
-        } catch (Throwable $e) {
-            $checks[] = [
-                'name' => 'Open snapshot',
-                'ok' => false,
-                'detail' => $e->getMessage(),
-            ];
-        }
+        $checks[] = [
+            'name' => 'Open snapshot',
+            'ok' => empty($healthSnapshot['error']),
+            'detail' => empty($healthSnapshot['error'])
+                ? 'Positions='.count($healthSnapshot['positions'] ?? []).' Orders='.count($healthSnapshot['orders'] ?? [])
+                : (string) $healthSnapshot['error'],
+        ];
 
         try {
             $quote = $mt5Service->getTickerPrice($healthSymbol);
@@ -811,15 +821,17 @@ class BotController extends Controller
     ): array
     {
         $startedAt = microtime(true);
+        $settings = AppSetting::singleton();
+        $botProfile = $this->resolveHealthBotProfile($settings);
 
         $openStart = microtime(true);
-        $openSnapshot = $this->activeTradesSnapshotCached($mt5Service, $allowRemoteFetch);
+        $openSnapshot = $this->activeTradesSnapshotCached($mt5Service, $allowRemoteFetch, $botProfile);
         $openDurationMs = (int) round((microtime(true) - $openStart) * 1000);
 
         $positions = $openSnapshot['positions'] ?? [];
 
         if ($allowRemoteFetch && !empty($positions)) {
-            $positions = $this->enrichPositionsWithLiveQuotes($mt5Service, $positions);
+            $positions = $this->enrichPositionsWithLiveQuotes($mt5Service, $positions, $botProfile);
             $openSnapshot['positions'] = $positions;
         }
 
@@ -900,7 +912,7 @@ class BotController extends Controller
         ];
     }
 
-    private function openSnapshotCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true): array
+    private function openSnapshotCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true, ?array $botProfile = null): array
     {
         $default = [
             'positions' => [],
@@ -908,12 +920,20 @@ class BotController extends Controller
             'error' => null,
         ];
 
-        $cacheKey = 'bot_analytics_open_snapshot';
+        $context = $this->resolveUiBrokerContext($botProfile ?? []);
+        $cacheKey = 'bot_analytics_open_snapshot_'.md5(json_encode([
+            'type' => $context['type'] ?? 'metaapi',
+            'instances' => $context['instance_keys'] ?? [],
+        ]));
 
         if ($allowRemoteFetch) {
-            return Cache::remember($cacheKey, now()->addSeconds(30), function () use ($mt5Service, $default) {
+            return Cache::remember($cacheKey, now()->addSeconds(30), function () use ($mt5Service, $default, $context) {
                 try {
-                    $snapshot = $mt5Service->getOpenTradeSnapshot();
+                    if (($context['type'] ?? '') === 'ea_bridge') {
+                        $snapshot = $this->aggregateEaOpenSnapshots($context['instance_keys'] ?? []);
+                    } else {
+                        $snapshot = $mt5Service->getOpenTradeSnapshot();
+                    }
                     return is_array($snapshot) ? array_merge($default, $snapshot) : $default;
                 } catch (Throwable $e) {
                     $default['error'] = $e->getMessage();
@@ -938,23 +958,37 @@ class BotController extends Controller
      * @param array<int, array<string, mixed>> $positions
      * @return array<int, array<string, mixed>>
      */
-    private function enrichPositionsWithLiveQuotes(Mt5Service $mt5Service, array $positions): array
+    private function enrichPositionsWithLiveQuotes(Mt5Service $mt5Service, array $positions, ?array $botProfile = null): array
     {
-        $uniqueSymbols = collect($positions)
+        $context = $this->resolveUiBrokerContext($botProfile ?? []);
+        $quoteTargets = collect($positions)
             ->filter(static fn ($position) => is_array($position) && !empty($position['symbol']))
-            ->map(static fn ($position) => strtoupper((string) $position['symbol']))
-            ->unique()
+            ->map(static function ($position): array {
+                return [
+                    'symbol' => strtoupper((string) ($position['symbol'] ?? '')),
+                    'terminal' => (string) ($position['terminal'] ?? ''),
+                ];
+            })
+            ->unique(fn (array $target) => $target['symbol'].'|'.$target['terminal'])
             ->values();
 
-        $quotesBySymbol = [];
-        foreach ($uniqueSymbols as $symbol) {
-            $cacheKey = 'bot_analytics_live_quote_'.preg_replace('/[^A-Z0-9_]/', '_', $symbol);
-            $quotesBySymbol[$symbol] = Cache::remember($cacheKey, now()->addSeconds(10), function () use ($mt5Service, $symbol) {
+        $quotesByTarget = [];
+        foreach ($quoteTargets as $target) {
+            $symbol = $target['symbol'];
+            $terminal = $target['terminal'];
+            $cacheKey = 'bot_analytics_live_quote_'
+                .preg_replace('/[^A-Z0-9_]/', '_', $symbol)
+                .'_'.preg_replace('/[^a-zA-Z0-9_]/', '_', $terminal);
+            $quotesByTarget[$symbol.'|'.$terminal] = Cache::remember($cacheKey, now()->addSeconds(10), function () use ($mt5Service, $symbol, $terminal, $context) {
                 try {
+                    if (($context['type'] ?? '') === 'ea_bridge' && $terminal !== '') {
+                        return app(EaBridgeBroker::class)->forInstance($terminal)->getTickerPrice($symbol);
+                    }
                     return $mt5Service->getTickerPrice($symbol);
                 } catch (Throwable $e) {
                     logger()->warning('analytics live quote lookup failed', [
                         'symbol' => $symbol,
+                        'terminal' => $terminal,
                         'error' => $e->getMessage(),
                     ]);
 
@@ -963,9 +997,10 @@ class BotController extends Controller
             });
         }
 
-        return array_map(static function (array $position) use ($quotesBySymbol): array {
+        return array_map(static function (array $position) use ($quotesByTarget): array {
             $symbol = strtoupper((string) ($position['symbol'] ?? ''));
-            $quote = $quotesBySymbol[$symbol] ?? null;
+            $terminal = (string) ($position['terminal'] ?? '');
+            $quote = $quotesByTarget[$symbol.'|'.$terminal] ?? null;
 
             if (is_array($quote)) {
                 $type = strtoupper((string) ($position['type'] ?? 'BUY'));
@@ -1066,6 +1101,82 @@ class BotController extends Controller
         }
 
         return $profiles[0] ?? [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $botProfile
+     * @return array{type: string, instance_keys: array<int, string>, symbol_instance_map: array<string, string>}
+     */
+    private function resolveUiBrokerContext(array $botProfile): array
+    {
+        if (BrokerResolver::profileForexBroker($botProfile) !== 'ea_bridge') {
+            return [
+                'type' => 'metaapi',
+                'instance_keys' => [],
+                'symbol_instance_map' => [],
+            ];
+        }
+
+        return [
+            'type' => 'ea_bridge',
+            'instance_keys' => EaBridgeService::profileInstanceKeys($botProfile),
+            'symbol_instance_map' => [],
+        ];
+    }
+
+    /**
+     * @param  array<int, string>  $instanceKeys
+     * @return array<string, mixed>
+     */
+    private function aggregateEaOpenSnapshots(array $instanceKeys): array
+    {
+        $positions = [];
+        $orders = [];
+        $terminals = [];
+        $errors = [];
+        $keys = $instanceKeys !== [] ? $instanceKeys : [null];
+
+        foreach ($keys as $instanceKey) {
+            try {
+                $broker = app(EaBridgeBroker::class)->forInstance($instanceKey);
+                $snapshot = $broker->getOpenTradeSnapshot();
+                $label = $broker->instanceLabel();
+                $resolvedKey = $broker->instanceKey() ?? $instanceKey ?? 'default';
+
+                $terminals[] = [
+                    'instance_key' => $resolvedKey,
+                    'label' => $label,
+                    'ok' => true,
+                    'positions' => count($snapshot['positions'] ?? []),
+                ];
+
+                foreach (($snapshot['positions'] ?? []) as $position) {
+                    if (!is_array($position)) {
+                        continue;
+                    }
+                    $position['terminal'] = $resolvedKey;
+                    $position['terminal_label'] = $label;
+                    $positions[] = $position;
+                }
+            } catch (Throwable $e) {
+                $resolvedKey = $instanceKey ?? 'default';
+                $terminals[] = [
+                    'instance_key' => $resolvedKey,
+                    'label' => $resolvedKey,
+                    'ok' => false,
+                    'positions' => 0,
+                    'error' => $e->getMessage(),
+                ];
+                $errors[] = $resolvedKey.': '.$e->getMessage();
+            }
+        }
+
+        return [
+            'positions' => $positions,
+            'orders' => $orders,
+            'terminals' => $terminals,
+            'error' => $positions === [] && $errors !== [] ? implode(' | ', $errors) : null,
+        ];
     }
 
     private function normalizeSignalTimeframes(?array $raw): ?array
@@ -1396,7 +1507,7 @@ class BotController extends Controller
      *
      * @return array{positions: array<int, array<string, mixed>>, orders: array<int, mixed>, error: null|string}
      */
-    private function activeTradesSnapshotCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true): array
+    private function activeTradesSnapshotCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true, ?array $botProfile = null): array
     {
         $cacheKey = 'bot_analytics_active_trades_db_v4';
 
@@ -1413,7 +1524,7 @@ class BotController extends Controller
             return $snapshot;
         }
 
-        $liveSnapshot = $this->openSnapshotCached($mt5Service, true);
+        $liveSnapshot = $this->openSnapshotCached($mt5Service, true, $botProfile);
         $livePositionsPayload = $liveSnapshot['positions'] ?? null;
         $livePositions = (is_array($livePositionsPayload) && array_is_list($livePositionsPayload))
             ? $livePositionsPayload
@@ -1421,7 +1532,7 @@ class BotController extends Controller
         $liveByPositionId = $this->indexLivePositionsById($livePositions);
 
         if (empty($snapshot['positions']) && !empty($livePositions)) {
-            $liveSnapshot['positions'] = $this->enrichPositionsWithLiveQuotes($mt5Service, $livePositions);
+            $liveSnapshot['positions'] = $this->enrichPositionsWithLiveQuotes($mt5Service, $livePositions, $botProfile);
 
             return array_merge($snapshot, [
                 'positions' => $liveSnapshot['positions'],
@@ -1443,7 +1554,7 @@ class BotController extends Controller
             $verifiedPositions[] = $this->mergeSnapshotWithLivePosition($position, $liveByPositionId[$positionId]);
         }
 
-        $snapshot['positions'] = $this->enrichPositionsWithLiveQuotes($mt5Service, $verifiedPositions);
+        $snapshot['positions'] = $this->enrichPositionsWithLiveQuotes($mt5Service, $verifiedPositions, $botProfile);
         $snapshot['error'] = $liveSnapshot['error'] ?? null;
 
         return $snapshot;
@@ -1479,7 +1590,8 @@ class BotController extends Controller
             return;
         }
 
-        $liveSnapshot = $this->openSnapshotCached($mt5Service, true);
+        $settings = AppSetting::singleton();
+        $liveSnapshot = $this->openSnapshotCached($mt5Service, true, $this->resolveHealthBotProfile($settings));
         $livePositionsPayload = $liveSnapshot['positions'] ?? null;
         $livePositions = (is_array($livePositionsPayload) && array_is_list($livePositionsPayload))
             ? $livePositionsPayload
