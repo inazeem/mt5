@@ -67,7 +67,7 @@ class SymbolMapper
                 }
             }
         } else {
-            foreach ($this->stockSymbolVariants($canonical) as $variant) {
+            foreach ($this->stockSymbolVariants($terminal, $canonical) as $variant) {
                 $candidates[] = $variant;
             }
         }
@@ -78,13 +78,27 @@ class SymbolMapper
     /**
      * @return array<int, string>
      */
-    private function stockSymbolVariants(string $canonical): array
+    private function stockSymbolVariants(Mt5EaTerminal $terminal, string $canonical): array
     {
         if (! preg_match('/^[A-Z][A-Z0-9]{0,14}$/', $canonical)) {
             return [];
         }
 
-        return [$canonical.'.US', $canonical.'.us'];
+        $variants = [$canonical.'.US', $canonical.'.us'];
+
+        if ($this->usesSpreadBetSuffix($terminal)) {
+            array_unshift($variants, $canonical.'.US_SB');
+        }
+
+        return $variants;
+    }
+
+    private function usesSpreadBetSuffix(Mt5EaTerminal $terminal): bool
+    {
+        $suffixMode = $terminal->symbol_suffix ?: self::SUFFIX_AUTO;
+
+        return $suffixMode === self::SUFFIX_SPREAD_BET
+            || ($suffixMode === self::SUFFIX_AUTO && $this->inferSpreadBetBroker($terminal));
     }
 
     public function normalizeCanonical(string $symbol): string
@@ -146,16 +160,18 @@ class SymbolMapper
     {
         $suffixMode = $terminal->symbol_suffix ?: self::SUFFIX_AUTO;
 
-        if ($suffixMode === self::SUFFIX_SPREAD_BET && preg_match('/^[A-Z]{6}$/', $canonical) === 1) {
-            return $canonical.'_SB';
+        if ($this->usesSpreadBetSuffix($terminal)) {
+            if (preg_match('/^[A-Z]{6}$/', $canonical) === 1) {
+                return $canonical.'_SB';
+            }
+
+            if (preg_match('/^[A-Z][A-Z0-9]{0,14}$/', $canonical) === 1) {
+                return $canonical.'.US_SB';
+            }
         }
 
         if ($suffixMode === self::SUFFIX_NONE) {
             return $canonical;
-        }
-
-        if ($suffixMode === self::SUFFIX_AUTO && $this->inferSpreadBetBroker($terminal) && preg_match('/^[A-Z]{6}$/', $canonical) === 1) {
-            return $canonical.'_SB';
         }
 
         return $canonical;

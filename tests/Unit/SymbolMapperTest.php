@@ -122,6 +122,28 @@ class SymbolMapperTest extends TestCase
         $this->assertSame('AUDUSD', $mapper->toBrokerSymbol($terminal, 'AUDUSD'));
     }
 
+    public function test_pepperstone_spread_bet_stocks_map_to_us_sb_suffix(): void
+    {
+        $terminal = Mt5EaTerminal::query()->create([
+            'instance_key' => 'peperstone-demo',
+            'display_name' => 'Pepperstone Demo',
+            'broker_company' => 'Pepperstone',
+            'symbol_suffix' => SymbolMapper::SUFFIX_SPREAD_BET,
+            'market_quotes' => [
+                'GOOGL.US_SB' => ['bid' => 170.1, 'ask' => 170.2],
+            ],
+            'enabled' => true,
+            'is_demo' => true,
+        ]);
+
+        $mapper = app(SymbolMapper::class);
+
+        $this->assertSame('GOOGL', $mapper->normalizeCanonical('GOOGL.US_SB'));
+        $this->assertSame('GOOGL.US_SB', $mapper->toBrokerSymbol($terminal, 'GOOGL'));
+        $this->assertSame('GOOGL.US_SB', $mapper->toBrokerSymbol($terminal, 'GOOGL.US'));
+        $this->assertContains('GOOGL.US_SB', $mapper->brokerSymbolCandidates($terminal, 'GOOGL'));
+    }
+
     public function test_us_equity_suffix_normalizes_to_root_symbol(): void
     {
         $terminal = Mt5EaTerminal::query()->create([

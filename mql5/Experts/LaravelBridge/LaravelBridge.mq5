@@ -389,16 +389,38 @@ bool SelectSymbolWithFallback(const string requested, string &resolved)
       candidates[idx] = base + suffixes[s];
    }
 
-   // US equities: GOOGL.US -> also try GOOGL (IC Markets / plain share CFDs).
+   // Pepperstone spread-bet US shares: GOOGL / GOOGL.US -> GOOGL.US_SB
    int dotUsPos = StringFind(base, ".US");
+   string shareRoot = base;
    if(dotUsPos > 0)
+      shareRoot = StringSubstr(base, 0, dotUsPos);
+
+   if(StringLen(shareRoot) > 0 && StringLen(shareRoot) <= 5 && StringFind(shareRoot, ".") < 0)
    {
-      string root = StringSubstr(base, 0, dotUsPos);
-      if(root != "")
+      string usSb = shareRoot + ".US_SB";
+      if(StringFind(base, ".US_SB") < 0)
       {
          idx = ArraySize(candidates);
          ArrayResize(candidates, idx + 1);
-         candidates[idx] = root;
+         candidates[idx] = usSb;
+      }
+
+      if(dotUsPos > 0)
+      {
+         idx = ArraySize(candidates);
+         ArrayResize(candidates, idx + 1);
+         candidates[idx] = shareRoot;
+      }
+   }
+
+   // US equities on plain brokers: GOOGL.US -> also try GOOGL.
+   if(dotUsPos > 0 && StringFind(base, ".US_SB") < 0)
+   {
+      if(shareRoot != "")
+      {
+         idx = ArraySize(candidates);
+         ArrayResize(candidates, idx + 1);
+         candidates[idx] = shareRoot;
       }
    }
 
