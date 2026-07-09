@@ -57,16 +57,34 @@ class SymbolMapper
         $candidates = [$broker, $canonical];
         $suffixMode = $terminal->symbol_suffix ?: self::SUFFIX_AUTO;
 
-        if ($suffixMode === self::SUFFIX_SPREAD_BET || ($suffixMode === self::SUFFIX_AUTO && $this->inferSpreadBetBroker($terminal))) {
-            array_unshift($candidates, $canonical.'_SB');
-        } elseif ($suffixMode === self::SUFFIX_AUTO) {
-            // Auto/plain forex: never invent _SB for IC-style brokers.
-            foreach (['.a', '.i', '.c', '.pro', '.z'] as $suffix) {
-                $candidates[] = $canonical.$suffix;
+        if (preg_match('/^[A-Z]{6}$/', $canonical) === 1) {
+            if ($suffixMode === self::SUFFIX_SPREAD_BET || ($suffixMode === self::SUFFIX_AUTO && $this->inferSpreadBetBroker($terminal))) {
+                array_unshift($candidates, $canonical.'_SB');
+            } elseif ($suffixMode === self::SUFFIX_AUTO) {
+                // Auto/plain forex: never invent _SB for IC-style brokers.
+                foreach (['.a', '.i', '.c', '.pro', '.z'] as $suffix) {
+                    $candidates[] = $canonical.$suffix;
+                }
+            }
+        } else {
+            foreach ($this->stockSymbolVariants($canonical) as $variant) {
+                $candidates[] = $variant;
             }
         }
 
         return array_values(array_unique(array_filter($candidates)));
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function stockSymbolVariants(string $canonical): array
+    {
+        if (! preg_match('/^[A-Z][A-Z0-9]{0,14}$/', $canonical)) {
+            return [];
+        }
+
+        return [$canonical.'.US', $canonical.'.us'];
     }
 
     public function normalizeCanonical(string $symbol): string

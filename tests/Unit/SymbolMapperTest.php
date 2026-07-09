@@ -122,6 +122,27 @@ class SymbolMapperTest extends TestCase
         $this->assertSame('AUDUSD', $mapper->toBrokerSymbol($terminal, 'AUDUSD'));
     }
 
+    public function test_us_equity_suffix_normalizes_to_root_symbol(): void
+    {
+        $terminal = Mt5EaTerminal::query()->create([
+            'instance_key' => 'ic-demo',
+            'display_name' => 'IC Markets Demo',
+            'symbol_suffix' => SymbolMapper::SUFFIX_NONE,
+            'market_quotes' => [
+                'GOOGL' => ['bid' => 170.1, 'ask' => 170.2],
+            ],
+            'enabled' => true,
+            'is_demo' => true,
+        ]);
+
+        $mapper = app(SymbolMapper::class);
+
+        $this->assertSame('GOOGL', $mapper->normalizeCanonical('GOOGL.US'));
+        $this->assertSame('GOOGL', $mapper->toBrokerSymbol($terminal, 'GOOGL.US'));
+        $this->assertContains('GOOGL', $mapper->brokerSymbolCandidates($terminal, 'GOOGL.US'));
+        $this->assertContains('GOOGL.US', $mapper->brokerSymbolCandidates($terminal, 'GOOGL'));
+    }
+
     public function test_parse_map_input(): void
     {
         $map = SymbolMapper::parseMapInput("GBPUSD=GBPUSD_SB\n# comment\nEURAUD:EURAUD_SB\n");

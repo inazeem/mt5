@@ -1333,6 +1333,11 @@ class Mt5Service implements MarketBrokerInterface
             $upper = substr($upper, 0, -3);
         }
 
+        // Strip US equity suffix (e.g. GOOGL.US → GOOGL).
+        if (str_ends_with($upper, '.US')) {
+            $upper = substr($upper, 0, -3);
+        }
+
         // Strip known dot-prefixed broker suffixes (longest first to avoid partial matches).
         foreach (['.pro', '.a', '.m', '.r', '.c'] as $suffix) {
             if (str_ends_with($upper, strtoupper($suffix))) {

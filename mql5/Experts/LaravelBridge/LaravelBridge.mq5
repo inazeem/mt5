@@ -379,7 +379,7 @@ bool SelectSymbolWithFallback(const string requested, string &resolved)
 
    // Prefer exact requested symbol. Only fall back to known broker suffixes when
    // the requested form is unavailable — avoid rewriting AUDUSD -> AUDUSD_SB on IC.
-   string suffixes[] = {".a", ".i", ".c", ".pro", ".z", "_SB"};
+   string suffixes[] = {".US", ".us", ".a", ".i", ".c", ".pro", ".z", "_SB"};
    for(int s = 0; s < ArraySize(suffixes); s++)
    {
       if(StringFind(base, suffixes[s]) >= 0)
@@ -387,6 +387,19 @@ bool SelectSymbolWithFallback(const string requested, string &resolved)
       idx = ArraySize(candidates);
       ArrayResize(candidates, idx + 1);
       candidates[idx] = base + suffixes[s];
+   }
+
+   // US equities: GOOGL.US -> also try GOOGL (IC Markets / plain share CFDs).
+   int dotUsPos = StringFind(base, ".US");
+   if(dotUsPos > 0)
+   {
+      string root = StringSubstr(base, 0, dotUsPos);
+      if(root != "")
+      {
+         idx = ArraySize(candidates);
+         ArrayResize(candidates, idx + 1);
+         candidates[idx] = root;
+      }
    }
 
    // If Laravel asked for _SB and it does not exist, try plain forex base.
