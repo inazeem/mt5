@@ -166,8 +166,11 @@ class EaBridgeBroker implements MarketBrokerInterface
 
         return [
             'positions' => array_map(static function (array $position): array {
+                $ticket = (string) ($position['ticket'] ?? '');
+
                 return [
-                    'id' => (string) ($position['ticket'] ?? ''),
+                    'id' => $ticket,
+                    'positionId' => $ticket,
                     'symbol' => $position['symbol'] ?? null,
                     'type' => strtoupper((string) ($position['type'] ?? '')),
                     'volume' => $position['lot'] ?? $position['volume'] ?? null,

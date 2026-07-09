@@ -2632,6 +2632,12 @@ Artisan::command('mt5:auto-forex
                             'execution_side' => $executionSide,
                             'execution_mode' => $isEaQueued ? 'ea_bridge' : ($usesAlpacaCycle ? 'alpaca' : 'metaapi'),
                             'ea_command_id' => $isEaQueued ? (int) ($result['command_id'] ?? 0) : null,
+                            'ea_instance_key' => method_exists($execBroker, 'instanceKey')
+                                ? ($execBroker->instanceKey() ?? null)
+                                : null,
+                            'ea_instance_label' => method_exists($execBroker, 'instanceLabel')
+                                ? $execBroker->instanceLabel()
+                                : null,
                             'mirrored_instance_index' => count($executionBrokers) > 1 ? $brokerIndex : null,
                             'mirrored_instance_total' => count($executionBrokers) > 1 ? count($executionBrokers) : null,
                         ]),

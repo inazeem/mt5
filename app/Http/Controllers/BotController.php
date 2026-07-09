@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\BotTradeLog;
 use App\Models\AppSetting;
+use App\Models\Mt5EaTerminal;
 use App\Services\Brokers\BrokerResolver;
 use App\Services\Brokers\EaBridgeBroker;
 use App\Services\EaBridgeService;
@@ -19,6 +20,7 @@ class BotController extends Controller
     private const ALLOWED_STRATEGIES = ['momentum', 'sma_cross', 'ema_cross', 'bollinger_reversion', 'vwap_reversion'];
     private const ANALYTICS_SLOW_MS = 1000;
     private const MAX_HISTORY_SYNC_CALLS_PER_DAY = 2;
+    private const ANALYTICS_LIVE_POSITIONS_CACHE_KEY = 'bot_analytics_live_positions_v5';
 
     public function index(Mt5Service $mt5Service)
     {
@@ -198,8 +200,7 @@ class BotController extends Controller
         $settings = AppSetting::singleton();
 
         try {
-            // Keep initial analytics render fast by avoiding network calls.
-            $payload = $this->buildAnalyticsPayload($mt5Service, false, 'page');
+            $payload = $this->buildAnalyticsPayload($mt5Service, true, 'page');
         } catch (Throwable $e) {
             logger()->error('analytics page payload failed', [
                 'error' => $e->getMessage(),
@@ -822,18 +823,13 @@ class BotController extends Controller
     {
         $startedAt = microtime(true);
         $settings = AppSetting::singleton();
-        $botProfile = $this->resolveHealthBotProfile($settings);
+        $botProfile = $this->resolveAnalyticsBotProfile($settings);
 
         $openStart = microtime(true);
         $openSnapshot = $this->activeTradesSnapshotCached($mt5Service, $allowRemoteFetch, $botProfile);
         $openDurationMs = (int) round((microtime(true) - $openStart) * 1000);
 
         $positions = $openSnapshot['positions'] ?? [];
-
-        if ($allowRemoteFetch && !empty($positions)) {
-            $positions = $this->enrichPositionsWithLiveQuotes($mt5Service, $positions, $botProfile);
-            $openSnapshot['positions'] = $positions;
-        }
 
         $todayStatsStart = microtime(true);
         $todayStart = now()->startOfDay();
@@ -928,17 +924,7 @@ class BotController extends Controller
 
         if ($allowRemoteFetch) {
             return Cache::remember($cacheKey, now()->addSeconds(30), function () use ($mt5Service, $default, $context) {
-                try {
-                    if (($context['type'] ?? '') === 'ea_bridge') {
-                        $snapshot = $this->aggregateEaOpenSnapshots($context['instance_keys'] ?? []);
-                    } else {
-                        $snapshot = $mt5Service->getOpenTradeSnapshot();
-                    }
-                    return is_array($snapshot) ? array_merge($default, $snapshot) : $default;
-                } catch (Throwable $e) {
-                    $default['error'] = $e->getMessage();
-                    return $default;
-                }
+                return $this->fetchOpenSnapshotForContext($mt5Service, $context);
             });
         }
 
@@ -1101,6 +1087,78 @@ class BotController extends Controller
         }
 
         return $profiles[0] ?? [];
+    }
+
+    private function resolveAnalyticsBotProfile(AppSetting $settings): array
+    {
+        $profiles = is_array($settings->bot_profiles ?? null)
+            ? array_values(array_filter($settings->bot_profiles, static fn ($profile) => is_array($profile) && (bool) ($profile['enabled'] ?? true)))
+            : [];
+
+        foreach ($profiles as $profile) {
+            if ((string) ($profile['key'] ?? '') === 'default') {
+                return $profile;
+            }
+        }
+
+        return $this->resolveHealthBotProfile($settings);
+    }
+
+    /**
+     * @param  array<string, mixed>  $botProfile
+     * @return array{type: string, instance_keys: array<int, string>, symbol_instance_map: array<string, string>}
+     */
+    private function resolveAnalyticsBrokerContext(array $botProfile): array
+    {
+        if (BrokerResolver::profileForexBroker($botProfile) !== 'ea_bridge') {
+            return $this->resolveUiBrokerContext($botProfile);
+        }
+
+        $keys = Mt5EaTerminal::query()
+            ->where('enabled', true)
+            ->orderBy('display_name')
+            ->pluck('instance_key')
+            ->map(static fn ($key) => trim((string) $key))
+            ->filter(static fn (string $key) => $key !== '')
+            ->values()
+            ->all();
+
+        if ($keys === []) {
+            $keys = EaBridgeService::profileInstanceKeys($botProfile);
+        }
+
+        return [
+            'type' => 'ea_bridge',
+            'instance_keys' => $keys,
+            'symbol_instance_map' => [],
+        ];
+    }
+
+    /**
+     * @param  array{type: string, instance_keys: array<int, string>, symbol_instance_map: array<string, string>}  $context
+     * @return array<string, mixed>
+     */
+    private function fetchOpenSnapshotForContext(Mt5Service $mt5Service, array $context): array
+    {
+        $default = [
+            'positions' => [],
+            'orders' => [],
+            'error' => null,
+        ];
+
+        try {
+            if (($context['type'] ?? '') === 'ea_bridge') {
+                $snapshot = $this->aggregateEaOpenSnapshots($context['instance_keys'] ?? []);
+            } else {
+                $snapshot = $mt5Service->getOpenTradeSnapshot();
+            }
+
+            return is_array($snapshot) ? array_merge($default, $snapshot) : $default;
+        } catch (Throwable $e) {
+            $default['error'] = $e->getMessage();
+
+            return $default;
+        }
     }
 
     /**
@@ -1502,62 +1560,273 @@ class BotController extends Controller
     }
 
     /**
-     * Build the active-trades snapshot from the database, verify each trade in MetaTrader,
-     * fetch live broker data for open positions, and store outcomes for closed ones.
+     * Build analytics open positions from broker data first, then reconcile DB logs.
      *
-     * @return array{positions: array<int, array<string, mixed>>, orders: array<int, mixed>, error: null|string}
+     * @return array{positions: array<int, array<string, mixed>>, orders: array<int, mixed>, error: null|string, terminals?: array<int, mixed>, source?: string}
      */
     private function activeTradesSnapshotCached(Mt5Service $mt5Service, bool $allowRemoteFetch = true, ?array $botProfile = null): array
     {
-        $cacheKey = 'bot_analytics_active_trades_db_v4';
+        if (! $allowRemoteFetch) {
+            $cached = Cache::get(self::ANALYTICS_LIVE_POSITIONS_CACHE_KEY);
+            if (is_array($cached)) {
+                return $cached;
+            }
 
-        if ($allowRemoteFetch) {
-            $this->resolvePendingOutcomesFromActiveSnapshot($mt5Service);
-            Cache::forget($cacheKey);
+            return $this->buildActiveTradesSnapshotFromDb();
         }
 
-        $snapshot = $allowRemoteFetch
-            ? $this->buildActiveTradesSnapshotFromDb()
-            : Cache::remember($cacheKey, now()->addSeconds(15), fn () => $this->buildActiveTradesSnapshotFromDb());
-
-        if (!$allowRemoteFetch) {
-            return $snapshot;
-        }
-
-        $liveSnapshot = $this->openSnapshotCached($mt5Service, true, $botProfile);
+        $botProfile = $botProfile ?? [];
+        $brokerContext = $this->resolveAnalyticsBrokerContext($botProfile);
+        $liveSnapshot = $this->fetchOpenSnapshotForContext($mt5Service, $brokerContext);
         $livePositionsPayload = $liveSnapshot['positions'] ?? null;
         $livePositions = (is_array($livePositionsPayload) && array_is_list($livePositionsPayload))
             ? $livePositionsPayload
             : [];
-        $liveByPositionId = $this->indexLivePositionsById($livePositions);
 
-        if (empty($snapshot['positions']) && !empty($livePositions)) {
-            $liveSnapshot['positions'] = $this->enrichPositionsWithLiveQuotes($mt5Service, $livePositions, $botProfile);
+        $this->reconcileOpenTradesWithBroker($mt5Service, $livePositions, $brokerContext);
 
-            return array_merge($snapshot, [
-                'positions' => $liveSnapshot['positions'],
-                'error' => $liveSnapshot['error'] ?? null,
-            ]);
-        }
+        $positions = $this->mergeDbMetadataIntoLivePositions(
+            $this->enrichPositionsWithLiveQuotes($mt5Service, $livePositions, $botProfile)
+        );
 
-        $verifiedPositions = [];
-        foreach ($snapshot['positions'] as $position) {
-            if (!is_array($position)) {
-                continue;
-            }
+        $snapshot = [
+            'positions' => $positions,
+            'orders' => is_array($liveSnapshot['orders'] ?? null) ? $liveSnapshot['orders'] : [],
+            'error' => $liveSnapshot['error'] ?? null,
+            'terminals' => $liveSnapshot['terminals'] ?? null,
+            'source' => 'broker',
+            'fetched_at' => now()->toDateTimeString(),
+        ];
 
-            $positionId = trim((string) ($position['positionId'] ?? ''));
-            if ($positionId === '' || !isset($liveByPositionId[$positionId])) {
-                continue;
-            }
-
-            $verifiedPositions[] = $this->mergeSnapshotWithLivePosition($position, $liveByPositionId[$positionId]);
-        }
-
-        $snapshot['positions'] = $this->enrichPositionsWithLiveQuotes($mt5Service, $verifiedPositions, $botProfile);
-        $snapshot['error'] = $liveSnapshot['error'] ?? null;
+        Cache::put(self::ANALYTICS_LIVE_POSITIONS_CACHE_KEY, $snapshot, now()->addSeconds(15));
 
         return $snapshot;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $livePositions
+     * @param  array{type: string, instance_keys: array<int, string>, symbol_instance_map: array<string, string>}  $brokerContext
+     */
+    private function reconcileOpenTradesWithBroker(Mt5Service $mt5Service, array $livePositions, array $brokerContext): void
+    {
+        $liveByPositionId = $this->indexLivePositionsById($livePositions);
+        $this->syncTradeLogsWithOpenBrokerPositions($livePositions, $mt5Service);
+
+        $pendingTrades = BotTradeLog::query()
+            ->where('event_type', 'trade_open')
+            ->where('status', 'success')
+            ->where(function ($query) {
+                $query->whereNull('trade_outcome')
+                    ->orWhere('trade_outcome', 'PENDING')
+                    ->orWhere('trade_outcome', 'ERROR');
+            })
+            ->where('created_at', '<=', now()->subMinutes(2))
+            ->orderBy('created_at')
+            ->get();
+
+        if ($pendingTrades->isEmpty()) {
+            return;
+        }
+
+        $closedCandidates = $pendingTrades->filter(function (BotTradeLog $tradeLog) use ($liveByPositionId, $livePositions, $mt5Service): bool {
+            $positionId = trim((string) ($tradeLog->position_id ?? ''));
+            if ($positionId !== '' && isset($liveByPositionId[$positionId])) {
+                return false;
+            }
+
+            return ! $this->tradeLogMatchesAnyLivePosition($tradeLog, $livePositions, $mt5Service);
+        })->values();
+
+        if ($closedCandidates->isEmpty()) {
+            return;
+        }
+
+        $resolved = 0;
+        if (($brokerContext['type'] ?? '') !== 'ea_bridge') {
+            $resolved = $this->syncPendingOutcomesFromHistory($mt5Service, $closedCandidates);
+        }
+
+        if ($resolved === 0) {
+            foreach ($closedCandidates as $tradeLog) {
+                if (! in_array((string) ($tradeLog->trade_outcome ?? ''), ['PENDING', 'ERROR', ''], true)) {
+                    continue;
+                }
+
+                $tradeLog->trade_outcome = 'FAILED';
+                $tradeLog->trade_pnl = null;
+                $tradeLog->trade_resolved_at = now();
+                $tradeLog->message = trim((string) ($tradeLog->message ?? '')) !== ''
+                    ? (string) $tradeLog->message
+                    : 'Position closed on broker; outcome unavailable from EA bridge history.';
+                $tradeLog->save();
+                $resolved++;
+            }
+        }
+
+        if ($resolved > 0) {
+            Cache::forget('bot_analytics_history_30d_v2');
+        }
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $livePositions
+     */
+    private function syncTradeLogsWithOpenBrokerPositions(array $livePositions, Mt5Service $mt5Service): void
+    {
+        if ($livePositions === []) {
+            return;
+        }
+
+        $pendingTrades = BotTradeLog::query()
+            ->where('event_type', 'trade_open')
+            ->where('status', 'success')
+            ->where(function ($query) {
+                $query->whereNull('trade_outcome')
+                    ->orWhere('trade_outcome', 'PENDING')
+                    ->orWhere('trade_outcome', 'ERROR');
+            })
+            ->orderByDesc('created_at')
+            ->get();
+
+        if ($pendingTrades->isEmpty()) {
+            return;
+        }
+
+        $claimedLogIds = [];
+
+        foreach ($livePositions as $livePosition) {
+            if (! is_array($livePosition)) {
+                continue;
+            }
+
+            $ticket = trim((string) ($livePosition['id'] ?? $livePosition['positionId'] ?? ''));
+            if ($ticket === '') {
+                continue;
+            }
+
+            $matchedLog = $pendingTrades->first(function (BotTradeLog $log) use ($livePosition, $ticket, $claimedLogIds, $mt5Service): bool {
+                if (in_array($log->id, $claimedLogIds, true)) {
+                    return false;
+                }
+
+                $existingPositionId = trim((string) ($log->position_id ?? ''));
+                if ($existingPositionId !== '' && $existingPositionId === $ticket) {
+                    return true;
+                }
+
+                return $this->tradeLogMatchesLivePosition($log, $livePosition, $mt5Service);
+            });
+
+            if ($matchedLog === null) {
+                continue;
+            }
+
+            $claimedLogIds[] = $matchedLog->id;
+            $updates = [];
+            if (trim((string) ($matchedLog->position_id ?? '')) !== $ticket) {
+                $updates['position_id'] = $ticket;
+            }
+            if (($matchedLog->trade_outcome ?? null) === 'ERROR') {
+                $updates['trade_outcome'] = 'PENDING';
+            }
+
+            if ($updates !== []) {
+                $matchedLog->fill($updates);
+                $matchedLog->save();
+            }
+        }
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $livePositions
+     */
+    private function tradeLogMatchesAnyLivePosition(BotTradeLog $tradeLog, array $livePositions, Mt5Service $mt5Service): bool
+    {
+        foreach ($livePositions as $livePosition) {
+            if (is_array($livePosition) && $this->tradeLogMatchesLivePosition($tradeLog, $livePosition, $mt5Service)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $livePosition
+     */
+    private function tradeLogMatchesLivePosition(BotTradeLog $tradeLog, array $livePosition, Mt5Service $mt5Service): bool
+    {
+        $logSymbol = $mt5Service->baseSymbol((string) ($tradeLog->symbol ?? ''));
+        $liveSymbol = $mt5Service->baseSymbol((string) ($livePosition['symbol'] ?? ''));
+        if ($logSymbol === '' || $liveSymbol === '' || $logSymbol !== $liveSymbol) {
+            return false;
+        }
+
+        $logSide = strtoupper((string) ($tradeLog->side ?? 'buy')) === 'SELL' ? 'SELL' : 'BUY';
+        $liveType = strtoupper((string) ($livePosition['type'] ?? 'BUY'));
+        $liveSide = str_contains($liveType, 'SELL') ? 'SELL' : 'BUY';
+        if ($logSide !== $liveSide) {
+            return false;
+        }
+
+        $meta = is_array($tradeLog->meta_payload) ? $tradeLog->meta_payload : [];
+        $logTerminal = trim((string) ($meta['ea_instance_key'] ?? ''));
+        $liveTerminal = trim((string) ($livePosition['terminal'] ?? ''));
+
+        return $logTerminal === '' || $liveTerminal === '' || $logTerminal === $liveTerminal;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $positions
+     * @return array<int, array<string, mixed>>
+     */
+    private function mergeDbMetadataIntoLivePositions(array $positions): array
+    {
+        if ($positions === []) {
+            return [];
+        }
+
+        $pendingLogs = BotTradeLog::query()
+            ->where('event_type', 'trade_open')
+            ->where('status', 'success')
+            ->where(function ($query) {
+                $query->whereNull('trade_outcome')
+                    ->orWhere('trade_outcome', 'PENDING')
+                    ->orWhere('trade_outcome', 'ERROR');
+            })
+            ->orderByDesc('created_at')
+            ->get();
+
+        return array_map(function (array $position) use ($pendingLogs): array {
+            $ticket = trim((string) ($position['positionId'] ?? $position['id'] ?? ''));
+            $matched = $pendingLogs->first(function (BotTradeLog $log) use ($ticket, $position): bool {
+                if ($ticket !== '' && trim((string) ($log->position_id ?? '')) === $ticket) {
+                    return true;
+                }
+
+                $meta = is_array($log->meta_payload) ? $log->meta_payload : [];
+                $logTerminal = trim((string) ($meta['ea_instance_key'] ?? ''));
+                $liveTerminal = trim((string) ($position['terminal'] ?? ''));
+
+                return strtoupper((string) ($log->symbol ?? '')) === strtoupper((string) ($position['symbol'] ?? ''))
+                    && strtoupper((string) ($log->side ?? '')) === strtoupper((string) ($position['type'] ?? ''))
+                    && ($logTerminal === '' || $liveTerminal === '' || $logTerminal === $liveTerminal);
+            });
+
+            if ($matched !== null) {
+                $position['bot_key'] = $matched->bot_key;
+                $position['bot_name'] = $matched->bot_name;
+                $position['linked_trade'] = $matched->linked_trade;
+                if (! is_numeric($position['stopLoss'] ?? null) && is_numeric($matched->stop_loss)) {
+                    $position['stopLoss'] = (float) $matched->stop_loss;
+                }
+                if (! is_numeric($position['takeProfit'] ?? null) && is_numeric($matched->take_profit)) {
+                    $position['takeProfit'] = (float) $matched->take_profit;
+                }
+            }
+
+            return $position;
+        }, $positions);
     }
 
     private function enrichAlertLogStatus(BotTradeLog $log): void
@@ -1572,45 +1841,15 @@ class BotController extends Controller
      */
     private function resolvePendingOutcomesFromActiveSnapshot(Mt5Service $mt5Service): void
     {
-        $pendingTrades = BotTradeLog::query()
-            ->where('event_type', 'trade_open')
-            ->where('status', 'success')
-            ->where(function ($query) {
-                $query->whereNull('trade_outcome')
-                    ->orWhere('trade_outcome', 'PENDING')
-                    ->orWhere('trade_outcome', 'ERROR');
-            })
-            ->whereNotNull('position_id')
-            ->where('position_id', '!=', '')
-            ->where('created_at', '<=', now()->subMinutes(2))
-            ->orderBy('created_at')
-            ->get();
-
-        if ($pendingTrades->isEmpty()) {
-            return;
-        }
-
         $settings = AppSetting::singleton();
-        $liveSnapshot = $this->openSnapshotCached($mt5Service, true, $this->resolveHealthBotProfile($settings));
+        $botProfile = $this->resolveAnalyticsBotProfile($settings);
+        $brokerContext = $this->resolveAnalyticsBrokerContext($botProfile);
+        $liveSnapshot = $this->fetchOpenSnapshotForContext($mt5Service, $brokerContext);
         $livePositionsPayload = $liveSnapshot['positions'] ?? null;
         $livePositions = (is_array($livePositionsPayload) && array_is_list($livePositionsPayload))
             ? $livePositionsPayload
             : [];
-        $liveByPositionId = $this->indexLivePositionsById($livePositions);
 
-        $closedCandidates = $pendingTrades->filter(static function (BotTradeLog $tradeLog) use ($liveByPositionId): bool {
-            $positionId = trim((string) ($tradeLog->position_id ?? ''));
-
-            return $positionId !== '' && !isset($liveByPositionId[$positionId]);
-        })->values();
-
-        if ($closedCandidates->isEmpty()) {
-            return;
-        }
-
-        $resolved = $this->syncPendingOutcomesFromHistory($mt5Service, $closedCandidates);
-        if ($resolved > 0) {
-            Cache::forget('bot_analytics_history_30d_v2');
-        }
+        $this->reconcileOpenTradesWithBroker($mt5Service, $livePositions, $brokerContext);
     }
 }

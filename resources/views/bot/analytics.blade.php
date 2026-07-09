@@ -86,7 +86,7 @@
                 </div>
             </div>
 
-            <x-card title="Active Trades">
+            <x-card title="Active Trades (live broker)">
 
                 @if (!empty($openSnapshot['error']))
                     <div id="active-positions-error" class="rounded border border-rose-200 bg-rose-50 text-rose-700 p-3 text-sm">
@@ -101,6 +101,7 @@
                 <div id="active-positions-mobile" class="space-y-3 sm:hidden {{ count($positions) > 0 ? '' : 'hidden' }}">
                     @foreach ($positions as $position)
                         @php
+                            $terminalLabel = is_array($position) ? (string) ($position['terminal_label'] ?? $position['terminal'] ?? '-') : '-';
                             $symbol = is_array($position) ? (string) ($position['symbol'] ?? '-') : '-';
                             $type = is_array($position) ? (string) ($position['type'] ?? '-') : '-';
                             $volume = is_array($position) ? (float) ($position['volume'] ?? 0) : 0;
@@ -112,7 +113,10 @@
                         @endphp
                         <div class="rounded-lg border border-gray-200 p-3">
                             <div class="flex items-center justify-between">
-                                <div class="font-semibold text-gray-900">{{ $symbol }}</div>
+                                <div>
+                                    <div class="font-semibold text-gray-900">{{ $symbol }}</div>
+                                    <div class="text-xs text-gray-500">{{ $terminalLabel }}</div>
+                                </div>
                                 <div class="text-xs text-gray-500">{{ $type }}</div>
                             </div>
                             <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
@@ -131,6 +135,7 @@
                     <table class="min-w-full text-sm">
                         <thead>
                             <tr class="text-left text-gray-600 border-b">
+                                <th class="py-2 pr-4">Instance</th>
                                 <th class="py-2 pr-4">Symbol</th>
                                 <th class="py-2 pr-4">Type</th>
                                 <th class="py-2 pr-4 text-right">Volume</th>
@@ -144,6 +149,7 @@
                         <tbody id="active-positions-body">
                             @foreach ($positions as $position)
                                 @php
+                                    $terminalLabel = is_array($position) ? (string) ($position['terminal_label'] ?? $position['terminal'] ?? '-') : '-';
                                     $symbol = is_array($position) ? (string) ($position['symbol'] ?? '-') : '-';
                                     $type = is_array($position) ? (string) ($position['type'] ?? '-') : '-';
                                     $volume = is_array($position) ? (float) ($position['volume'] ?? 0) : 0;
@@ -154,6 +160,7 @@
                                     $pnl = is_array($position) ? (float) ($position['profit'] ?? $position['unrealizedProfit'] ?? 0) : 0;
                                 @endphp
                                 <tr class="border-b border-gray-100">
+                                    <td class="py-2 pr-4 text-xs text-gray-600">{{ $terminalLabel }}</td>
                                     <td class="py-2 pr-4 font-medium">{{ $symbol }}</td>
                                     <td class="py-2 pr-4">{{ $type }}</td>
                                     <td class="py-2 pr-4 text-right">{{ number_format($volume, 2) }}</td>
@@ -196,7 +203,7 @@
     <script>
         (function () {
             const liveUrl = @json(route('bot.analytics.live'));
-            const fastIntervalMs = 20000;
+            const fastIntervalMs = 15000;
             const maxIntervalMs = 300000;
             const refreshBtn = document.getElementById('analytics-refresh-btn');
             let currentInterval = fastIntervalMs;
@@ -288,6 +295,7 @@
                 mobile.classList.remove('hidden');
 
                 const rows = positions.map((position) => {
+                    const terminal = position?.terminal_label ?? position?.terminal ?? '-';
                     const symbol = position?.symbol ?? '-';
                     const type = position?.type ?? '-';
                     const volume = formatNumber(position?.volume ?? 0, 2);
@@ -304,6 +312,7 @@
                     const pnl = Number.isFinite(pnlNum) ? formatNumber(pnlNum, 2) : '-';
 
                     return `<tr class="border-b border-gray-100">
+                        <td class="py-2 pr-4 text-xs text-gray-600">${terminal}</td>
                         <td class="py-2 pr-4 font-medium">${symbol}</td>
                         <td class="py-2 pr-4">${type}</td>
                         <td class="py-2 pr-4 text-right">${volume}</td>
@@ -316,6 +325,7 @@
                 }).join('');
 
                 const cards = positions.map((position) => {
+                    const terminal = position?.terminal_label ?? position?.terminal ?? '-';
                     const symbol = position?.symbol ?? '-';
                     const type = position?.type ?? '-';
                     const volume = formatNumber(position?.volume ?? 0, 2);
@@ -331,7 +341,10 @@
 
                     return `<div class="rounded-lg border border-gray-200 p-3">
                         <div class="flex items-center justify-between">
-                            <div class="font-semibold text-gray-900">${symbol}</div>
+                            <div>
+                                <div class="font-semibold text-gray-900">${symbol}</div>
+                                <div class="text-xs text-gray-500">${terminal}</div>
+                            </div>
                             <div class="text-xs text-gray-500">${type}</div>
                         </div>
                         <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
