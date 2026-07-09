@@ -221,8 +221,11 @@ class EaBridgeService
             return $this->resolveTerminal(null);
         }
 
+        $offlineDetails = [];
+
         foreach ($keys as $key) {
             $terminal = Mt5EaTerminal::query()
+                ->forList()
                 ->where('instance_key', $key)
                 ->where('enabled', true)
                 ->first();
@@ -230,10 +233,17 @@ class EaBridgeService
             if ($terminal?->isOnline()) {
                 return $terminal;
             }
+
+            if ($terminal === null) {
+                $offlineDetails[] = $key.': not registered or disabled';
+            } else {
+                $offlineDetails[] = $key.': last seen '.($terminal->last_seen_at?->toDateTimeString() ?? 'never');
+            }
         }
 
         throw new RuntimeException(
             'No online MT5 instance for profile. Expected one of: '.implode(', ', $keys)
+            .'. Status: '.implode('; ', $offlineDetails)
         );
     }
 
@@ -243,6 +253,7 @@ class EaBridgeService
     public function selectableTerminals(): array
     {
         return Mt5EaTerminal::query()
+            ->forList()
             ->where('enabled', true)
             ->orderBy('display_name')
             ->orderBy('instance_key')

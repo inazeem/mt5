@@ -868,7 +868,22 @@ Artisan::command('mt5:auto-forex
         $profileTickerCategories = isset($botProfile['ticker_categories']) && is_array($botProfile['ticker_categories'])
             ? array_values(array_unique(array_filter(array_map(static fn ($value) => strtolower(trim((string) $value)), $botProfile['ticker_categories']), static fn ($value) => $value !== '')))
             : [];
-        $cycleBroker = $brokerResolver->forProfile($profileTickerCategories, $botProfile);
+        try {
+            $cycleBroker = $brokerResolver->forProfile($profileTickerCategories, $botProfile);
+        } catch (RuntimeException $e) {
+            $msg = 'Skipped cycle: '.$e->getMessage();
+            $this->warn($msg);
+            BotTradeLog::query()->create(array_merge($botLogDefaults, [
+                'event_type' => 'guardrail',
+                'status' => 'ea_offline',
+                'message' => $msg,
+                'meta_payload' => [
+                    'expected_instances' => EaBridgeService::profileInstanceKeys($botProfile),
+                ],
+            ]));
+
+            return 0;
+        }
         $usesAlpacaCycle = $brokerResolver->usesAlpaca($cycleBroker);
         $usesEaBridgeCycle = $brokerResolver->usesEaBridge($cycleBroker);
         $usesMetaApiCycle = $brokerResolver->usesMetaApi($cycleBroker);

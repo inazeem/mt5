@@ -8,8 +8,70 @@ use Illuminate\Support\Str;
 
 class Mt5EaTerminal extends Model
 {
-    /** Grace period after last EA poll before marking terminal offline. */
-    public const ONLINE_GRACE_SECONDS = 60;
+    /** Grace period after last EA poll before marking terminal offline (30s poll + buffer). */
+    public const ONLINE_GRACE_SECONDS = 120;
+
+    /**
+     * Columns safe for list/index pages — excludes large JSON poll payloads.
+     *
+     * @return array<int, string>
+     */
+    public static function listColumns(): array
+    {
+        return [
+            'id',
+            'instance_key',
+            'display_name',
+            'enabled',
+            'is_demo',
+            'account_login',
+            'server',
+            'terminal_name',
+            'broker_company',
+            'symbol_suffix',
+            'symbol_map',
+            'balance',
+            'equity',
+            'currency',
+            'trade_allowed',
+            'last_seen_at',
+            'created_at',
+            'updated_at',
+        ];
+    }
+
+    public function scopeForList($query)
+    {
+        return $query->select(self::listColumns());
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, self>  $terminals
+     * @return \Illuminate\Support\Collection<int, self>
+     */
+    public static function sortForDisplay($terminals)
+    {
+        return $terminals
+            ->sort(function (self $a, self $b): int {
+                $onlineCmp = ($a->isOnline() ? 0 : 1) <=> ($b->isOnline() ? 0 : 1);
+                if ($onlineCmp !== 0) {
+                    return $onlineCmp;
+                }
+
+                $seenCmp = ($b->last_seen_at?->timestamp ?? 0) <=> ($a->last_seen_at?->timestamp ?? 0);
+                if ($seenCmp !== 0) {
+                    return $seenCmp;
+                }
+
+                $demoCmp = ($b->is_demo ? 1 : 0) <=> ($a->is_demo ? 1 : 0);
+                if ($demoCmp !== 0) {
+                    return $demoCmp;
+                }
+
+                return strcmp((string) $a->display_name, (string) $b->display_name);
+            })
+            ->values();
+    }
 
     protected $fillable = [
         'instance_key',

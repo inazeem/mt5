@@ -14,18 +14,17 @@ class EaBridgeWebController extends Controller
 {
     public function index(EaBridgeService $eaBridge)
     {
-        $terminals = Mt5EaTerminal::query()
-            ->withCount([
-                'commands as test_commands_count' => static fn ($query) => $query->where('source', 'test'),
-            ])
-            ->orderByRaw('CASE WHEN last_seen_at >= ? THEN 0 ELSE 1 END', [now()->subSeconds(Mt5EaTerminal::ONLINE_GRACE_SECONDS)])
-            ->orderByDesc('last_seen_at')
-            ->orderByDesc('is_demo')
-            ->orderBy('display_name')
-            ->get();
+        $terminals = Mt5EaTerminal::sortForDisplay(
+            Mt5EaTerminal::query()
+                ->forList()
+                ->withCount([
+                    'commands as test_commands_count' => static fn ($query) => $query->where('source', 'test'),
+                ])
+                ->get()
+        );
 
         $recentCommands = Mt5EaCommand::query()
-            ->with('terminal')
+            ->with(['terminal' => static fn ($query) => $query->forList()])
             ->orderByDesc('id')
             ->limit(30)
             ->get();

@@ -11,7 +11,7 @@ class SetupController extends Controller
     public function index(): View
     {
         $settings = AppSetting::singleton();
-        $terminals = Mt5EaTerminal::query()->where('enabled', true)->get();
+        $terminals = Mt5EaTerminal::query()->forList()->where('enabled', true)->get();
         $profiles = is_array($settings->bot_profiles) ? $settings->bot_profiles : [];
 
         return view('setup.index', [

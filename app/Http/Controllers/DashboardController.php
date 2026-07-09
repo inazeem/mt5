@@ -15,7 +15,7 @@ class DashboardController extends Controller
         $profiles = is_array($settings->bot_profiles) ? $settings->bot_profiles : [];
         $enabledProfiles = collect($profiles)->filter(static fn ($p) => ($p['enabled'] ?? true))->count();
 
-        $terminals = Mt5EaTerminal::query()->where('enabled', true)->get();
+        $terminals = Mt5EaTerminal::query()->forList()->where('enabled', true)->get();
         $onlineCount = $terminals->filter(static fn (Mt5EaTerminal $t) => $t->isOnline())->count();
 
         $recentAlerts = BotTradeLog::query()

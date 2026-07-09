@@ -24,6 +24,7 @@ class BotProfileController extends Controller
     public function create()
     {
         $mt5Instances = Mt5EaTerminal::query()
+            ->forList()
             ->where('enabled', true)
             ->orderBy('display_name')
             ->orderBy('instance_key')
@@ -190,6 +191,7 @@ class BotProfileController extends Controller
         }
 
         $mt5Instances = Mt5EaTerminal::query()
+            ->forList()
             ->where('enabled', true)
             ->orderBy('display_name')
             ->orderBy('instance_key')
