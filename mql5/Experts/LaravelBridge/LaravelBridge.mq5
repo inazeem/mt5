@@ -11,7 +11,7 @@
 input string InpServerUrl     = "https://mt5.test";   // Laravel base URL (no trailing slash)
 input string InpApiToken      = "";                   // Bearer token from EA Bridge page
 input string InpInstanceKey   = "";                   // Instance key (matches EA Bridge / bot profile)
-input int    InpPollSeconds   = 1;                    // Poll interval (seconds)
+input int    InpPollSeconds   = 30;                   // Poll interval (seconds)
 input int    InpMagic         = 88001;                // Magic number for bridge orders
 input bool   InpDebug         = false;                // Verbose logs
 

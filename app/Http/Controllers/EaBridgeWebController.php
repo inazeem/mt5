@@ -18,7 +18,7 @@ class EaBridgeWebController extends Controller
             ->withCount([
                 'commands as test_commands_count' => static fn ($query) => $query->where('source', 'test'),
             ])
-            ->orderByRaw('CASE WHEN last_seen_at >= ? THEN 0 ELSE 1 END', [now()->subSeconds(10)])
+            ->orderByRaw('CASE WHEN last_seen_at >= ? THEN 0 ELSE 1 END', [now()->subSeconds(Mt5EaTerminal::ONLINE_GRACE_SECONDS)])
             ->orderByDesc('last_seen_at')
             ->orderByDesc('is_demo')
             ->orderBy('display_name')

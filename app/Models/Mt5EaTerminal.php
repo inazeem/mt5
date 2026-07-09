@@ -8,6 +8,9 @@ use Illuminate\Support\Str;
 
 class Mt5EaTerminal extends Model
 {
+    /** Grace period after last EA poll before marking terminal offline. */
+    public const ONLINE_GRACE_SECONDS = 60;
+
     protected $fillable = [
         'instance_key',
         'display_name',
@@ -63,7 +66,7 @@ class Mt5EaTerminal extends Model
         return $this->hasMany(Mt5EaCommand::class);
     }
 
-    public function isOnline(int $seconds = 10): bool
+    public function isOnline(int $seconds = self::ONLINE_GRACE_SECONDS): bool
     {
         if ($this->last_seen_at === null) {
             return false;

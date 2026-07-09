@@ -159,7 +159,7 @@ class EaBridgeService
 
         $terminal = Mt5EaTerminal::query()
             ->where('enabled', true)
-            ->where('last_seen_at', '>=', now()->subSeconds(10))
+            ->where('last_seen_at', '>=', now()->subSeconds(Mt5EaTerminal::ONLINE_GRACE_SECONDS))
             ->orderByDesc('last_seen_at')
             ->first();
 
